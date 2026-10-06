@@ -70,30 +70,69 @@ pub(crate) fn test_response_server(
     status: u16,
     reason: &'static str,
 ) -> (String, tokio::task::JoinHandle<()>) {
-    use std::io::{BufRead, BufReader, Write};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
 
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind provider error fixture");
     let address = listener.local_addr().expect("fixture address");
+    listener
+        .set_nonblocking(true)
+        .expect("bounded fixture accept");
     let server = tokio::task::spawn_blocking(move || {
-        let (mut stream, _) = listener.accept().expect("accept provider request");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "fixture accept timed out"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                Err(error) => panic!("fixture accept failed: {}", error.kind()),
+            }
+        };
+        stream
+            .set_nonblocking(false)
+            .expect("blocking bounded fixture socket");
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .expect("bounded fixture reads");
+        stream
+            .set_write_timeout(Some(std::time::Duration::from_secs(10)))
+            .expect("bounded fixture writes");
         let mut reader = BufReader::new(stream.try_clone().expect("clone fixture stream"));
         let mut line = String::new();
         reader.read_line(&mut line).expect("read request line");
+        let mut content_length = 0;
         loop {
             line.clear();
             reader.read_line(&mut line).expect("read request header");
             if line == "\r\n" || line.is_empty() {
                 break;
             }
+            if let Some((name, value)) = line.split_once(':') {
+                if name.eq_ignore_ascii_case("content-length") {
+                    content_length = value.trim().parse::<usize>().expect("request body length");
+                }
+            }
         }
-        let _ = write!(
+        assert!(
+            content_length <= 1024 * 1024,
+            "fixture request must be bounded"
+        );
+        let mut request_body = vec![0; content_length];
+        reader
+            .read_exact(&mut request_body)
+            .expect("consume fixture request body before replying");
+        write!(
             stream,
             "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
-        );
-        let _ = stream.flush();
+        ).expect("write fixture response");
+        stream.flush().expect("flush fixture response");
     });
     (format!("http://{address}"), server)
 }

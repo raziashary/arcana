@@ -820,96 +820,106 @@ mod tests {
         let observed_tool_calls = Arc::clone(&tool_calls);
         let tool_lists = Arc::new(AtomicUsize::new(0));
         let observed_tool_lists = Arc::clone(&tool_lists);
+        let (shutdown_server, mut shutdown_receiver) = tokio::sync::oneshot::channel();
         let server = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
             loop {
-                let Ok((mut socket, _)) = listener.accept().await else {
-                    break;
-                };
-                let observed_tool_calls = Arc::clone(&observed_tool_calls);
-                let observed_tool_lists = Arc::clone(&observed_tool_lists);
-                tokio::spawn(async move {
-                    let observed_tool_lists = Arc::clone(&observed_tool_lists);
-                    let mut request = Vec::new();
-                    let mut buffer = [0_u8; 4096];
-                    let header_end = loop {
-                        let count = socket.read(&mut buffer).await.unwrap_or(0);
-                        if count == 0 {
-                            return;
-                        }
-                        request.extend_from_slice(&buffer[..count]);
-                        if let Some(index) =
-                            request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
-                        {
-                            break index + 4;
-                        }
-                    };
-                    let headers = String::from_utf8_lossy(&request[..header_end]);
-                    let content_length = headers
-                        .lines()
-                        .find_map(|line| {
-                            let (name, value) = line.split_once(':')?;
-                            name.eq_ignore_ascii_case("content-length")
-                                .then(|| value.trim().parse::<usize>().ok())
-                                .flatten()
-                        })
-                        .unwrap_or(0);
-                    while request.len() < header_end + content_length {
-                        let count = socket.read(&mut buffer).await.unwrap_or(0);
-                        if count == 0 {
-                            return;
-                        }
-                        request.extend_from_slice(&buffer[..count]);
-                    }
-                    let body: Value =
-                        serde_json::from_slice(&request[header_end..header_end + content_length])
+                tokio::select! {
+                    _ = &mut shutdown_receiver => break,
+                    accepted = listener.accept() => {
+                        let Ok((mut socket, _)) = accepted else {
+                            break;
+                        };
+                        let observed_tool_calls = Arc::clone(&observed_tool_calls);
+                        let observed_tool_lists = Arc::clone(&observed_tool_lists);
+                        connections.spawn(async move {
+                            let mut request = Vec::new();
+                            let mut buffer = [0_u8; 4096];
+                            let header_end = loop {
+                                let count = socket.read(&mut buffer).await.unwrap_or(0);
+                                if count == 0 {
+                                    return;
+                                }
+                                request.extend_from_slice(&buffer[..count]);
+                                if let Some(index) =
+                                    request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
+                                {
+                                    break index + 4;
+                                }
+                            };
+                            let headers = String::from_utf8_lossy(&request[..header_end]);
+                            let content_length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().ok())
+                                        .flatten()
+                                })
+                                .unwrap_or(0);
+                            while request.len() < header_end + content_length {
+                                let count = socket.read(&mut buffer).await.unwrap_or(0);
+                                if count == 0 {
+                                    return;
+                                }
+                                request.extend_from_slice(&buffer[..count]);
+                            }
+                            let body: Value = serde_json::from_slice(
+                                &request[header_end..header_end + content_length],
+                            )
                             .unwrap();
-                    let method = body["method"].as_str().unwrap_or_default();
-                    if method.starts_with("notifications/") {
-                        let _ = socket
-                            .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                            .await;
-                        return;
+                            let method = body["method"].as_str().unwrap_or_default();
+                            if method.starts_with("notifications/") {
+                                let _ = socket
+                                    .write_all(b"HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                                    .await;
+                                return;
+                            }
+                            let result = match method {
+                                "server/discover" => {
+                                    serde_json::to_value(rmcp::model::DiscoverResult::new(
+                                        vec![ProtocolVersion::V_2026_07_28],
+                                        Default::default(),
+                                    ))
+                                    .unwrap()
+                                }
+                                "tools/list" => json!({
+                                    "tools": [{
+                                        "name": "fixture_search",
+                                        "description": "Synthetic local result",
+                                        "inputSchema": {"type":"object","properties":{}}
+                                    }]
+                                }),
+                                "tools/call" => json!({
+                                    "content": [{"type":"text","text":"fixture response"}],
+                                    "isError": false
+                                }),
+                                other => panic!("unexpected MCP request method {other}"),
+                            };
+                            if method == "tools/call" {
+                                observed_tool_calls.fetch_add(1, Ordering::SeqCst);
+                            }
+                            if method == "tools/list" {
+                                observed_tool_lists.fetch_add(1, Ordering::SeqCst);
+                            }
+                            let payload = json!({
+                                "jsonrpc":"2.0",
+                                "id":body["id"],
+                                "result":result
+                            })
+                            .to_string();
+                            let response = format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                                payload.len(), payload
+                            );
+                            let _ = socket.write_all(response.as_bytes()).await;
+                        });
                     }
-                    let result = match method {
-                        "server/discover" => {
-                            serde_json::to_value(rmcp::model::DiscoverResult::new(
-                                vec![ProtocolVersion::V_2026_07_28],
-                                Default::default(),
-                            ))
-                            .unwrap()
-                        }
-                        "tools/list" => json!({
-                            "tools": [{
-                                "name": "fixture_search",
-                                "description": "Synthetic local result",
-                                "inputSchema": {"type":"object","properties":{}}
-                            }]
-                        }),
-                        "tools/call" => json!({
-                            "content": [{"type":"text","text":"fixture response"}],
-                            "isError": false
-                        }),
-                        other => panic!("unexpected MCP request method {other}"),
-                    };
-                    if method == "tools/call" {
-                        observed_tool_calls.fetch_add(1, Ordering::SeqCst);
-                    }
-                    if method == "tools/list" {
-                        observed_tool_lists.fetch_add(1, Ordering::SeqCst);
-                    }
-                    let payload = json!({
-                        "jsonrpc":"2.0",
-                        "id":body["id"],
-                        "result":result
-                    })
-                    .to_string();
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        payload.len(), payload
-                    );
-                    let _ = socket.write_all(response.as_bytes()).await;
-                });
+                    Some(_) = connections.join_next(), if !connections.is_empty() => {}
+                }
             }
+            connections.abort_all();
+            while connections.join_next().await.is_some() {}
         });
 
         let endpoint = format!("http://{address}/mcp");
@@ -990,8 +1000,48 @@ mod tests {
         assert_eq!(called["content"][0]["text"], "fixture response");
         assert_eq!(is_error, false);
         assert_eq!(called["trust"], "untrusted_remote_result");
-        assert_eq!(tool_lists.load(Ordering::SeqCst), 2);
-        assert_eq!(tool_calls.load(Ordering::SeqCst), 2);
+
+        let run_id = crate::db::runs::RunsDb::open()
+            .expect("open isolated RunsDb")
+            .begin_worker_tick("worker-backend", "mcp-executor-session")
+            .expect("persist the worker run before executor calls");
+        let mut registry = ToolRegistry::new();
+        register_for_mode(&mut registry, PAMode::FastDevelopment);
+        let list_tool = registry.get("mcp_list_tools").unwrap();
+        let call_tool = registry.get("mcp_call_tool").unwrap();
+        let executor_session = "mcp-executor-session";
+        let mut executor = crate::agent::tool_executor::ToolExecutor::new(
+            PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            executor_session.to_string(),
+            workspace.to_string_lossy().into_owned(),
+            crate::agent::tool_trait::AgentIdentity::worker("worker-backend"),
+        )
+        .with_run_id(Some(run_id.clone()));
+        let executor_results = executor
+            .execute_batch(vec![
+                (list_tool, json!({}), "mcp-executor-list".into()),
+                (
+                    call_tool,
+                    json!({"name":"fixture_search","arguments":{"query":"executor"}}),
+                    "mcp-executor-call".into(),
+                ),
+            ])
+            .await
+            .expect("production ToolExecutor executes the registered MCP tools");
+        assert_eq!(executor_results.len(), 2);
+        assert_eq!(executor_results[0].0, "mcp-executor-list");
+        assert!(!executor_results[0].1.is_error);
+        let executor_list: Value =
+            serde_json::from_str(&executor_results[0].1.output).expect("executor list result JSON");
+        assert_eq!(executor_list["tools"][0]["name"], "fixture_search");
+        assert_eq!(executor_results[1].0, "mcp-executor-call");
+        assert!(!executor_results[1].1.is_error);
+        let executor_call: Value =
+            serde_json::from_str(&executor_results[1].1.output).expect("executor call result JSON");
+        assert_eq!(executor_call["content"][0]["text"], "fixture response");
+        assert_eq!(tool_lists.load(Ordering::SeqCst), 3);
+        assert_eq!(tool_calls.load(Ordering::SeqCst), 3);
 
         let revoked_client = connect_to_endpoint(&endpoint).await.unwrap();
         assert!(consent
@@ -1014,7 +1064,7 @@ mod tests {
         )
         .await;
         assert!(revoked_list.is_err());
-        assert_eq!(tool_lists.load(Ordering::SeqCst), 2);
+        assert_eq!(tool_lists.load(Ordering::SeqCst), 3);
 
         let revoked_client = connect_to_endpoint(&endpoint).await.unwrap();
         let revoked = execute_call_with_client(
@@ -1036,8 +1086,71 @@ mod tests {
         )
         .await;
         assert!(revoked.is_err());
-        assert_eq!(tool_calls.load(Ordering::SeqCst), 2);
-        server.abort();
-        let _ = server.await;
+        assert_eq!(tool_calls.load(Ordering::SeqCst), 3);
+
+        let denied_results = executor
+            .execute_batch(vec![
+                (
+                    registry.get("mcp_list_tools").unwrap(),
+                    json!({"cursor":"private-list-argument-marker"}),
+                    "mcp-denied-list".into(),
+                ),
+                (
+                    registry.get("mcp_call_tool").unwrap(),
+                    json!({
+                        "name":"fixture_search",
+                        "arguments":{"query":"private-call-argument-marker"}
+                    }),
+                    "mcp-denied-call".into(),
+                ),
+            ])
+            .await
+            .expect("production ToolExecutor returns normalized revoked-consent failures");
+        assert_eq!(denied_results.len(), 2);
+        for (index, (tool_use_id, expected_tool)) in [
+            ("mcp-denied-list", "mcp_list_tools"),
+            ("mcp-denied-call", "mcp_call_tool"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let (actual_tool_use_id, result) = &denied_results[index];
+            assert_eq!(actual_tool_use_id, tool_use_id);
+            assert!(result.is_error, "revoked {expected_tool} must fail");
+            let envelope: Value = serde_json::from_str(&result.output)
+                .expect("normalized executor failure envelope JSON");
+            assert_eq!(envelope["schema_version"], 1);
+            assert_eq!(envelope["ok"], false);
+            assert_eq!(envelope["error"]["error_code"], "mcp_operation_failed");
+            assert_eq!(envelope["error"]["category"], "external_service");
+            assert_eq!(
+                envelope["error"]["operation"],
+                format!("tool.{expected_tool}")
+            );
+            assert_eq!(envelope["error"]["tool"], expected_tool);
+            assert_eq!(
+                envelope["error"]["message"],
+                "This workspace has no active consent for the GitHub MCP connector."
+            );
+            assert_eq!(envelope["error"]["retryable"], false);
+            assert_eq!(envelope["error"]["context"]["session_id"], executor_session);
+            assert_eq!(envelope["error"]["context"]["agent_id"], "worker-backend");
+            assert_eq!(envelope["error"]["context"]["run_id"], run_id);
+            assert_eq!(
+                envelope["error"]["context"]["tool_call_id"],
+                format!("{executor_session}-{tool_use_id}")
+            );
+            assert!(envelope["error"]["timestamp"].is_string());
+            assert!(!result.output.contains("private-list-argument-marker"));
+            assert!(!result.output.contains("private-call-argument-marker"));
+        }
+        assert_eq!(tool_lists.load(Ordering::SeqCst), 3);
+        assert_eq!(tool_calls.load(Ordering::SeqCst), 3);
+
+        let _ = shutdown_server.send(());
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .expect("MCP fixture server shutdown completes")
+            .expect("MCP fixture server task joins");
     }
 }

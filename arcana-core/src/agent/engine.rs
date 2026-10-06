@@ -14,7 +14,7 @@ use super::context::ContextBuilder;
 use super::permission::{PendingPermissions, PermissionMode};
 use super::tool_executor::ToolExecutor;
 use super::tool_registry::ToolRegistry;
-use super::tool_trait::Tool;
+use super::tool_trait::{Tool, ToolResult};
 use crate::cost::tracker::CostTracker;
 use crate::errors::{ArcanaError, Result};
 use crate::events::{emit_thinking, emit_token, AgentDonePayload, ThinkingPayload, TokenPayload};
@@ -749,6 +749,7 @@ impl AgentEngine {
 
             // Stream response from provider
             let mut turn_stop_reason: Option<String> = None;
+            let mut invalid_tool_inputs = std::collections::HashSet::new();
             // Snapshot for the per-turn delta. `total_usage` accumulates across
             // turns, and the cache question is per-request.
             let usage_before_turn = total_usage.clone();
@@ -760,6 +761,7 @@ impl AgentEngine {
                     request,
                     &mut total_usage,
                     &mut turn_stop_reason,
+                    &mut invalid_tool_inputs,
                 )
                 .await;
 
@@ -993,12 +995,17 @@ impl AgentEngine {
             // Read-only tools run concurrently (max 10), write tools run serially
             let mut tool_batch: Vec<(Arc<dyn Tool>, serde_json::Value, String)> = Vec::new();
             let mut unknown_tools: Vec<(String, String)> = Vec::new(); // (tool_use_id, name)
+            let mut invalid_tools: Vec<(String, String)> = Vec::new();
 
             for tc in &tool_calls {
                 if let MessageContent::ToolUse {
                     id, name, input, ..
                 } = tc
                 {
+                    if invalid_tool_inputs.contains(id) {
+                        invalid_tools.push((id.clone(), name.clone()));
+                        continue;
+                    }
                     match self.registry.get(name) {
                         Some(tool) => {
                             tool_batch.push((tool, input.clone(), id.clone()));
@@ -1229,6 +1236,24 @@ impl AgentEngine {
                 );
                 by_id.insert(tool_use_id, (result.output, result.is_error));
             }
+            for (tool_use_id, name) in invalid_tools {
+                let call_id = format!("{session_id}-{tool_use_id}");
+                let result = ToolResult::categorized_error(
+                    "invalid_tool_arguments",
+                    "argument_validation",
+                    "The model supplied invalid tool arguments; this call was not executed.",
+                    "Provide a valid JSON object matching the tool's declared input schema.",
+                )
+                .with_execution_context(
+                    &name,
+                    session_id,
+                    &self.identity.role,
+                    active_task_id,
+                    &call_id,
+                    self.worker_run_id.as_deref(),
+                );
+                by_id.insert(tool_use_id, (result.output, result.is_error));
+            }
             for (tool_use_id, result) in batch_results {
                 // Hint appended inline so the model reads it as part of the result.
                 let content = match result.hint {
@@ -1392,6 +1417,7 @@ impl AgentEngine {
         request: CompletionRequest,
         total_usage: &mut Usage,
         stop_reason: &mut Option<String>,
+        invalid_tool_inputs: &mut std::collections::HashSet<String>,
     ) -> Result<Vec<MessageContent>> {
         let mut stream_timer =
             crate::observability::timing::OperationTimer::start("provider_stream")
@@ -1422,7 +1448,24 @@ impl AgentEngine {
         let request_for_retry = request.clone();
         let mut stream_attempts = 0u32;
         let last_error_class = Arc::new(Mutex::new(None));
-        let classify_error = last_error_class.clone();
+        let classify_failure = |e: &ArcanaError| {
+            // Preserve the adapter's existing bounded class tags. Never save
+            // its response text in analytics.
+            let text = e.to_string();
+            let class = if text.contains("[QuotaExhausted]") {
+                crate::provider::usage::ErrorClass::QuotaExhausted
+            } else if text.contains("[Overloaded]") {
+                crate::provider::usage::ErrorClass::Overloaded
+            } else if text.contains("[Retryable]") {
+                crate::provider::usage::ErrorClass::Retryable
+            } else {
+                crate::provider::usage::ErrorClass::Fatal
+            };
+            *last_error_class
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(class);
+            class
+        };
         let stream_result = crate::provider::retry::with_retry(
             || {
                 stream_attempts = stream_attempts.saturating_add(1);
@@ -1446,25 +1489,7 @@ impl AgentEngine {
                     result
                 }
             },
-            |e| {
-                // The adapter embedded the class in the message as `[Class]`.
-                // Read back until the error type carries it structurally —
-                // recorded as `F-5`, and this is its first real consumer.
-                let text = e.to_string();
-                let class = if text.contains("[QuotaExhausted]") {
-                    crate::provider::usage::ErrorClass::QuotaExhausted
-                } else if text.contains("[Overloaded]") {
-                    crate::provider::usage::ErrorClass::Overloaded
-                } else if text.contains("[Retryable]") {
-                    crate::provider::usage::ErrorClass::Retryable
-                } else {
-                    crate::provider::usage::ErrorClass::Fatal
-                };
-                *classify_error
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(class);
-                class
-            },
+            &classify_failure,
         )
         .await;
 
@@ -1473,13 +1498,9 @@ impl AgentEngine {
         // failed attempt, retaining retry count and whether the call recovered.
         // Never persist the provider body: it can contain sensitive request
         // details, and the structured log already retains the stable class.
-        if stream_attempts > 1 || stream_result.is_err() {
-            let class = last_error_class
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .unwrap_or(crate::provider::usage::ErrorClass::Fatal);
+        let record_failure = |class: crate::provider::usage::ErrorClass, resolved: bool| {
             if let Some(analytics) = crate::analytics::try_global() {
-                let outcome = if stream_result.is_ok() {
+                let outcome = if resolved {
                     "recovered after retry"
                 } else {
                     "failed after retries"
@@ -1489,14 +1510,18 @@ impl AgentEngine {
                     stream_attempts,
                     class.as_str()
                 );
-                if let Err(error) = analytics.collector().record_api_failure_outcome(
-                    provider.id().to_string(),
-                    class.as_str().to_string(),
-                    message,
-                    None,
-                    stream_attempts.saturating_sub(1) as i32,
-                    stream_result.is_ok(),
-                ) {
+                if analytics
+                    .collector()
+                    .record_api_failure_outcome(
+                        provider.id().to_string(),
+                        class.as_str().to_string(),
+                        message,
+                        None,
+                        stream_attempts.saturating_sub(1) as i32,
+                        resolved,
+                    )
+                    .is_err()
+                {
                     tracing::error!(
                         target: "arcana::telemetry",
                         event_type = "provider_failure_persist_failed",
@@ -1504,13 +1529,15 @@ impl AgentEngine {
                         error_class = class.as_str(),
                         "Could not persist provider failure analytics"
                     );
-                    let _ = error;
                 }
             }
-        }
+        };
         let mut stream = match stream_result {
             Ok(stream) => stream,
-            Err(error) => return Err(error),
+            Err(error) => {
+                record_failure(classify_failure(&error), false);
+                return Err(error);
+            }
         };
 
         // ── Ordering (P2-59, P2-60) ──────────────────────────────────────
@@ -1552,7 +1579,14 @@ impl AgentEngine {
         let mut content_blocks: Vec<MessageContent> = Vec::new();
 
         while let Some(chunk) = stream.next().await {
-            match chunk? {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    record_failure(classify_failure(&error), false);
+                    return Err(error);
+                }
+            };
+            match chunk {
                 StreamChunk::TextDelta { text, block_index } => {
                     if xml_thinking_fallback {
                         let detector = xml_detectors.entry(block_index).or_default();
@@ -1704,15 +1738,35 @@ impl AgentEngine {
             .values()
             .any(|(_, signature)| signature.as_deref().is_none_or(str::is_empty))
         {
+            record_failure(crate::provider::usage::ErrorClass::Fatal, false);
             return Err(crate::errors::ArcanaError::Provider(
                 "Anthropic thinking block has no signature; refusing an unreplayable turn".into(),
             ));
+        }
+        for (id, _, raw_input, _) in tool_use_map.values() {
+            // An omitted argument delta represents the intentional no-argument
+            // object. A nonempty malformed/non-object delta must never reach
+            // a handler as its defaults. Keep only IDs, never parser/source text.
+            if !raw_input.trim().is_empty()
+                && !serde_json::from_str::<serde_json::Value>(raw_input)
+                    .is_ok_and(|value| value.is_object())
+            {
+                invalid_tool_inputs.insert(id.clone());
+            }
         }
         content_blocks.extend(assemble_with_thinking_in_wire_order(
             text_by_block,
             thinking_by_block,
             tool_use_map,
         ));
+
+        if stream_attempts > 1 {
+            let class = last_error_class
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .unwrap_or(crate::provider::usage::ErrorClass::Fatal);
+            record_failure(class, true);
+        }
 
         stream_timer.succeed();
         provider_call.result_blocks = content_blocks.len();
@@ -1987,8 +2041,12 @@ fn assemble_with_thinking_in_wire_order(
         // failing the turn — the provider said the model wanted this tool, and
         // dropping the call entirely would leave the model waiting for a result
         // it never gets.
-        let input = serde_json::from_str(&json_str)
-            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        // Invalid IDs are rejected by the stream consumer before dispatch.
+        // Keep their replay placeholder wire-safe, including non-object JSON.
+        let input = serde_json::from_str::<serde_json::Value>(&json_str)
+            .ok()
+            .filter(serde_json::Value::is_object)
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
         ordered.insert(
             idx,
             MessageContent::ToolUse {
@@ -2169,6 +2227,7 @@ mod wire_order_tests {
                 fixture_request(),
                 &mut usage,
                 &mut stop_reason,
+                &mut Default::default(),
             )
             .await
             .expect("production stream consumer should assemble the assistant turn");
@@ -2237,6 +2296,7 @@ mod wire_order_tests {
                 fixture_request(),
                 &mut usage,
                 &mut stop_reason,
+                &mut Default::default(),
             )
             .await
             .expect("production stream consumer should assemble the function call");
@@ -2300,6 +2360,7 @@ mod wire_order_tests {
                 fixture_request(),
                 &mut usage,
                 &mut stop_reason,
+                &mut Default::default(),
             )
             .await
             .expect("non-reasoning model uses the production XML fallback");
@@ -2343,6 +2404,7 @@ mod wire_order_tests {
                 fixture_request(),
                 &mut usage,
                 &mut stop_reason,
+                &mut Default::default(),
             )
             .await
             .expect_err("an unsigned thinking block cannot be replayed");
@@ -2723,6 +2785,264 @@ mod procedural_memory_tests {
     }
 
     #[tokio::test]
+    async fn builtin_handler_failures_reach_model_as_correlated_private_error_results() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let private_arguments = serde_json::json!({
+            "private_prompt": "planted-private-prompt",
+            "source": "planted-private-source",
+            "api_key": "planted-private-credential",
+            "os_error": "planted-private-os-error".repeat(512),
+        });
+        // These inputs deliberately omit each handler's required fields. They
+        // exercise the real registry and executor, without spawning commands
+        // or requiring network, a provider credential, or shared user state.
+        let names = [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "append_file",
+            "get_task",
+            "create_task",
+            "assign_task",
+            "set_task_budget",
+            "create_epic",
+            "list_directory",
+            "grep",
+            "glob",
+            "create_phased_task",
+            "get_epic_progress",
+            "get_ready_tasks_in_phase",
+            "mcp_list_tools",
+            "mcp_call_tool",
+        ];
+        for name in names {
+            let mut input = private_arguments.clone();
+            if name == "list_directory" {
+                input["path"] = serde_json::json!("../planted-private-directory-argument");
+            }
+            let mut provider = scripted_provider(name);
+            let scripted = Arc::get_mut(&mut provider).expect("unique scripted provider");
+            scripted.responses = Mutex::new(VecDeque::from([
+                vec![
+                    StreamChunk::ToolUseStart {
+                        id: "builtin-failure-call".into(),
+                        name: name.into(),
+                        block_index: 0,
+                        opaque: None,
+                    },
+                    StreamChunk::ToolInputDelta {
+                        block_index: 0,
+                        partial_json: input.to_string(),
+                    },
+                    StreamChunk::MessageDelta {
+                        stop_reason: "tool_use".into(),
+                        usage: Usage::default(),
+                    },
+                    StreamChunk::Done,
+                ],
+                vec![
+                    StreamChunk::TextDelta {
+                        text: "Failure acknowledged.".into(),
+                        block_index: 0,
+                    },
+                    StreamChunk::MessageDelta {
+                        stop_reason: "end_turn".into(),
+                        usage: Usage::default(),
+                    },
+                    StreamChunk::Done,
+                ],
+            ]));
+            let state = Arc::new(Mutex::new(crate::state::AppState::default()));
+            let session_id = format!("builtin-failure-{name}");
+            let engine = AgentEngine::new(
+                provider.clone(),
+                PermissionMode::Autonomous,
+                super::super::PAMode::FastDevelopment,
+                state.clone(),
+                super::super::permission::new_pending_permissions(),
+                super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+            )
+            .with_worker_run_id("run-builtin-failure");
+            assert!(
+                engine.registry.get(name).is_some(),
+                "real builtin {name} is registered"
+            );
+            engine
+                .run(
+                    &session_id,
+                    workspace.path().to_str().expect("workspace path"),
+                    "fixture-model",
+                    Vec::new(),
+                    "Exercise the requested builtin.",
+                    Some("Worker instructions."),
+                )
+                .await
+                .expect("scripted model acknowledges the failed builtin");
+
+            let requests = provider.requests.lock().expect("captured requests");
+            assert_eq!(
+                requests.len(),
+                2,
+                "one tool turn and one consumer turn for {name}"
+            );
+            let (content, is_error) = requests[1]
+                .messages
+                .iter()
+                .flat_map(|message| message.content.iter())
+                .find_map(|content| match content {
+                    MessageContent::ToolResult {
+                        tool_use_id,
+                        name: result_name,
+                        content,
+                        is_error,
+                    } if tool_use_id == "builtin-failure-call" && result_name == name => {
+                        Some((content, *is_error))
+                    }
+                    _ => None,
+                })
+                .expect("model receives matching builtin result");
+            assert!(is_error, "{name} failure must not appear successful");
+            assert!(content.len() <= 8192, "bounded error for {name}");
+            let envelope: serde_json::Value =
+                serde_json::from_str(content).expect("structured failure JSON");
+            assert_eq!(envelope["schema_version"], 1);
+            assert_eq!(envelope["ok"], false);
+            assert_eq!(envelope["error"]["tool"], name);
+            assert_eq!(
+                envelope["error"]["context"]["tool_call_id"],
+                format!("{session_id}-builtin-failure-call")
+            );
+            assert_eq!(
+                envelope["error"]["context"]["run_id"],
+                "run-builtin-failure"
+            );
+            assert!(envelope["error"]["suggested_action"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty()));
+            for marker in [
+                "planted-private-prompt",
+                "planted-private-source",
+                "planted-private-credential",
+                "planted-private-os-error",
+                "planted-private-directory-argument",
+            ] {
+                assert!(!content.contains(marker), "{name} must omit {marker}");
+            }
+            assert!(state
+                .lock()
+                .expect("state readback")
+                .agents
+                .values()
+                .all(|agent| !agent.is_running));
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_streamed_tool_arguments_fail_before_running_the_registered_builtin() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        std::fs::write(
+            workspace.path().join("must-not-enumerate-fixture.txt"),
+            "fixture only",
+        )
+        .expect("seed enumeration sentinel");
+        for (arguments, invalid) in [
+            (r#"{"private":"planted-invalid-arguments", "#, true),
+            (r#"["planted-invalid-arguments"]"#, true),
+            ("null", true),
+            ("", false),
+            ("{}", false),
+        ] {
+            let mut provider = scripted_provider("list_directory");
+            let responses = Arc::get_mut(&mut provider)
+                .expect("unique provider")
+                .responses
+                .get_mut()
+                .expect("scripted responses");
+            let first = responses.front_mut().expect("first tool turn");
+            for chunk in first {
+                if let StreamChunk::ToolInputDelta { partial_json, .. } = chunk {
+                    *partial_json = arguments.into();
+                }
+            }
+            let engine = AgentEngine::new(
+                provider.clone(),
+                PermissionMode::Autonomous,
+                super::super::PAMode::FastDevelopment,
+                Arc::new(Mutex::new(crate::state::AppState::default())),
+                super::super::permission::new_pending_permissions(),
+                super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+            );
+            engine
+                .run(
+                    "invalid-tool-arguments",
+                    workspace.path().to_str().expect("workspace path"),
+                    "fixture-model",
+                    Vec::new(),
+                    "Call the tool.",
+                    Some("Worker instructions."),
+                )
+                .await
+                .expect("model consumes the refusal");
+            let requests = provider.requests.lock().expect("model requests");
+            let replayed_input = requests[1]
+                .messages
+                .iter()
+                .flat_map(|message| message.content.iter())
+                .find_map(|block| match block {
+                    MessageContent::ToolUse { id, input, .. } if id == "call-1" => Some(input),
+                    _ => None,
+                })
+                .expect("replayed tool call");
+            assert!(
+                replayed_input.is_object(),
+                "provider replay requires an object"
+            );
+            let (content, is_error) = requests[1]
+                .messages
+                .iter()
+                .flat_map(|message| message.content.iter())
+                .find_map(|block| match block {
+                    MessageContent::ToolResult {
+                        tool_use_id,
+                        name,
+                        content,
+                        is_error,
+                    } if tool_use_id == "call-1" && name == "list_directory" => {
+                        Some((content, *is_error))
+                    }
+                    _ => None,
+                })
+                .expect("model-facing result");
+            assert_eq!(
+                is_error, invalid,
+                "malformed arguments must not become a successful default-directory listing"
+            );
+            if !invalid {
+                assert!(content.contains("must-not-enumerate-fixture.txt"));
+                continue;
+            }
+            let error: serde_json::Value =
+                serde_json::from_str(content).expect("bounded failure JSON");
+            assert_eq!(error["ok"], false);
+            assert_eq!(error["error"]["code"], "invalid_tool_arguments");
+            assert_eq!(error["error"]["category"], "argument_validation");
+            assert_eq!(
+                error["error"]["context"]["tool_call_id"],
+                "invalid-tool-arguments-call-1"
+            );
+            assert!(content.len() <= 8192);
+            assert!(!content.contains("planted-invalid-arguments"));
+            assert!(!content.contains("must-not-enumerate-fixture"));
+        }
+    }
+
+    #[tokio::test]
     async fn provider_retry_outcome_is_readable_from_analytics_without_raw_error_text() {
         ensure_isolated_test_analytics().await;
         let home = tempfile::tempdir().expect("isolated Arcana home");
@@ -2776,10 +3096,230 @@ mod procedural_memory_tests {
             report.failures_by_provider.get("fixture_retry_success"),
             Some(&1)
         );
-        assert_eq!(report.auto_retry_success_rate, 1.0);
+        let retried = report
+            .recent_failures
+            .iter()
+            .filter(|row| row.retry_count > 0)
+            .count();
+        let recovered = report
+            .recent_failures
+            .iter()
+            .filter(|row| row.retry_count > 0 && row.resolved)
+            .count();
+        assert_eq!(
+            report.auto_retry_success_rate,
+            recovered as f64 / retried as f64
+        );
         assert!(!failure
             .error_message
             .contains("private provider response body"));
+    }
+
+    #[tokio::test]
+    async fn actual_google_adapter_terminal_failures_reach_analytics_without_private_bodies() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        for (status, reason, body, expected_class) in [
+            (
+                429,
+                "Too Many Requests",
+                r#"{"error":{"status":"RESOURCE_EXHAUSTED","message":"quota exhausted planted-adapter-private-body"}}"#,
+                "quota_exhausted",
+            ),
+            (
+                200,
+                "OK",
+                "data: planted-adapter-private-body invalid JSON\n\n",
+                "fatal",
+            ),
+        ] {
+            let before = crate::analytics::global()
+                .queries()
+                .get_api_failures(24)
+                .expect("read baseline failures")
+                .recent_failures
+                .into_iter()
+                .filter_map(|row| row.id)
+                .max()
+                .unwrap_or(0);
+            let (api_base, server) =
+                crate::provider::usage::test_response_server(body.into(), status, reason);
+            let provider = Arc::new(crate::provider::google::GoogleProvider::new_at(
+                "fixture-only-secret".into(),
+                api_base,
+            ));
+            let state = Arc::new(Mutex::new(crate::state::AppState::default()));
+            let engine = AgentEngine::new(
+                provider,
+                PermissionMode::Autonomous,
+                super::super::PAMode::FastDevelopment,
+                state.clone(),
+                super::super::permission::new_pending_permissions(),
+                super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+            );
+            let error = engine
+                .run(
+                    &format!("adapter-terminal-{expected_class}"),
+                    workspace.path().to_str().expect("workspace path"),
+                    "gemini-3.8-flash",
+                    Vec::new(),
+                    "Private fixture prompt.",
+                    Some("Worker instructions."),
+                )
+                .await
+                .expect_err("real adapter terminal failure stops the engine");
+            server
+                .await
+                .expect("loopback fixture finishes after its single request");
+            assert!(!error.to_string().contains("planted-adapter-private-body"));
+            assert!(!error.to_string().contains("fixture-only-secret"));
+            let report = crate::analytics::global()
+                .queries()
+                .get_api_failures(24)
+                .expect("actual production analytics reader");
+            let new_failures: Vec<_> = report
+                .recent_failures
+                .iter()
+                .filter(|row| row.id.is_some_and(|id| id > before) && row.provider == "google")
+                .collect();
+            assert_eq!(
+                new_failures.len(),
+                1,
+                "one aggregate per failed provider call"
+            );
+            let failure = new_failures[0];
+            assert_eq!(
+                failure.error_type, expected_class,
+                "adapter failure flows through engine classification into durable analytics"
+            );
+            assert_eq!(failure.retry_count, 0);
+            assert!(!failure.resolved);
+            assert!(!failure
+                .error_message
+                .contains("planted-adapter-private-body"));
+            assert!(!failure.error_message.contains("Private fixture prompt"));
+            assert!(failure.error_message.len() < 512);
+            assert!(state
+                .lock()
+                .expect("state readback")
+                .agents
+                .values()
+                .all(|agent| !agent.is_running));
+        }
+    }
+
+    #[tokio::test]
+    async fn actual_google_retry_then_stream_failure_is_one_unresolved_analytics_call() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::TcpListener;
+
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let before = crate::analytics::global()
+            .queries()
+            .get_api_failures(24)
+            .expect("baseline analytics")
+            .recent_failures
+            .into_iter()
+            .filter_map(|row| row.id)
+            .max()
+            .unwrap_or(0);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("loopback fixture");
+        let api_base = format!("http://{}", listener.local_addr().expect("fixture address"));
+        listener
+            .set_nonblocking(true)
+            .expect("bounded fixture accepts");
+        let server = tokio::task::spawn_blocking(move || {
+            for (status, reason, content_type, body) in [
+                (503, "Service Unavailable", "application/json", r#"{"error":{"status":"UNAVAILABLE","message":"planted-retry-private-body"}}"#),
+                (200, "OK", "text/event-stream", "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Partial fixture output.\"}]}}]}\n\ndata: planted-retry-private-body malformed\n\n"),
+            ] {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                let (mut socket, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(std::time::Instant::now() < deadline, "fixture request deadline");
+                            std::thread::sleep(std::time::Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("fixture accept failed: {error}"),
+                    }
+                };
+                socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).expect("bounded request read");
+                let mut reader = BufReader::new(socket.try_clone().expect("fixture stream"));
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("request line");
+                let mut length = 0usize;
+                loop {
+                    line.clear();
+                    reader.read_line(&mut line).expect("request header");
+                    if line == "\r\n" || line.is_empty() { break; }
+                    if let Some((key, value)) = line.split_once(':') {
+                        if key.eq_ignore_ascii_case("content-length") { length = value.trim().parse().expect("request length"); }
+                    }
+                }
+                assert!(length < 2 * 1024 * 1024, "bounded fixture request");
+                reader.read_exact(&mut vec![0; length]).expect("drain fixture request body");
+                write!(socket, "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).expect("fixture response");
+                socket.flush().expect("fixture response flush");
+            }
+            2usize
+        });
+        let engine = AgentEngine::new(
+            Arc::new(crate::provider::google::GoogleProvider::new_at(
+                "fixture-only-secret".into(),
+                api_base,
+            )),
+            PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            Arc::new(Mutex::new(crate::state::AppState::default())),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        );
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            engine.run(
+                "adapter-retry-stream-failure",
+                workspace.path().to_str().expect("workspace path"),
+                "gemini-3.8-flash",
+                Vec::new(),
+                "Private fixture prompt.",
+                Some("Worker instructions."),
+            ),
+        )
+        .await
+        .expect("bounded engine run")
+        .expect_err("stream failure is terminal after output");
+        assert!(!error.to_string().contains("planted-retry-private-body"));
+        assert_eq!(server.await.expect("owned fixture server finishes"), 2);
+        let report = crate::analytics::global()
+            .queries()
+            .get_api_failures(24)
+            .expect("production failure reader");
+        let failures: Vec<_> = report
+            .recent_failures
+            .iter()
+            .filter(|row| row.id.is_some_and(|id| id > before) && row.provider == "google")
+            .collect();
+        assert_eq!(
+            failures.len(),
+            1,
+            "never count a recovered establishment and failed body as separate calls"
+        );
+        assert_eq!(failures[0].retry_count, 1);
+        assert!(
+            !failures[0].resolved,
+            "opening the retry stream is not full-call recovery"
+        );
+        assert_eq!(failures[0].error_type, "fatal");
+        assert!(!failures[0]
+            .error_message
+            .contains("planted-retry-private-body"));
+        assert!(!failures[0].error_message.contains("Partial fixture output"));
     }
 
     #[tokio::test]

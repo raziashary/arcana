@@ -396,3 +396,83 @@ async fn provider_error_body_is_not_forwarded_to_openai_consumers() {
     assert!(error.contains("[Retryable]"), "{error}");
     assert!(!error.contains("private-transport-marker"), "{error}");
 }
+
+#[tokio::test]
+async fn adapter_http_failures_keep_class_and_fixed_summary() {
+    use super::openai::OpenAIProvider;
+    use super::traits::Provider;
+    use super::usage::{test_completion_request, test_response_server};
+
+    let cases = [
+        (
+            429,
+            "Too Many Requests",
+            r#"{"error":{"type":"rate_limit_error","message":"Requests per minute exceeded; retry shortly. private-rate-marker"}}"#,
+            "Retryable",
+        ),
+        (
+            429,
+            "Too Many Requests",
+            r#"{"error":{"type":"insufficient_quota","message":"You exceeded your current quota. private-quota-marker"}}"#,
+            "QuotaExhausted",
+        ),
+        (
+            503,
+            "Service Unavailable",
+            r#"{"error":{"type":"server_error","message":"private-overload-marker"}}"#,
+            "Overloaded",
+        ),
+        (
+            500,
+            "Internal Server Error",
+            r#"{"error":{"type":"server_error","message":"private-500-marker"}}"#,
+            "Retryable",
+        ),
+        (
+            502,
+            "Bad Gateway",
+            r#"{"error":{"type":"server_error","message":"private-502-marker"}}"#,
+            "Retryable",
+        ),
+        (
+            504,
+            "Gateway Timeout",
+            r#"{"error":{"type":"server_error","message":"private-504-marker"}}"#,
+            "Retryable",
+        ),
+    ];
+
+    for (status, reason, body, class) in cases {
+        for stream in [false, true] {
+            let (api_base, server) = test_response_server(body.to_string(), status, reason);
+            let provider = OpenAIProvider::new_at("test-key".into(), api_base);
+            let error = if stream {
+                provider
+                    .stream(test_completion_request())
+                    .await
+                    .err()
+                    .expect("stream HTTP failure response")
+                    .to_string()
+            } else {
+                provider
+                    .complete(test_completion_request())
+                    .await
+                    .err()
+                    .expect("completion HTTP failure response")
+                    .to_string()
+            };
+
+            let operation = if stream { "OpenAI stream" } else { "OpenAI" };
+            assert!(
+                error.starts_with(&format!("Provider error: {operation} {status} ")),
+                "{error}"
+            );
+            assert!(
+                error.ends_with(&format!("[{class}]: provider_error_response")),
+                "{error}"
+            );
+            assert!(!error.contains("private-"), "{error}");
+            server.await.expect("OpenAI HTTP error fixture");
+        }
+    }
+}

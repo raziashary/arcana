@@ -168,6 +168,86 @@ async fn oversized_google_error_body_is_bounded_and_not_returned() {
 }
 
 #[tokio::test]
+async fn adapter_http_failures_keep_class_and_safe_google_summary() {
+    use crate::provider::usage::test_response_server;
+
+    let cases = [
+        (
+            429,
+            "Too Many Requests",
+            r#"{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Requests per minute limit reached; retry after backoff. private-rate-marker"}}"#,
+            "Retryable",
+            "RESOURCE_EXHAUSTED",
+        ),
+        (
+            429,
+            "Too Many Requests",
+            r#"{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded for quota metric private-quota-marker"}}"#,
+            "QuotaExhausted",
+            "RESOURCE_EXHAUSTED",
+        ),
+        (
+            503,
+            "Service Unavailable",
+            r#"{"error":{"status":"UNAVAILABLE","message":"private-overload-marker"}}"#,
+            "Overloaded",
+            "UNAVAILABLE",
+        ),
+        (
+            500,
+            "Internal Server Error",
+            r#"{"error":{"status":"INTERNAL","message":"private-500-marker"}}"#,
+            "Retryable",
+            "INTERNAL",
+        ),
+        (
+            502,
+            "Bad Gateway",
+            r#"{"error":{"status":"BAD_GATEWAY","message":"private-502-marker"}}"#,
+            "Retryable",
+            "BAD_GATEWAY",
+        ),
+        (
+            504,
+            "Gateway Timeout",
+            r#"{"error":{"status":"DEADLINE_EXCEEDED","message":"private-504-marker"}}"#,
+            "Retryable",
+            "DEADLINE_EXCEEDED",
+        ),
+    ];
+
+    for (status, reason, body, class, summary) in cases {
+        for stream in [false, true] {
+            let (api_base, server) = test_response_server(body.to_string(), status, reason);
+            let provider = GoogleProvider::new_at("test-secret".into(), api_base);
+            let error = if stream {
+                provider
+                    .stream(minimal_completion_request())
+                    .await
+                    .err()
+                    .expect("stream HTTP failure response")
+                    .to_string()
+            } else {
+                provider
+                    .complete(minimal_completion_request())
+                    .await
+                    .err()
+                    .expect("completion HTTP failure response")
+                    .to_string()
+            };
+
+            let operation = if stream { "Google stream" } else { "Google" };
+            assert_eq!(
+                error,
+                format!("Provider error: {operation} {status} {reason} [{class}]: {summary}")
+            );
+            assert!(!error.contains("private-"), "{error}");
+            server.await.expect("Google HTTP error fixture");
+        }
+    }
+}
+
+#[tokio::test]
 async fn count_tokens_uses_the_exact_generation_body_before_generation() {
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;

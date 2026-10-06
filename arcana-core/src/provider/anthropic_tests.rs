@@ -453,8 +453,7 @@ mod p3_25_wire_tests {
             test_completion_request, test_error_server, test_response_server,
         };
 
-        let body =
-            r#"{"error":{"type":"rate_limit_error","message":"private quota exceeded marker"}}"#;
+        let body = r#"{"error":{"type":"rate_limit_error","message":"private rate-limit marker"}}"#;
         let (api_base, server) = test_error_server(body.to_string());
         let provider = AnthropicProvider::new_at("test-key".into(), api_base);
         let error = provider
@@ -462,9 +461,9 @@ mod p3_25_wire_tests {
             .await
             .expect_err("provider HTTP error")
             .to_string();
-        assert!(error.contains("[QuotaExhausted]"), "{error}");
+        assert!(error.contains("[Retryable]"), "{error}");
         assert!(error.contains("provider_error_response"), "{error}");
-        assert!(!error.contains("private quota exceeded marker"), "{error}");
+        assert!(!error.contains("private rate-limit marker"), "{error}");
         server.await.expect("Anthropic fixture");
 
         let (api_base, server) = test_error_server(body.to_string());
@@ -475,9 +474,9 @@ mod p3_25_wire_tests {
             .err()
             .expect("provider stream HTTP error")
             .to_string();
-        assert!(error.contains("[QuotaExhausted]"), "{error}");
+        assert!(error.contains("[Retryable]"), "{error}");
         assert!(error.contains("provider_error_response"), "{error}");
-        assert!(!error.contains("private quota exceeded marker"), "{error}");
+        assert!(!error.contains("private rate-limit marker"), "{error}");
         server.await.expect("Anthropic stream fixture");
 
         let (api_base, server) =
@@ -504,5 +503,95 @@ mod p3_25_wire_tests {
         assert!(error.contains("provider_transport_failure"), "{error}");
         assert!(error.contains("[Retryable]"), "{error}");
         assert!(!error.contains("private-transport-marker"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn adapter_http_failures_keep_class_and_fixed_summary() {
+        use super::super::anthropic::AnthropicProvider;
+        use super::super::traits::Provider;
+        use super::super::usage::{test_completion_request, test_response_server};
+
+        let cases = [
+            (
+                429,
+                "Too Many Requests",
+                r#"{"error":{"type":"rate_limit_error","message":"Per-minute request limit reached; retry shortly. private-rate-marker"}}"#,
+                "Retryable",
+            ),
+            (
+                429,
+                "Too Many Requests",
+                r#"{"error":{"type":"invalid_request_error","message":"Credit balance is too low. private-quota-marker"}}"#,
+                "QuotaExhausted",
+            ),
+            (
+                503,
+                "Service Unavailable",
+                r#"{"error":{"type":"api_error","message":"private-503-marker"}}"#,
+                "Overloaded",
+            ),
+            (
+                529,
+                "Overloaded",
+                r#"{"error":{"type":"overloaded_error","message":"private-529-marker"}}"#,
+                "Overloaded",
+            ),
+            (
+                500,
+                "Internal Server Error",
+                r#"{"error":{"type":"api_error","message":"private-500-marker"}}"#,
+                "Retryable",
+            ),
+            (
+                502,
+                "Bad Gateway",
+                r#"{"error":{"type":"api_error","message":"private-502-marker"}}"#,
+                "Retryable",
+            ),
+            (
+                504,
+                "Gateway Timeout",
+                r#"{"error":{"type":"api_error","message":"private-504-marker"}}"#,
+                "Retryable",
+            ),
+        ];
+
+        for (status, reason, body, class) in cases {
+            for stream in [false, true] {
+                let (api_base, server) = test_response_server(body.to_string(), status, reason);
+                let provider = AnthropicProvider::new_at("test-key".into(), api_base);
+                let error = if stream {
+                    provider
+                        .stream(test_completion_request())
+                        .await
+                        .err()
+                        .expect("stream HTTP failure response")
+                        .to_string()
+                } else {
+                    provider
+                        .complete(test_completion_request())
+                        .await
+                        .err()
+                        .expect("completion HTTP failure response")
+                        .to_string()
+                };
+
+                let operation = if stream {
+                    "Anthropic stream"
+                } else {
+                    "Anthropic"
+                };
+                assert!(
+                    error.starts_with(&format!("Provider error: {operation} {status} ")),
+                    "{error}"
+                );
+                assert!(
+                    error.ends_with(&format!("[{class}]: provider_error_response")),
+                    "{error}"
+                );
+                assert!(!error.contains("private-"), "{error}");
+                server.await.expect("Anthropic HTTP error fixture");
+            }
+        }
     }
 }

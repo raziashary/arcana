@@ -100,7 +100,7 @@ impl GoogleProvider {
     }
 
     #[cfg(test)]
-    fn new_at(api_key: String, api_base: String) -> Self {
+    pub(crate) fn new_at(api_key: String, api_base: String) -> Self {
         Self {
             api_key,
             client: Client::new(),

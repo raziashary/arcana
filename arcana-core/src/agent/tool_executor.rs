@@ -2532,4 +2532,658 @@ mod p8_execution_registry_tests {
             PermissionDecision::ChannelClosed
         );
     }
+
+    async fn run_builtin_matrix_call(
+        executor: &mut ToolExecutor,
+        registry: &crate::agent::tool_registry::ToolRegistry,
+        name: &str,
+        input: Value,
+        use_id: &str,
+    ) -> ToolResult {
+        let tool = registry
+            .get(name)
+            .unwrap_or_else(|| panic!("FastDevelopment registry is missing {name}"));
+        let results = executor
+            .execute_batch(vec![(tool, input, use_id.to_string())])
+            .await
+            .expect("registered builtin call returns a result");
+        assert_eq!(results.len(), 1, "one result for {name}");
+        let (returned_use_id, result) = results.into_iter().next().expect("one result");
+        assert_eq!(returned_use_id, use_id);
+        result
+    }
+
+    fn assert_builtin_matrix_failure(
+        tool_name: &str,
+        use_id: &str,
+        result: &ToolResult,
+        private_arguments: &[&str],
+    ) {
+        assert!(result.is_error, "{tool_name} malformed input must fail");
+        assert!(result.output.len() <= 8 * 1024, "bounded: {tool_name}");
+        let envelope: Value =
+            serde_json::from_str(&result.output).expect("normalized JSON failure envelope");
+        assert_eq!(envelope["schema_version"], 1, "{tool_name}");
+        assert_eq!(envelope["ok"], false, "{tool_name} cannot look successful");
+        assert_eq!(envelope["error"]["tool"], tool_name, "{tool_name}");
+        assert_eq!(
+            envelope["error"]["operation"],
+            format!("tool.{tool_name}"),
+            "{tool_name}"
+        );
+        assert_eq!(
+            envelope["error"]["context"]["tool_call_id"],
+            format!("builtin-matrix-session-{use_id}"),
+            "{tool_name} call correlation survives"
+        );
+        assert_eq!(
+            envelope["error"]["context"]["session_id"], "builtin-matrix-session",
+            "{tool_name} session correlation survives"
+        );
+        assert_eq!(
+            envelope["error"]["context"]["agent_id"], "supervisor",
+            "{tool_name} agent correlation survives"
+        );
+        assert!(envelope["error"]["retryable"].is_boolean(), "{tool_name}");
+        assert!(
+            envelope["error"]["retry_after_ms"].is_null()
+                || envelope["error"]["retry_after_ms"].is_u64(),
+            "{tool_name} retry delay is optional and numeric"
+        );
+        for field in [
+            "error_code",
+            "category",
+            "message",
+            "cause",
+            "suggested_action",
+        ] {
+            assert!(
+                envelope["error"][field].as_str().is_some(),
+                "{tool_name} has string {field}: {envelope}"
+            );
+        }
+        for field in ["message", "cause", "suggested_action"] {
+            assert!(
+                envelope["error"][field].as_str().unwrap_or_default().len() <= 512,
+                "{tool_name} {field} is bounded"
+            );
+        }
+        assert!(
+            envelope["error"]["context"].is_object(),
+            "{tool_name} carries structured context"
+        );
+        for private in private_arguments {
+            assert!(
+                !result.output.contains(private),
+                "{tool_name} leaked private argument {private}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn builtin_file_task_epic_budget_matrix_uses_live_fastdevelopment_registry() {
+        use crate::agent::{builtin_tools, tool_registry::ToolRegistry, PAMode};
+        use crate::db::tasks::{CreateTaskInput, TasksDb};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home and task database");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated builtin workspace");
+        std::fs::write(
+            workspace.path().join("matrix-proof.txt"),
+            "line one\nneedle is present\nline three\n",
+        )
+        .expect("seed isolated workspace file");
+
+        let tasks = TasksDb::open().expect("open isolated task database");
+        let seeded_task = tasks
+            .create(CreateTaskInput {
+                title: "executor matrix seed task".into(),
+                description: Some("private seed description".into()),
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "seed remains isolated".into(),
+                created_by: Some("test".into()),
+            })
+            .expect("seed task in temporary database");
+
+        let mut registry = ToolRegistry::new();
+        builtin_tools::register_for_mode(&mut registry, PAMode::FastDevelopment);
+        let live_names = registry
+            .all()
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected_live_names = [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "bash",
+            "git_commit",
+            "project_command",
+            "mcp_list_tools",
+            "mcp_call_tool",
+            "list_directory",
+            "grep",
+            "glob",
+            "check_file",
+            "append_file",
+            "list_tasks",
+            "get_task",
+            "update_task_status",
+            "assign_task",
+            "assign_tasks",
+            "create_task",
+            "request_supervisor_action",
+            "planner",
+            "spawn_subagent",
+            "spawn_parallel_subagents",
+            "spawn_qc_review",
+            "write_interface_spec",
+            "e2e_probe",
+            "search_memory",
+            "get_memory",
+            "list_memories",
+            "propose_memory",
+            "suggest_worker",
+            "claim_task",
+            "analyze_diff",
+            "annotate_file",
+            "set_task_budget",
+            "create_epic",
+            "create_phased_task",
+            "get_epic_progress",
+            "get_ready_tasks_in_phase",
+            "list_worker_requests",
+            "resolve_worker_request",
+            "send_worker_message",
+            "list_worker_messages",
+            "list_stale_worker_messages",
+            "list_worker_health",
+            "reconcile_worker_operation",
+            "acknowledge_worker_message",
+        ]
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            live_names, expected_live_names,
+            "review the matrix inventory whenever FastDevelopment registration changes"
+        );
+        let covered = [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "append_file",
+            "list_directory",
+            "grep",
+            "glob",
+            "get_task",
+            "create_epic",
+            "create_phased_task",
+            "get_epic_progress",
+            "get_ready_tasks_in_phase",
+            "set_task_budget",
+        ]
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            covered.is_subset(&live_names),
+            "covered names must be concrete FastDevelopment registrations; missing: {:?}",
+            covered.difference(&live_names).collect::<Vec<_>>()
+        );
+        let uncovered = live_names
+            .difference(&covered)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(covered.is_disjoint(&uncovered));
+        assert_eq!(
+            covered
+                .union(&uncovered)
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            live_names,
+            "live registry coverage partitions every registered builtin"
+        );
+
+        let pending = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            pending,
+            "builtin-matrix-session".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::supervisor(),
+        );
+
+        let read = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "read_file",
+            serde_json::json!({"path":"matrix-proof.txt"}),
+            "read-success",
+        )
+        .await;
+        assert!(!read.is_error, "read_file output: {}", read.output);
+        assert!(read.output.contains("needle is present"));
+        let read_failure_input = serde_json::json!({
+            "path": 7,
+            "private": "PRIVATE_READ_FILE_ARGUMENT"
+        });
+        let read_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "read_file",
+            read_failure_input,
+            "read-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "read_file",
+            "read-malformed",
+            &read_failure,
+            &["PRIVATE_READ_FILE_ARGUMENT"],
+        );
+
+        let listed = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "list_directory",
+            serde_json::json!({}),
+            "directory-success",
+        )
+        .await;
+        assert!(!listed.is_error, "list_directory output: {}", listed.output);
+        assert!(listed.output.contains("matrix-proof.txt"));
+        let outside_path = workspace
+            .path()
+            .parent()
+            .expect("temporary workspace parent")
+            .join("PRIVATE_DIRECTORY_ARGUMENT")
+            .to_string_lossy()
+            .into_owned();
+        let directory_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "list_directory",
+            serde_json::json!({"path":outside_path.clone()}),
+            "directory-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "list_directory",
+            "directory-malformed",
+            &directory_failure,
+            &[&outside_path],
+        );
+
+        let grep = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "grep",
+            serde_json::json!({"pattern":"needle", "path":"."}),
+            "grep-success",
+        )
+        .await;
+        assert!(!grep.is_error, "grep output: {}", grep.output);
+        assert!(grep.output.contains("needle is present"));
+        let grep_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "grep",
+            serde_json::json!({
+                "pattern": 5,
+                "path": "PRIVATE_GREP_ARGUMENT",
+                "context_lines": "PRIVATE_GREP_CONTEXT_ARGUMENT"
+            }),
+            "grep-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "grep",
+            "grep-malformed",
+            &grep_failure,
+            &["PRIVATE_GREP_ARGUMENT", "PRIVATE_GREP_CONTEXT_ARGUMENT"],
+        );
+
+        let glob = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "glob",
+            serde_json::json!({"pattern":"*.txt", "path":"."}),
+            "glob-success",
+        )
+        .await;
+        assert!(!glob.is_error, "glob output: {}", glob.output);
+        assert!(glob.output.contains("matrix-proof.txt"));
+        let glob_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "glob",
+            serde_json::json!({
+                "pattern": 5,
+                "path": "PRIVATE_GLOB_ARGUMENT",
+                "max_results": "PRIVATE_GLOB_LIMIT_ARGUMENT"
+            }),
+            "glob-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "glob",
+            "glob-malformed",
+            &glob_failure,
+            &["PRIVATE_GLOB_ARGUMENT", "PRIVATE_GLOB_LIMIT_ARGUMENT"],
+        );
+
+        let mutation_path = workspace.path().join("mutation-proof.txt");
+        let write = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "write_file",
+            serde_json::json!({"path":"mutation-proof.txt", "content":"before"}),
+            "write-success",
+        )
+        .await;
+        assert!(!write.is_error, "write_file output: {}", write.output);
+        assert_eq!(
+            std::fs::read_to_string(&mutation_path).expect("read back written file"),
+            "before"
+        );
+        let write_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "write_file",
+            serde_json::json!({
+                "path":"mutation-proof.txt",
+                "content": 7,
+                "private": "PRIVATE_WRITE_CONTENT_ARGUMENT"
+            }),
+            "write-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "write_file",
+            "write-malformed",
+            &write_failure,
+            &["PRIVATE_WRITE_CONTENT_ARGUMENT"],
+        );
+        assert_eq!(
+            std::fs::read_to_string(&mutation_path).expect("malformed write leaves file intact"),
+            "before"
+        );
+
+        let edit = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "edit_file",
+            serde_json::json!({
+                "path":"mutation-proof.txt",
+                "old_string":"before",
+                "new_string":"after"
+            }),
+            "edit-success",
+        )
+        .await;
+        assert!(!edit.is_error, "edit_file output: {}", edit.output);
+        assert_eq!(
+            std::fs::read_to_string(&mutation_path).expect("read back edited file"),
+            "after"
+        );
+        let edit_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "edit_file",
+            serde_json::json!({
+                "path":"mutation-proof.txt",
+                "old_string":"PRIVATE_EDIT_OLD_STRING_ARGUMENT",
+                "new_string":"must-not-be-written"
+            }),
+            "edit-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "edit_file",
+            "edit-malformed",
+            &edit_failure,
+            &["PRIVATE_EDIT_OLD_STRING_ARGUMENT"],
+        );
+        assert_eq!(
+            std::fs::read_to_string(&mutation_path).expect("failed edit leaves file intact"),
+            "after"
+        );
+
+        let append = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "append_file",
+            serde_json::json!({"path":"mutation-proof.txt", "content":"tail"}),
+            "append-success",
+        )
+        .await;
+        assert!(!append.is_error, "append_file output: {}", append.output);
+        assert_eq!(
+            std::fs::read_to_string(&mutation_path).expect("read back appended file"),
+            "after\ntail"
+        );
+        let append_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "append_file",
+            serde_json::json!({
+                "path":"PRIVATE_APPEND_PATH_ARGUMENT",
+                "content": 9
+            }),
+            "append-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "append_file",
+            "append-malformed",
+            &append_failure,
+            &["PRIVATE_APPEND_PATH_ARGUMENT"],
+        );
+        assert_eq!(
+            std::fs::read_to_string(&mutation_path)
+                .expect("malformed append leaves the target file intact"),
+            "after\ntail"
+        );
+
+        let task = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "get_task",
+            serde_json::json!({"id": seeded_task.id}),
+            "task-success",
+        )
+        .await;
+        assert!(!task.is_error, "get_task output: {}", task.output);
+        assert!(task.output.contains("executor matrix seed task"));
+        let task_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "get_task",
+            serde_json::json!({"id":"PRIVATE_GET_TASK_ARGUMENT"}),
+            "task-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "get_task",
+            "task-malformed",
+            &task_failure,
+            &["PRIVATE_GET_TASK_ARGUMENT"],
+        );
+
+        let epic = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "create_epic",
+            serde_json::json!({"title":"executor matrix epic"}),
+            "epic-create-success",
+        )
+        .await;
+        assert!(!epic.is_error, "create_epic output: {}", epic.output);
+        let epic_output: Value = serde_json::from_str(&epic.output).expect("epic success JSON");
+        let epic_id = epic_output["epic_id"]
+            .as_i64()
+            .expect("create_epic returns a database epic id");
+        let epic_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "create_epic",
+            serde_json::json!({
+                "title": "",
+                "description": "PRIVATE_CREATE_EPIC_ARGUMENT"
+            }),
+            "epic-create-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "create_epic",
+            "epic-create-malformed",
+            &epic_failure,
+            &["PRIVATE_CREATE_EPIC_ARGUMENT"],
+        );
+
+        let phase = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "create_phased_task",
+            serde_json::json!({
+                "epic_id": epic_id.to_string(),
+                "phase": "verification",
+                "phase_order": 1,
+                "title": "executor matrix phase task",
+                "priority": "p2",
+                "task_type": "feature",
+                "acceptance_criteria": "phase task is returned by the real phase reader"
+            }),
+            "phase-create-success",
+        )
+        .await;
+        assert!(
+            !phase.is_error,
+            "create_phased_task output: {}",
+            phase.output
+        );
+        assert!(phase.output.contains("executor matrix phase task"));
+        let phase_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "create_phased_task",
+            serde_json::json!({
+                "epic_id": epic_id.to_string(),
+                "phase": "PRIVATE_PHASE_CREATE_ARGUMENT"
+            }),
+            "phase-create-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "create_phased_task",
+            "phase-create-malformed",
+            &phase_failure,
+            &["PRIVATE_PHASE_CREATE_ARGUMENT"],
+        );
+
+        let progress = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "get_epic_progress",
+            serde_json::json!({"epic_id": epic_id.to_string()}),
+            "epic-progress-success",
+        )
+        .await;
+        assert!(
+            !progress.is_error,
+            "get_epic_progress output: {}",
+            progress.output
+        );
+        assert!(progress.output.contains("verification"));
+        let progress_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "get_epic_progress",
+            serde_json::json!({"description":"PRIVATE_EPIC_PROGRESS_ARGUMENT"}),
+            "epic-progress-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "get_epic_progress",
+            "epic-progress-malformed",
+            &progress_failure,
+            &["PRIVATE_EPIC_PROGRESS_ARGUMENT"],
+        );
+
+        let ready = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "get_ready_tasks_in_phase",
+            serde_json::json!({"epic_id": epic_id.to_string(), "phase":"verification"}),
+            "phase-ready-success",
+        )
+        .await;
+        assert!(
+            !ready.is_error,
+            "get_ready_tasks_in_phase output: {}",
+            ready.output
+        );
+        assert!(ready.output.contains("executor matrix phase task"));
+        let ready_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "get_ready_tasks_in_phase",
+            serde_json::json!({"phase":"PRIVATE_READY_PHASE_ARGUMENT"}),
+            "phase-ready-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "get_ready_tasks_in_phase",
+            "phase-ready-malformed",
+            &ready_failure,
+            &["PRIVATE_READY_PHASE_ARGUMENT"],
+        );
+
+        let budget = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "set_task_budget",
+            serde_json::json!({
+                "task_id": seeded_task.id,
+                "max_tokens": 2_000,
+                "max_usd": 0.25,
+                "max_turns": 3
+            }),
+            "budget-success",
+        )
+        .await;
+        assert!(
+            !budget.is_error,
+            "set_task_budget output: {}",
+            budget.output
+        );
+        let saved_budget = tasks
+            .get_by_id(seeded_task.id)
+            .expect("read actual saved budget")
+            .expect("budget task exists");
+        assert_eq!(saved_budget.budget_max_tokens, Some(2_000));
+        assert_eq!(saved_budget.budget_max_usd, Some(0.25));
+        assert_eq!(saved_budget.budget_max_turns, Some(3));
+        let budget_failure = run_builtin_matrix_call(
+            &mut executor,
+            &registry,
+            "set_task_budget",
+            serde_json::json!({"task_id":"PRIVATE_BUDGET_ARGUMENT"}),
+            "budget-malformed",
+        )
+        .await;
+        assert_builtin_matrix_failure(
+            "set_task_budget",
+            "budget-malformed",
+            &budget_failure,
+            &["PRIVATE_BUDGET_ARGUMENT"],
+        );
+
+        assert!(
+            uncovered.contains(&"bash".to_string()),
+            "the live registry inventory should retain uncovered entries: {uncovered:?}"
+        );
+    }
 }
