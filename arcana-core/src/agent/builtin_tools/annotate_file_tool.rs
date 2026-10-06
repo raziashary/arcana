@@ -177,4 +177,357 @@ mod workspace_tests {
             .unwrap_err()
             .contains("must be absolute"));
     }
+
+    async fn execute_registered_artifact_tool(
+        executor: &mut crate::agent::tool_executor::ToolExecutor,
+        registry: &crate::agent::tool_registry::ToolRegistry,
+        tool_name: &str,
+        input: serde_json::Value,
+        use_id: &str,
+    ) -> ToolResult {
+        let tool = registry
+            .get(tool_name)
+            .unwrap_or_else(|| panic!("FastDevelopment registry is missing {tool_name}"));
+        let results = executor
+            .execute_batch(vec![(tool, input, use_id.to_string())])
+            .await
+            .expect("registered artifact tool returns a result");
+        assert_eq!(results.len(), 1, "one result for {tool_name}");
+        let (returned_use_id, result) = results.into_iter().next().expect("one result");
+        assert_eq!(returned_use_id, use_id);
+        result
+    }
+
+    fn assert_artifact_failure(
+        tool_name: &str,
+        use_id: &str,
+        task_id: i64,
+        result: &ToolResult,
+        private_arguments: &[&str],
+    ) {
+        assert!(
+            result.is_error,
+            "{tool_name} must be delivered as a failed tool result"
+        );
+        assert!(
+            result.output.len() <= 8 * 1024,
+            "bounded error for {tool_name}"
+        );
+        let envelope: serde_json::Value =
+            serde_json::from_str(&result.output).expect("versioned JSON failure envelope");
+        assert_eq!(envelope["schema_version"], 1, "{tool_name}");
+        assert_eq!(envelope["ok"], false, "{tool_name} cannot look successful");
+        assert_eq!(envelope["error"]["tool"], tool_name, "{tool_name}");
+        assert_eq!(
+            envelope["error"]["operation"],
+            format!("tool.{tool_name}"),
+            "{tool_name} operation identity"
+        );
+        assert_eq!(
+            envelope["error"]["context"]["session_id"], "artifact-matrix-session",
+            "{tool_name} session correlation"
+        );
+        assert_eq!(
+            envelope["error"]["context"]["agent_id"], "worker-artifact-matrix",
+            "{tool_name} agent correlation"
+        );
+        assert_eq!(
+            envelope["error"]["context"]["task_id"], task_id,
+            "{tool_name} task correlation"
+        );
+        assert_eq!(
+            envelope["error"]["context"]["tool_call_id"],
+            format!("artifact-matrix-session-{use_id}"),
+            "{tool_name} call correlation"
+        );
+        for field in [
+            "error_code",
+            "category",
+            "message",
+            "cause",
+            "suggested_action",
+        ] {
+            assert!(
+                envelope["error"][field].as_str().is_some(),
+                "{tool_name} has {field}: {envelope}"
+            );
+        }
+        for field in ["message", "cause", "suggested_action"] {
+            assert!(
+                envelope["error"][field].as_str().unwrap_or_default().len() <= 512,
+                "{tool_name} {field} is bounded"
+            );
+        }
+        assert!(envelope["error"]["retryable"].is_boolean(), "{tool_name}");
+        assert!(
+            envelope["error"]["retry_after_ms"].is_null()
+                || envelope["error"]["retry_after_ms"].is_u64(),
+            "{tool_name} retry delay is optional and numeric"
+        );
+        assert!(
+            envelope["error"]["timestamp"].as_str().is_some(),
+            "{tool_name} timestamp"
+        );
+        assert!(
+            envelope["error"]["context"].is_object(),
+            "{tool_name} context"
+        );
+        for private in private_arguments {
+            assert!(
+                !result.output.contains(private),
+                "{tool_name} leaked private argument {private}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn artifact_builtins_have_registered_executor_success_and_failure_contracts() {
+        use crate::agent::{
+            builtin_tools, permission::PermissionMode, tool_executor::ToolExecutor,
+            tool_registry::ToolRegistry, tool_trait::AgentIdentity, PAMode,
+        };
+        use crate::db::tasks::{CreateTaskInput, TasksDb};
+        use std::sync::Arc;
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        std::fs::write(workspace.path().join("source.rs"), "fn main() {}\n")
+            .expect("seed annotation source");
+        std::fs::write(workspace.path().join("valid.json"), "{\"answer\": 42}\n")
+            .expect("seed valid JSON for check_file");
+        let prior_interface = "# Existing interface contract\n\nPreserve this in the checkpoint.\n";
+        std::fs::write(workspace.path().join("INTERFACE.md"), prior_interface)
+            .expect("seed prior interface contract");
+
+        let worker = "worker-artifact-matrix";
+        let tasks = TasksDb::open().expect("open isolated task database");
+        let task = tasks
+            .create(CreateTaskInput {
+                title: "artifact builtin executor matrix".into(),
+                description: Some("temporary test task".into()),
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "exercise registered artifact tools".into(),
+                created_by: Some("test".into()),
+            })
+            .expect("create isolated task");
+        tasks
+            .update_status(task.id, "assigned", Some(worker))
+            .expect("assign isolated task to test worker");
+        tasks
+            .claim_task_with_pid(task.id, worker, std::process::id())
+            .expect("claim task through production task API");
+        drop(tasks);
+
+        let mut registry = ToolRegistry::new();
+        builtin_tools::register_for_mode(&mut registry, PAMode::FastDevelopment);
+        for tool_name in ["check_file", "annotate_file", "write_interface_spec"] {
+            assert!(
+                registry.get(tool_name).is_some(),
+                "{tool_name} is a live FastDevelopment registration"
+            );
+        }
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            "artifact-matrix-session".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker(worker),
+        );
+        executor.set_task_id(Some(task.id));
+
+        let checked = execute_registered_artifact_tool(
+            &mut executor,
+            &registry,
+            "check_file",
+            serde_json::json!({"path":"valid.json", "checks":["syntax"]}),
+            "check-success",
+        )
+        .await;
+        assert!(!checked.is_error, "valid JSON check: {}", checked.output);
+        assert!(
+            checked.output.contains("json_parse"),
+            "real syntax checker ran"
+        );
+        assert!(
+            checked.output.contains("No syntax errors"),
+            "valid JSON passed"
+        );
+
+        let checked_failure = execute_registered_artifact_tool(
+            &mut executor,
+            &registry,
+            "check_file",
+            serde_json::json!({
+                "path":"valid.json",
+                "checks":["PRIVATE_CHECK_SELECTION_MARKER"],
+                "source":"PRIVATE_CHECK_SOURCE_MARKER"
+            }),
+            "check-failure",
+        )
+        .await;
+        assert_artifact_failure(
+            "check_file",
+            "check-failure",
+            task.id,
+            &checked_failure,
+            &[
+                "PRIVATE_CHECK_SELECTION_MARKER",
+                "PRIVATE_CHECK_SOURCE_MARKER",
+            ],
+        );
+
+        let annotation_success = execute_registered_artifact_tool(
+            &mut executor,
+            &registry,
+            "annotate_file",
+            serde_json::json!({
+                "file_path":"source.rs",
+                "start_line":1,
+                "end_line":1,
+                "note":"Review the entry point ownership.",
+                "severity":"warning"
+            }),
+            "annotate-success",
+        )
+        .await;
+        assert!(
+            !annotation_success.is_error,
+            "annotation creation: {}",
+            annotation_success.output
+        );
+        assert!(annotation_success.output.contains("Annotation created"));
+        let annotations = AnnotationsDb::open()
+            .expect("open production annotations reader")
+            .list_for_file("source.rs")
+            .expect("read persisted annotation");
+        assert_eq!(annotations.len(), 1, "annotation is visible to its reader");
+        assert_eq!(annotations[0].prompt, "Review the entry point ownership.");
+        assert_eq!(annotations[0].start_line, 1);
+        assert_eq!(annotations[0].end_line, 1);
+        assert_eq!(annotations[0].source, "worker");
+        assert_eq!(annotations[0].severity, "warning");
+
+        let annotation_failure = execute_registered_artifact_tool(
+            &mut executor,
+            &registry,
+            "annotate_file",
+            serde_json::json!({
+                "file_path":"source.rs",
+                "start_line":"PRIVATE_ANNOTATION_LINE_MARKER",
+                "end_line":1,
+                "note":"PRIVATE_ANNOTATION_PROMPT_MARKER",
+                "severity":"blocking"
+            }),
+            "annotate-failure",
+        )
+        .await;
+        assert_artifact_failure(
+            "annotate_file",
+            "annotate-failure",
+            task.id,
+            &annotation_failure,
+            &[
+                "PRIVATE_ANNOTATION_LINE_MARKER",
+                "PRIVATE_ANNOTATION_PROMPT_MARKER",
+                "source.rs",
+            ],
+        );
+        assert_eq!(
+            AnnotationsDb::open()
+                .expect("reopen annotations reader")
+                .list_for_file("source.rs")
+                .expect("verify failed call did not add a row")
+                .len(),
+            1,
+            "malformed annotation adds no persisted row"
+        );
+
+        let interface_success = execute_registered_artifact_tool(
+            &mut executor,
+            &registry,
+            "write_interface_spec",
+            serde_json::json!({
+                "mode":"overwrite",
+                "routes":[{
+                    "method":"GET",
+                    "path":"/api/artifacts",
+                    "description":"List available artifacts.",
+                    "response_shape":{"artifacts":[]},
+                    "status_codes":[401,500]
+                }]
+            }),
+            "interface-success",
+        )
+        .await;
+        assert!(
+            !interface_success.is_error,
+            "interface spec write: {}",
+            interface_success.output
+        );
+        let interface_path = workspace.path().join("INTERFACE.md");
+        let interface_content =
+            std::fs::read_to_string(&interface_path).expect("read persisted interface spec");
+        assert!(interface_content.contains("### GET /api/artifacts"));
+        assert!(interface_content.contains("List available artifacts."));
+        assert!(interface_content.contains("\"artifacts\": []"));
+        let checkpoints = crate::git::checkpoint::list(None, None, Some(task.id))
+            .expect("read pre-write checkpoint through production store");
+        assert_eq!(
+            checkpoints.len(),
+            1,
+            "write created a task-associated checkpoint"
+        );
+        assert_eq!(checkpoints[0].reason, "pre_write");
+        assert_eq!(
+            std::fs::canonicalize(&checkpoints[0].file_path).expect("canonical checkpoint target"),
+            std::fs::canonicalize(&interface_path).expect("canonical interface target")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&checkpoints[0].snapshot_path)
+                .expect("read checkpoint snapshot"),
+            prior_interface,
+            "checkpoint retains prior interface content"
+        );
+
+        let interface_failure = execute_registered_artifact_tool(
+            &mut executor,
+            &registry,
+            "write_interface_spec",
+            serde_json::json!({
+                "routes":[{
+                    "method":17,
+                    "path":"PRIVATE_INTERFACE_PATH_MARKER",
+                    "notes":"PRIVATE_INTERFACE_NOTES_MARKER"
+                }],
+                "conventions":"PRIVATE_INTERFACE_CONVENTIONS_MARKER"
+            }),
+            "interface-failure",
+        )
+        .await;
+        assert_artifact_failure(
+            "write_interface_spec",
+            "interface-failure",
+            task.id,
+            &interface_failure,
+            &[
+                "PRIVATE_INTERFACE_PATH_MARKER",
+                "PRIVATE_INTERFACE_NOTES_MARKER",
+                "PRIVATE_INTERFACE_CONVENTIONS_MARKER",
+            ],
+        );
+        assert_eq!(
+            std::fs::read_to_string(&interface_path).expect("interface remains persisted"),
+            interface_content,
+            "malformed input leaves the successful artifact unchanged"
+        );
+        assert_eq!(
+            crate::git::checkpoint::list(None, None, Some(task.id))
+                .expect("read task checkpoints after failed call")
+                .len(),
+            1,
+            "malformed input does not create another checkpoint"
+        );
+    }
 }

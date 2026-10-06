@@ -333,7 +333,11 @@ impl Tool for SendWorkerMessageTool {
         let registered_workers =
             match crate::db::workers::WorkersDb::open().and_then(|db| db.registered_slugs()) {
                 Ok(workers) => workers,
-                Err(e) => return ToolResult::error(&format!("Failed to read worker roster: {e}")),
+                Err(_) => {
+                    return ToolResult::error(
+                        "Local worker storage could not load the recipient roster.",
+                    )
+                }
             };
         if !is_known_recipient(&to, &registered_workers) {
             return ToolResult::error(format!(
@@ -409,7 +413,11 @@ impl Tool for SendWorkerMessageTool {
         // ── Open DB + persist ────────────────────────────────────────────────
         let db = match TasksDb::open() {
             Ok(db) => db,
-            Err(e) => return ToolResult::error(format!("Failed to open tasks DB: {e}")),
+            Err(_) => {
+                return ToolResult::error(
+                    "Local task storage is unavailable; the message was not sent.",
+                )
+            }
         };
 
         // Broadcast = N inserts; non-broadcast = 1.
@@ -423,10 +431,13 @@ impl Tool for SendWorkerMessageTool {
         for target in &targets {
             let msg = match db.insert_worker_message(&from, target, &body, &kind, task_id) {
                 Ok(m) => m,
-                Err(e) => {
-                    return ToolResult::error(format!(
-                        "Failed to persist message to '{target}': {e}"
-                    ))
+                Err(_) => {
+                    return ToolResult::categorized_error(
+                        "worker_message_persist_failed",
+                        "database",
+                        "Local task storage rejected the message write; its acknowledgement is not recorded.",
+                        "Check task storage and the referenced task, then inspect recipient inboxes before retrying a broadcast.",
+                    )
                 }
             };
 
@@ -477,5 +488,625 @@ impl Tool for SendWorkerMessageTool {
             })
             .to_string(),
         )
+    }
+}
+
+#[cfg(test)]
+mod acp_matrix_tests {
+    use super::*;
+    use crate::agent::permission::{new_pending_permissions, PermissionMode};
+    use crate::agent::tool_executor::ToolExecutor;
+    use crate::agent::tool_registry::ToolRegistry;
+    use crate::agent::tool_trait::{AgentIdentity, ToolResult};
+    use crate::db::runs::RunsDb;
+    use crate::db::tasks::TasksDb;
+    use crate::db::workers::WorkersDb;
+    use std::sync::Arc;
+
+    const SESSION: &str = "p4-51-acp-live-matrix";
+
+    fn live_registry() -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        registry
+    }
+
+    fn executor(
+        task_id: i64,
+        home: &std::path::Path,
+        identity: AgentIdentity,
+        run_id: &str,
+    ) -> ToolExecutor {
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            new_pending_permissions(),
+            SESSION.into(),
+            home.to_string_lossy().into_owned(),
+            identity,
+        )
+        .with_run_id(Some(run_id.to_owned()));
+        executor.set_task_id(Some(task_id));
+        executor
+    }
+
+    async fn invoke(
+        executor: &mut ToolExecutor,
+        registry: &ToolRegistry,
+        name: &str,
+        input: Value,
+        call: &str,
+    ) -> ToolResult {
+        let tool = registry
+            .get(name)
+            .unwrap_or_else(|| panic!("FastDevelopment registry is missing {name}"));
+        let results = executor
+            .execute_batch(vec![(tool, input, call.into())])
+            .await
+            .expect("execute registered ACP tool through ToolExecutor");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, call);
+        results.into_iter().next().unwrap().1
+    }
+
+    fn assert_success(result: &ToolResult, name: &str) -> Value {
+        assert!(!result.is_error, "{name} failed: {}", result.output);
+        serde_json::from_str(&result.output)
+            .unwrap_or_else(|error| panic!("{name} returned invalid success JSON: {error}"))
+    }
+
+    fn assert_failure(
+        expected_task_id: i64,
+        expected_run_id: &str,
+        result: &ToolResult,
+        name: &str,
+        call: &str,
+        agent: &str,
+        private_markers: &[&str],
+    ) -> Value {
+        assert!(
+            result.is_error,
+            "{name} returned success-shaped failure: {}",
+            result.output
+        );
+        assert!(result.output.len() <= 8192, "{name} error exceeded bound");
+        for marker in private_markers {
+            assert!(
+                !result.output.contains(marker),
+                "{name} error reflected private marker {marker}"
+            );
+        }
+        let envelope: Value = serde_json::from_str(&result.output)
+            .unwrap_or_else(|error| panic!("{name} failure was not JSON: {error}"));
+        assert_eq!(envelope["schema_version"], 1, "{name}: {envelope}");
+        assert_eq!(envelope["ok"], false, "{name}: {envelope}");
+        assert_eq!(envelope["tool"], name, "{name}: {envelope}");
+        assert_eq!(envelope["operation"], format!("tool.{name}"));
+        assert!(!envelope["error_code"]
+            .as_str()
+            .unwrap_or_default()
+            .is_empty());
+        assert!(!envelope["category"].as_str().unwrap_or_default().is_empty());
+        assert!(envelope["retryable"].is_boolean());
+        assert!(envelope["retry_after_ms"].is_null() || envelope["retry_after_ms"].is_u64());
+        assert!(envelope["message"].as_str().unwrap_or_default().len() <= 512);
+        assert!(envelope["cause"].as_str().unwrap_or_default().len() <= 512);
+        assert!(
+            envelope["suggested_action"]
+                .as_str()
+                .unwrap_or_default()
+                .len()
+                <= 512
+        );
+        assert_eq!(envelope["context"]["session_id"], SESSION);
+        assert_eq!(envelope["context"]["agent_id"], agent);
+        assert_eq!(envelope["context"]["task_id"], expected_task_id);
+        assert_eq!(envelope["context"]["run_id"], expected_run_id);
+        assert_eq!(
+            envelope["context"]["tool_call_id"],
+            format!("{SESSION}-{call}")
+        );
+        assert!(envelope["timestamp"].as_str().is_some());
+        assert!(envelope["error"].is_object());
+        envelope
+    }
+
+    #[tokio::test]
+    async fn acp_live_fastdevelopment_registry_has_success_and_failure_proof() {
+        let home = tempfile::tempdir().expect("isolated Arcana home and workspace");
+        let _home = crate::db::test_support::with_home(home.path());
+        let registry = live_registry();
+        let expected = [
+            "send_worker_message",
+            "list_worker_messages",
+            "list_stale_worker_messages",
+            "list_worker_health",
+            "acknowledge_worker_message",
+            "list_worker_requests",
+            "resolve_worker_request",
+            "request_supervisor_action",
+            "reconcile_worker_operation",
+        ];
+        for name in expected {
+            assert!(
+                registry.get(name).is_some(),
+                "missing registered tool {name}"
+            );
+        }
+
+        let workers = WorkersDb::open().expect("open isolated workers DB");
+        workers
+            .create(
+                "ACP matrix worker",
+                "worker-acp-matrix",
+                "backend",
+                "fixture-model",
+                &[],
+                120,
+                None,
+            )
+            .expect("seed isolated worker roster");
+        let tasks = TasksDb::open().expect("open isolated tasks DB");
+        let task_id = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "ACP matrix task".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "isolated communication proof".into(),
+                created_by: Some("test".into()),
+            })
+            .expect("seed real referenced task")
+            .id;
+        let runs = RunsDb::open().expect("open isolated worker run journal");
+        let health_run = runs
+            .begin_worker_tick("worker-acp-matrix", "acp-matrix-health-session")
+            .expect("write worker health row");
+        let intent_run = runs
+            .begin("worker_tick", Some("worker-acp-matrix"))
+            .expect("write operation run");
+        let intent_cursor = runs
+            .record_operation_intent(
+                &intent_run,
+                Some(task_id),
+                "acp-matrix-operation",
+                "write_file",
+                "FileSystem",
+                &[],
+            )
+            .expect("write unresolved operation intent");
+
+        let mut supervisor = executor(
+            task_id,
+            home.path(),
+            AgentIdentity::supervisor(),
+            &health_run,
+        );
+        let mut worker = executor(
+            task_id,
+            home.path(),
+            AgentIdentity::worker("worker-acp-matrix"),
+            &health_run,
+        );
+
+        let sent = invoke(
+            &mut supervisor,
+            &registry,
+            "send_worker_message",
+            json!({"to":"worker-acp-matrix", "body":"ACP matrix durable message", "kind":"question", "task_id":task_id}),
+            "send-success",
+        )
+        .await;
+        let sent = assert_success(&sent, "send_worker_message");
+        let message_id = sent["persisted_message_ids"][0]
+            .as_i64()
+            .expect("persisted message id");
+        let persisted = tasks
+            .get_worker_message(message_id)
+            .expect("read sent message")
+            .expect("sent message row");
+        assert_eq!(persisted.from_slug, "supervisor");
+        assert_eq!(persisted.to_slug, "worker-acp-matrix");
+        assert_eq!(persisted.body, "ACP matrix durable message");
+
+        let injected_send_detail = format!(
+            "ACP_PRIVATE_DATABASE_MARKER {}",
+            "oversized database diagnostic ".repeat(96)
+        );
+        let trigger = format!(
+            "CREATE TRIGGER p4_51_fail_acp_send BEFORE INSERT ON worker_messages
+             BEGIN SELECT RAISE(ABORT, '{}'); END;",
+            injected_send_detail.replace('\'', "''")
+        );
+        tasks
+            .conn
+            .execute_batch(&trigger)
+            .expect("inject long isolated message-write failure");
+        let send_failed = invoke(
+            &mut supervisor,
+            &registry,
+            "send_worker_message",
+            json!({"to":"worker-acp-matrix", "body":"ACP_PRIVATE_BODY_VALUE"}),
+            "send-database-failure",
+        )
+        .await;
+        assert_failure(
+            task_id,
+            &health_run,
+            &send_failed,
+            "send_worker_message",
+            "send-database-failure",
+            "supervisor",
+            &["ACP_PRIVATE_BODY_VALUE", "ACP_PRIVATE_DATABASE_MARKER"],
+        );
+        tasks
+            .conn
+            .execute_batch("DROP TRIGGER p4_51_fail_acp_send;")
+            .expect("remove isolated message-write failure");
+
+        let inbox = invoke(
+            &mut worker,
+            &registry,
+            "list_worker_messages",
+            json!({"unread_only":true}),
+            "inbox-success",
+        )
+        .await;
+        assert_eq!(
+            assert_success(&inbox, "list_worker_messages")["messages"][0]["id"],
+            message_id
+        );
+        assert_eq!(
+            tasks
+                .get_worker_message(message_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "read"
+        );
+        tasks
+            .conn
+            .execute(
+                "UPDATE worker_messages SET created_at=strftime('%Y-%m-%dT%H:%M:%fZ','now','-10 minutes') WHERE id=?1",
+                rusqlite::params![message_id],
+            )
+            .expect("age isolated pending message for stale reader");
+        let stale = invoke(
+            &mut supervisor,
+            &registry,
+            "list_stale_worker_messages",
+            json!({"older_than_minutes":1}),
+            "stale-success",
+        )
+        .await;
+        assert_eq!(
+            assert_success(&stale, "list_stale_worker_messages")["messages"][0]["id"],
+            message_id
+        );
+
+        tasks
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER p4_51_fail_acp_ack BEFORE UPDATE OF status ON worker_messages
+                 WHEN NEW.status='acknowledged'
+                 BEGIN SELECT RAISE(ABORT, 'injected acknowledgement database failure'); END;",
+            )
+            .expect("inject acknowledgement database failure");
+        let ack_failed = invoke(
+            &mut worker,
+            &registry,
+            "acknowledge_worker_message",
+            json!({"id":message_id}),
+            "ack-database-failure",
+        )
+        .await;
+        assert_failure(
+            task_id,
+            &health_run,
+            &ack_failed,
+            "acknowledge_worker_message",
+            "ack-database-failure",
+            "worker-acp-matrix",
+            &[],
+        );
+        tasks
+            .conn
+            .execute_batch("DROP TRIGGER p4_51_fail_acp_ack;")
+            .expect("remove isolated acknowledgement failure");
+        let acked = invoke(
+            &mut worker,
+            &registry,
+            "acknowledge_worker_message",
+            json!({"id":message_id}),
+            "ack-success",
+        )
+        .await;
+        assert_eq!(
+            assert_success(&acked, "acknowledge_worker_message")["status"],
+            "acknowledged"
+        );
+        assert_eq!(
+            tasks
+                .get_worker_message(message_id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "acknowledged"
+        );
+
+        let request = invoke(
+            &mut worker,
+            &registry,
+            "request_supervisor_action",
+            json!({"task_id":task_id, "request_type":"report_issue", "payload":{"issue_description":"fixture issue", "severity":"low"}}),
+            "request-success",
+        )
+        .await;
+        let request = assert_success(&request, "request_supervisor_action");
+        let request_id = request["request_id"].as_i64().expect("request id");
+        let requests = invoke(
+            &mut supervisor,
+            &registry,
+            "list_worker_requests",
+            json!({"status":"pending"}),
+            "requests-success",
+        )
+        .await;
+        assert_eq!(
+            assert_success(&requests, "list_worker_requests")["requests"][0]["id"],
+            request_id
+        );
+
+        tasks
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER p4_51_fail_worker_request_resolution BEFORE UPDATE OF status ON worker_requests
+                 BEGIN SELECT RAISE(ABORT, 'injected request resolution database failure'); END;",
+            )
+            .expect("inject request-resolution database failure");
+        let resolve_failed = invoke(
+            &mut supervisor,
+            &registry,
+            "resolve_worker_request",
+            json!({"id":request_id, "action":"completed", "note":"ACP_PRIVATE_RESOLUTION_NOTE"}),
+            "resolve-database-failure",
+        )
+        .await;
+        assert_failure(
+            task_id,
+            &health_run,
+            &resolve_failed,
+            "resolve_worker_request",
+            "resolve-database-failure",
+            "supervisor",
+            &["ACP_PRIVATE_RESOLUTION_NOTE"],
+        );
+        tasks
+            .conn
+            .execute_batch("DROP TRIGGER p4_51_fail_worker_request_resolution;")
+            .expect("remove isolated resolution failure");
+        let resolved = invoke(
+            &mut supervisor,
+            &registry,
+            "resolve_worker_request",
+            json!({"id":request_id, "action":"completed", "note":"fixture handled"}),
+            "resolve-success",
+        )
+        .await;
+        assert_eq!(
+            assert_success(&resolved, "resolve_worker_request")["action"],
+            "completed"
+        );
+        assert_eq!(
+            tasks
+                .get_worker_request_by_id(request_id)
+                .unwrap()
+                .unwrap()
+                .status
+                .as_str(),
+            "completed"
+        );
+
+        tasks
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER p4_51_fail_worker_request_insert BEFORE INSERT ON worker_requests
+                 BEGIN SELECT RAISE(ABORT, 'injected request create failure'); END;",
+            )
+            .expect("inject worker request creation failure");
+        let action_failed = invoke(
+            &mut worker,
+            &registry,
+            "request_supervisor_action",
+            json!({"request_type":"needs_info", "payload":{"question":"ACP_PRIVATE_REQUEST_VALUE"}}),
+            "request-database-failure",
+        )
+        .await;
+        assert_failure(
+            task_id,
+            &health_run,
+            &action_failed,
+            "request_supervisor_action",
+            "request-database-failure",
+            "worker-acp-matrix",
+            &["ACP_PRIVATE_REQUEST_VALUE"],
+        );
+        tasks
+            .conn
+            .execute_batch("DROP TRIGGER p4_51_fail_worker_request_insert;")
+            .expect("remove isolated request creation failure");
+
+        let reconciliation = invoke(
+            &mut supervisor,
+            &registry,
+            "reconcile_worker_operation",
+            json!({"run_id":intent_run, "intent_cursor":intent_cursor, "decision":"do_not_retry", "reason_code":"unsafe_to_repeat"}),
+            "reconcile-success",
+        )
+        .await;
+        assert_eq!(
+            assert_success(&reconciliation, "reconcile_worker_operation")["decision"],
+            "do_not_retry"
+        );
+        let journal = runs
+            .operation_journal_page(&intent_run, 0, 10)
+            .expect("read reconciled journal");
+        assert_eq!(journal.entries[0].reconciliation.as_str(), "do_not_retry");
+        assert_eq!(
+            journal.entries[0].reconciliation_actor.as_deref(),
+            Some("supervisor")
+        );
+
+        runs.conn
+            .execute_batch(
+                "CREATE TRIGGER p4_51_fail_acp_reconciliation BEFORE INSERT ON operation_journal
+                 WHEN NEW.record_type='reconciliation'
+                 BEGIN SELECT RAISE(ABORT, 'ACP_PRIVATE_RUN_DETAIL injected journal failure'); END;",
+            )
+            .expect("inject operation reconciliation database failure");
+        let second_intent = runs
+            .record_operation_intent(
+                &intent_run,
+                None,
+                "acp-matrix-operation-2",
+                "append_file",
+                "FileSystem",
+                &[],
+            )
+            .expect("write second unresolved intent");
+        let reconcile_failed = invoke(
+            &mut supervisor,
+            &registry,
+            "reconcile_worker_operation",
+            json!({"run_id":intent_run, "intent_cursor":second_intent, "decision":"retry_safe", "reason_code":"idempotent_retry_verified"}),
+            "reconcile-database-failure",
+        )
+        .await;
+        assert_failure(
+            task_id,
+            &health_run,
+            &reconcile_failed,
+            "reconcile_worker_operation",
+            "reconcile-database-failure",
+            "supervisor",
+            &["ACP_PRIVATE_RUN_DETAIL"],
+        );
+        runs.conn
+            .execute_batch("DROP TRIGGER p4_51_fail_acp_reconciliation;")
+            .expect("remove isolated reconciliation failure");
+
+        let health = invoke(
+            &mut supervisor,
+            &registry,
+            "list_worker_health",
+            json!({"limit":20, "journal_limit":10}),
+            "health-success",
+        )
+        .await;
+        let health = assert_success(&health, "list_worker_health");
+        assert!(health["workers"].as_array().unwrap().iter().any(|row| {
+            row["slug"] == "worker-acp-matrix" && row["run"]["run_id"] == health_run
+        }));
+
+        for (name, call, input, markers) in [
+            (
+                "send_worker_message",
+                "send-invalid-recipient",
+                json!({"to":"ACP_PRIVATE_RECIPIENT", "body":"fixture message"}),
+                vec!["ACP_PRIVATE_RECIPIENT"],
+            ),
+            (
+                "acknowledge_worker_message",
+                "ack-invalid-id",
+                json!({"id":0}),
+                vec![],
+            ),
+            (
+                "resolve_worker_request",
+                "resolve-invalid-action",
+                json!({"id":request_id, "action":"ACP_PRIVATE_ACTION"}),
+                vec!["ACP_PRIVATE_ACTION"],
+            ),
+            (
+                "request_supervisor_action",
+                "request-invalid-type",
+                json!({"request_type":"ACP_PRIVATE_TYPE", "payload":{}}),
+                vec!["ACP_PRIVATE_TYPE"],
+            ),
+        ] {
+            let (result, agent) =
+                if name == "acknowledge_worker_message" || name == "request_supervisor_action" {
+                    (
+                        invoke(&mut worker, &registry, name, input, call).await,
+                        "worker-acp-matrix",
+                    )
+                } else {
+                    (
+                        invoke(&mut supervisor, &registry, name, input, call).await,
+                        "supervisor",
+                    )
+                };
+            assert_failure(task_id, &health_run, &result, name, call, agent, &markers);
+        }
+
+        let worker_stale_denied = invoke(
+            &mut worker,
+            &registry,
+            "list_stale_worker_messages",
+            json!({"older_than_minutes":1}),
+            "stale-role-failure",
+        )
+        .await;
+        assert_failure(
+            task_id,
+            &health_run,
+            &worker_stale_denied,
+            "list_stale_worker_messages",
+            "stale-role-failure",
+            "worker-acp-matrix",
+            &[],
+        );
+        let worker_health_denied = invoke(
+            &mut worker,
+            &registry,
+            "list_worker_health",
+            json!({}),
+            "health-role-failure",
+        )
+        .await;
+        assert_failure(
+            task_id,
+            &health_run,
+            &worker_health_denied,
+            "list_worker_health",
+            "health-role-failure",
+            "worker-acp-matrix",
+            &[],
+        );
+
+        drop(tasks);
+        drop(workers);
+        drop(runs);
+        let task_db_path = home.path().join(".arcana").join("tasks.db");
+        std::fs::remove_file(&task_db_path).expect("remove only isolated temp-home task DB");
+        std::fs::create_dir(&task_db_path).expect("obstruct only isolated temp-home task DB");
+        for (name, call, input) in [
+            ("list_worker_messages", "inbox-database-failure", json!({})),
+            (
+                "list_stale_worker_messages",
+                "stale-database-failure",
+                json!({}),
+            ),
+            (
+                "list_worker_requests",
+                "requests-database-failure",
+                json!({}),
+            ),
+        ] {
+            let result = invoke(&mut supervisor, &registry, name, input, call).await;
+            assert_failure(task_id, &health_run, &result, name, call, "supervisor", &[]);
+        }
     }
 }
