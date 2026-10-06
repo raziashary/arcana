@@ -8,10 +8,11 @@ successful paid Fleet stays open under P4-50. Capture unit `1cdb7a1` passes
 the current Linux whole-workspace CI job; earlier capture-loss cause remains
 unconfirmed. macOS's six retention groups pass, while its separate command
 corpus fails on the absent signed XPC runner. No full-pipeline claim.
-Session/message annual pairs and hook historical readers pass Windows/Linux
-4/4. Owner approves preserving validated hook execution instants (ADR-0320)
-and an isolated test-build attach diagnostic (ADR-0321); implementation and
-proof remain next work. Expanded goal unread; Calendar owner-only; no second
+Session/message annual pairs pass Windows/Linux. HooksDb now preserves
+validated execution time (ADR-0320): Windows/Linux hook module 11/11, core
+check, and real Windows CLI export 1/1. Other timestamp pairs/platform proof
+remain open. The approved isolated desktop diagnostic build (ADR-0321)
+builds successfully; attachment proof is underway. Expanded goal unread; Calendar owner-only; no second
 paid Fleet run authorized.
 
 2026-10-06 recovery: latest pushed commit `c2e3622` bounds Supervisor output.

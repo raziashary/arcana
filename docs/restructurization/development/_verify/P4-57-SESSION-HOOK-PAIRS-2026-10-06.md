@@ -2,6 +2,8 @@
 
 Status: root validated on Windows and Ubuntu WSL. This proof covers selected production session/message pairs and hook execution-log readers. No tests or Git operations were run by the delegated worker; main-session results are recorded below.
 
+**Superseding hook change:** ADR-0320 approves preserving the executor's instant. `_verify/P4-57-HOOK-EXECUTION-INSTANT-2026-10-06.md` records the implementation and 11/11 Windows/Linux checks. The discard semantics and reader-only hook corpus below describe the prior test-only unit; they are not current writer behavior. Session proof remains applicable.
+
 ## Evidence log
 
 - Report created before source investigation, per task instructions.

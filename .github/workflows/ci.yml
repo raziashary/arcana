@@ -276,6 +276,11 @@ jobs:
           cargo test -p arcana --lib retention_cleanup_failure_is_visible_through_structured_logs_reader --locked -- --test-threads=1
           cargo test -p arcana --lib hook_retention_failure_is_visible_through_structured_logs_reader --locked -- --test-threads=1
 
+      # Selected TG4-19 producer/reader pairs. This does not substitute for
+      # the remaining per-database inventory required to close the gate.
+      - name: Annual analytics, session and hook timestamp pairs (TG4-19)
+        run: cargo test -p arcana-core --lib analytics_timestamp_pairs_ --locked -- --test-threads=1
+
       # TG4-18: run Rust, npm and Python command intents through Arcana's
       # production argv resolver and process launcher on each OS in this
       # matrix, including the real Windows npm.cmd shim path.

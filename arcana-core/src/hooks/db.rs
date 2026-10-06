@@ -160,13 +160,16 @@ impl HooksDb {
     pub fn insert_log(&self, log: &HookExecutionLog) -> Result<()> {
         let operation =
             OperationTimer::start("database_hook_execution_log_insert").with_database("config");
+        let executed_at = crate::db::timestamps::parse_db_timestamp(&log.executed_at)
+            .map(crate::db::timestamps::format_utc_timestamp)
+            .map_err(|_| ArcanaError::Agent("HooksDb insert_log invalid executed_at".into()))?;
         let outcome = format!("{:?}", log.outcome).to_lowercase();
         self.conn.execute(
-            "INSERT INTO hook_logs (hook_id, hook_name, hook_type, outcome, output, error, duration_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO hook_logs (hook_id, hook_name, hook_type, outcome, output, error, executed_at, duration_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 log.hook_id, log.hook_name, log.hook_type,
-                outcome, log.output, log.error, log.duration_ms as i64,
+                outcome, log.output, log.error, executed_at, log.duration_ms as i64,
             ],
         ).map_err(|e| ArcanaError::Agent(format!("HooksDb insert_log: {e}")))?;
         operation.with_result_count(1).succeed();
@@ -517,6 +520,7 @@ mod observability_tests {
             },
         };
 
+        let execution_timestamp = crate::db::timestamps::now_rfc3339();
         let (observed, events) = crate::observability::timing::capture_json_events(|| {
             let inserted = db.insert(&input).expect("insert hook");
             let all = db.list_all().expect("list hooks");
@@ -538,7 +542,7 @@ mod observability_tests {
                 outcome: HookOutcome::Failed,
                 output: Some("private-hook-output-marker".into()),
                 error: Some("private-hook-error-marker".into()),
-                executed_at: String::new(),
+                executed_at: execution_timestamp.clone(),
                 duration_ms: 37,
             };
             db.insert_log(&execution).expect("insert execution log");
@@ -564,10 +568,11 @@ mod observability_tests {
         assert!(observed.3.is_none());
         assert_eq!(observed.4.len(), 1);
         assert_eq!(observed.5.len(), 1);
+        assert_eq!(observed.4[0].executed_at, execution_timestamp);
         assert_eq!(observed.4[0].executed_at.len(), 24);
         assert!(observed.4[0].executed_at.ends_with('Z'));
         crate::db::timestamps::parse_db_timestamp(&observed.4[0].executed_at)
-            .expect("production hook-log default is readable by the shared timestamp parser");
+            .expect("production hook-log writer output is readable by the shared parser");
         assert!(observed.6);
         let operations: Vec<_> = events
             .iter()
@@ -749,16 +754,34 @@ mod retention_tests {
 }
 
 #[cfg(test)]
-mod analytics_timestamp_pair_tests {
+mod tests {
     use super::*;
-    use chrono::{FixedOffset, NaiveDate, TimeZone, Utc};
+    use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone, Utc};
+
+    fn database() -> (tempfile::TempDir, HooksDb) {
+        let directory = tempfile::tempdir().expect("isolated config database directory");
+        let db = HooksDb::open_at(&directory.path().join("config.db"))
+            .expect("open production config database");
+        (directory, db)
+    }
+
+    fn execution(hook_id: String, instant: DateTime<Utc>) -> HookExecutionLog {
+        HookExecutionLog {
+            id: 0,
+            hook_id,
+            hook_name: "timestamp corpus".into(),
+            hook_type: "pre_tool_use".into(),
+            outcome: HookOutcome::Executed,
+            output: None,
+            error: None,
+            executed_at: crate::db::timestamps::format_utc_timestamp(instant),
+            duration_ms: 1,
+        }
+    }
 
     #[test]
-    fn analytics_timestamp_pairs_hook_writer_and_readers_cover_current_and_legacy_year_rows() {
-        let directory = tempfile::tempdir().expect("isolated config database directory");
-        let mut db = HooksDb::open_at(&directory.path().join("config.db"))
-            .expect("open production config database");
-
+    fn analytics_timestamp_pairs_hook_writer_and_readers_cover_full_leap_year_and_dst() {
+        let (_directory, db) = database();
         let offsets = [
             FixedOffset::west_opt(12 * 60 * 60).unwrap(),
             FixedOffset::east_opt(0).unwrap(),
@@ -789,110 +812,100 @@ mod analytics_timestamp_pair_tests {
             "2024-10-06T03:00:00+11:00",
         ] {
             corpus.push(
-                chrono::DateTime::parse_from_rfc3339(boundary)
+                DateTime::parse_from_rfc3339(boundary)
                     .expect("DST edge timestamp")
                     .with_timezone(&Utc),
             );
         }
         assert!(corpus.len() < 1_200, "keep the isolated fixture bounded");
 
-        // The hook-log API does not accept an explicit timestamp; seed the
-        // historical representations directly to test its actual read path.
-        // The production writer/read pair below exercises its SQLite-now path.
-        {
-            let transaction = db.conn.transaction().expect("begin isolated corpus write");
-            {
-                let mut insert = transaction
-                    .prepare(
-                        "INSERT INTO hook_logs
-                         (hook_id, hook_name, hook_type, outcome, executed_at)
-                         VALUES (?1, ?2, 'pre_tool_use', 'executed', ?3)",
-                    )
-                    .expect("prepare historical log fixture writer");
-                for (index, instant) in corpus.iter().copied().enumerate() {
-                    let timestamp = if index % 2 == 0 {
-                        crate::db::timestamps::format_utc_timestamp(instant)
-                    } else {
-                        instant.format("%Y-%m-%d %H:%M:%S").to_string()
-                    };
-                    insert
-                        .execute(params![
-                            format!("timestamp-corpus-{index}"),
-                            format!("timestamp-corpus-{index}"),
-                            timestamp,
-                        ])
-                        .expect("seed canonical or legacy retained row");
-                }
-            }
-            transaction
-                .commit()
-                .expect("commit isolated history corpus");
+        for (index, instant) in corpus.iter().copied().enumerate() {
+            let hook_id = format!("timestamp-corpus-{index}");
+            db.insert_log(&execution(hook_id, instant))
+                .expect("production writer persists represented instant");
         }
 
-        let cutoff = "2024-07-01T00:00:00Z";
-        let expected_since_cutoff = corpus
-            .iter()
-            .filter(|instant| **instant >= Utc.with_ymd_and_hms(2024, 7, 1, 0, 0, 0).unwrap())
-            .count();
+        // An old SQLite row remains readable by the same production export reader.
+        db.conn
+            .execute(
+                "INSERT INTO hook_logs
+                 (hook_id, hook_name, hook_type, outcome, executed_at)
+                 VALUES ('legacy-timestamp', 'legacy row', 'pre_tool_use', 'executed',
+                         '2024-02-29 23:59:59')",
+                [],
+            )
+            .expect("seed offset-less legacy row");
+
         let retained = db
             .get_logs_since("2023-12-31T00:00:00Z")
             .expect("production retained-export reader");
-        assert_eq!(retained.len(), corpus.len());
-        let filtered = db
-            .get_logs_since(cutoff)
-            .expect("production cutoff reader over mixed timestamp formats");
-        assert_eq!(filtered.len(), expected_since_cutoff);
+        assert_eq!(retained.len(), corpus.len() + 1);
         for (index, instant) in corpus.iter().copied().enumerate() {
             let row = retained
                 .iter()
                 .find(|row| row.hook_id == format!("timestamp-corpus-{index}"))
-                .expect("each persisted corpus row is returned");
+                .expect("each production-written corpus row is returned");
+            let canonical = crate::db::timestamps::format_utc_timestamp(instant);
+            assert_eq!(row.executed_at, canonical, "persisted canonical #{index}");
             assert_eq!(
                 crate::db::timestamps::parse_db_timestamp(&row.executed_at)
-                    .expect("reader timestamp remains parseable"),
+                    .expect("production reader returns parseable timestamp"),
                 instant,
-                "hook log historical read #{index}"
+                "hook log annual writer/reader pair #{index}"
             );
         }
-
-        let supplied_timestamp = "2001-01-01T00:00:00.000Z";
-        let execution = HookExecutionLog {
-            id: 0,
-            hook_id: "production-writer-hook".into(),
-            hook_name: "production writer timestamp".into(),
-            hook_type: "pre_tool_use".into(),
-            outcome: HookOutcome::Executed,
-            output: None,
-            error: None,
-            executed_at: supplied_timestamp.into(),
-            duration_ms: 1,
-        };
-        db.insert_log(&execution)
-            .expect("production execution-log writer");
-        let latest = db
-            .get_logs(Some("production-writer-hook"), 1)
-            .expect("production per-hook reader");
-        assert_eq!(latest.len(), 1);
-        let persisted: String = db
-            .conn
-            .query_row(
-                "SELECT executed_at FROM hook_logs WHERE id=?1",
-                [latest[0].id],
-                |row| row.get(0),
-            )
-            .expect("read actual production writer output");
-        assert_eq!(latest[0].executed_at, persisted);
-        assert_eq!(persisted.len(), 24);
-        assert!(persisted.ends_with('Z'));
-        assert_ne!(
-            persisted, supplied_timestamp,
-            "the current writer uses the schema's SQLite timestamp, not the model field"
+        let legacy = retained
+            .iter()
+            .find(|row| row.hook_id == "legacy-timestamp")
+            .expect("legacy row stays readable");
+        assert_eq!(legacy.executed_at, "2024-02-29 23:59:59");
+        assert_eq!(
+            crate::db::timestamps::parse_db_timestamp(&legacy.executed_at).unwrap(),
+            Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap()
         );
-        crate::db::timestamps::parse_db_timestamp(&persisted)
-            .expect("production SQLite timestamp is canonical and parseable");
-        let exported = db
-            .get_logs_since("2023-12-31T00:00:00Z")
-            .expect("full export includes current production write");
-        assert!(exported.iter().any(|row| row.id == latest[0].id));
+    }
+
+    #[test]
+    fn hook_execution_instant_survives_delayed_persistence_exactly() {
+        let (_directory, db) = database();
+        let instant = Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap();
+        let log = execution("delayed-hook".into(), instant);
+        std::thread::sleep(std::time::Duration::from_millis(25));
+
+        db.insert_log(&log).expect("persist after the delay");
+        let rows = db
+            .get_logs(Some("delayed-hook"), 1)
+            .expect("read delayed execution log");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].executed_at, "2024-02-29T23:59:59.000Z");
+        assert_eq!(
+            crate::db::timestamps::parse_db_timestamp(&rows[0].executed_at).unwrap(),
+            instant
+        );
+    }
+
+    #[test]
+    fn hook_execution_log_rejects_malformed_timestamp_without_inserting() {
+        let (_directory, db) = database();
+        let before: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM hook_logs", [], |row| row.get(0))
+            .expect("count before invalid write");
+        let mut log = execution(
+            "invalid-timestamp-hook".into(),
+            Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap(),
+        );
+        log.executed_at = "private-invalid-hook-timestamp-marker".into();
+
+        let error = db
+            .insert_log(&log)
+            .expect_err("invalid execution timestamp must fail before insert");
+        assert!(error.to_string().contains("invalid executed_at"));
+        assert!(!error.to_string().contains(&log.executed_at));
+        let after: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM hook_logs", [], |row| row.get(0))
+            .expect("count after invalid write");
+        assert_eq!(after, before, "malformed input creates no persisted row");
     }
 }

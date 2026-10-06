@@ -6,8 +6,9 @@ The goal remains active. Finish core MDP P4 and its named gates, commit/push ver
 
 - P4-59/TG4-21 closes: complete Windows consumer checks, current Linux whole-workspace CI job 112205610578, and macOS six-group step 112207740059. The Ubuntu capture assertions now pass; the old loss mechanism is unknown. The separate macOS XPC corpus remains red/open under P4-11/61. Report: `P4-59-RETENTION-CLOSEOUT-2026-10-06.md`.
 - P4-52/TG4-26 closes with owner-approved separation from successful paid Fleet. Windows/Linux each pass retry policy 11/11, shipped worker claim/budget/non-replay 3/3, and real JSONL-to-CLI export 1/1. Report: `P4-52-STARTUP-RETRY-CLOSEOUT-2026-10-06.md`; ADR-0319.
-- Session/hook tests are committed locally as `140002d`, Windows/Linux timestamp group 4/4. Owner now approves preserving validated executor timestamps in HooksDb (ADR-0320). A bounded implementation is in progress; the prior hook writer fixture is historical evidence only.
-- Owner approves isolated test-only desktop attach diagnostics (ADR-0321). Matched attach failures are not consent proof; new investigation must preserve shipped settings and owned cleanup. Existing e2e WIP stays separate.
+- Session/hook tests were pushed as `140002d`. Owner-approved HooksDb execution-time preservation is now verified: hook module Windows/Linux 11/11, core check, actual Windows CLI export 1/1. The prior hook writer fixture is superseded historical evidence. Report: `P4-57-HOOK-EXECUTION-INSTANT-2026-10-06.md`; other pairs and complete platform proof remain open.
+- Approved isolated desktop diagnostic builds successfully (13m52s) in ignored target/p4-60-isolated with an additionalBrowserArgs-only override; shipped config hash remains unchanged. The new bounded diagnostic also fails endpoint readiness in 30 seconds and cleans owned processes/ports. Browser diagnostics are the next evidence; existing e2e WIP stays separate.
+- Approved explicit budget resolution (ADR-0302/0322) has an unverified additive migration/tool/default-recipe implementation. The Luna agent hit its usage limit; main is integrating and validating it. No status/hold release or P4-39 closure is claimed yet.
 - Remaining tasks: P4-11,14,15,18,19,20,21,36,39,49(owner),50,51,53,54,56,57,60,61,62. No new paid run authorized. Expanded goal stays unread.
 
 ## Verified and pushed

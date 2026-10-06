@@ -13,10 +13,11 @@ Capture unit `1cdb7a1` passes the current Linux whole-workspace CI job and
 Windows desktop 167/167. The prior capture-loss cause remains unconfirmed.
 macOS passes all six retention selections; its separate command corpus fails
 because the signed XPC runner is absent. This is not a green full pipeline.
-Session/message annual write/read and hook historical-reader tests pass on
-Windows/Linux. Owner-approved next work: preserve validated hook execution
-instants (ADR-0320), and investigate attachment in an isolated test-only
-desktop build (ADR-0321). Neither is implemented or proven by its approval.
+Session/message annual write/read proof passes Windows/Linux. Owner-approved
+hook execution-time preservation (ADR-0320) is implemented and verified: hook
+module 11/11 on both hosts, core check, and real Windows CLI export 1/1.
+P4-57 remains open for other pairs and complete platform proof. The isolated
+test-only desktop build (ADR-0321) now builds; attachment proof is underway.
 No second paid Fleet run is authorized. The expanded goal remains unread
 until core P4 closes.
 
