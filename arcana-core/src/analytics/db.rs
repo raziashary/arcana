@@ -2092,6 +2092,359 @@ fn parse_optional_timestamp(
 }
 
 #[cfg(test)]
+mod analytics_timestamp_pairs_tests {
+    use super::*;
+    use chrono::{DateTime, Duration, FixedOffset, NaiveDateTime};
+    use std::collections::HashMap;
+
+    fn yearly_and_dst_instants() -> Vec<DateTime<Utc>> {
+        let mut instants = Vec::with_capacity(4 * 366 * 3 + 8);
+        for ordinal in 1..=366 {
+            let date = NaiveDate::from_yo_opt(2024, ordinal).expect("leap-year date");
+            for seconds in [0, 1, 43_199, 86_399] {
+                let wall_time =
+                    date.and_hms_opt(0, 0, 0).expect("midnight") + Duration::seconds(seconds);
+                for offset_seconds in [-43_200, 0, 50_400] {
+                    let offset = FixedOffset::east_opt(offset_seconds).expect("valid UTC offset");
+                    instants.push(
+                        offset
+                            .from_local_datetime(&wall_time)
+                            .single()
+                            .expect("fixed-offset wall time")
+                            .with_timezone(&Utc),
+                    );
+                }
+            }
+        }
+
+        for (wall_time, offset_seconds) in [
+            ("2024-03-10 01:59:59", -18_000),
+            ("2024-03-10 03:00:00", -14_400),
+            ("2024-11-03 01:59:59", -14_400),
+            ("2024-11-03 01:00:00", -18_000),
+            ("2024-04-07 02:59:59", 39_600),
+            ("2024-04-07 02:00:00", 36_000),
+            ("2024-10-06 01:59:59", 36_000),
+            ("2024-10-06 03:00:00", 39_600),
+        ] {
+            let wall_time = NaiveDateTime::parse_from_str(wall_time, "%Y-%m-%d %H:%M:%S")
+                .expect("DST edge wall time");
+            let offset = FixedOffset::east_opt(offset_seconds).expect("valid DST offset");
+            instants.push(
+                offset
+                    .from_local_datetime(&wall_time)
+                    .single()
+                    .expect("fixed-offset DST edge")
+                    .with_timezone(&Utc),
+            );
+        }
+        instants
+    }
+
+    fn token_record(timestamp: DateTime<Utc>, session_id: String) -> TokenUsageRecord {
+        TokenUsageRecord {
+            id: None,
+            timestamp,
+            session_id,
+            agent_type: "worker".into(),
+            provider: "fixture".into(),
+            model: "fixture-model".into(),
+            prompt_tokens: 2,
+            completion_tokens: 3,
+            total_tokens: 5,
+            thinking_tokens: None,
+            cost_usd: 0.01,
+            request_type: "chat".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn analytics_timestamp_pairs_token_and_worker_writes_round_trip_a_leap_year_and_dst() {
+        let directory = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&directory.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let instants = yearly_and_dst_instants();
+        assert!(instants.len() >= 366 * 12, "full leap year corpus included");
+
+        let mut tokens_by_local_date: HashMap<NaiveDate, Vec<(String, DateTime<Utc>)>> =
+            HashMap::new();
+        let mut worker_rows = Vec::with_capacity(instants.len());
+        {
+            for (index, timestamp) in instants.iter().copied().enumerate() {
+                let local_date = timestamp.with_timezone(&Local).date_naive();
+                let session_id = format!("timestamp-pair-{index}");
+                let record = token_record(timestamp, session_id.clone());
+                let token_id = db.insert_token_usage(&record).expect("write token usage");
+                let stored: String = db
+                    .conn
+                    .lock()
+                    .expect("analytics connection")
+                    .query_row(
+                        "SELECT timestamp FROM token_usage WHERE id = ?1",
+                        [token_id],
+                        |row| row.get(0),
+                    )
+                    .expect("read token timestamp storage");
+                assert_eq!(
+                    stored,
+                    crate::db::timestamps::format_utc_timestamp(timestamp),
+                    "token writer must persist canonical UTC for {timestamp}"
+                );
+                tokens_by_local_date
+                    .entry(local_date)
+                    .or_default()
+                    .push((session_id, timestamp));
+
+                let worker_id = format!("timestamp-pair-worker-{index}");
+                let worker = WorkerStatsRecord {
+                    worker_id: worker_id.clone(),
+                    date: local_date,
+                    tasks_completed: 1,
+                    tasks_failed: 0,
+                    time_spent_minutes: 1,
+                    cost_usd: 0.01,
+                    avg_task_duration_minutes: 1,
+                    success_rate: 1.0,
+                    last_heartbeat: Some(timestamp),
+                };
+                db.insert_worker_stats(&worker)
+                    .expect("write worker heartbeat");
+                let stored_heartbeat: Option<String> = db
+                    .conn
+                    .lock()
+                    .expect("analytics connection")
+                    .query_row(
+                        "SELECT last_heartbeat FROM worker_stats WHERE worker_id = ?1 AND date = ?2",
+                        params![worker_id, local_date.to_string()],
+                        |row| row.get(0),
+                    )
+                    .expect("read worker heartbeat storage");
+                assert_eq!(
+                    stored_heartbeat.as_deref(),
+                    Some(crate::db::timestamps::format_utc_timestamp(timestamp).as_str()),
+                    "worker writer must persist canonical UTC for {timestamp}"
+                );
+                worker_rows.push((worker_id, local_date, timestamp));
+            }
+        }
+
+        let legacy_timestamp = Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap();
+        let legacy_local_date = legacy_timestamp.with_timezone(&Local).date_naive();
+        let legacy_session = "timestamp-pair-legacy";
+        db.conn
+            .lock()
+            .expect("analytics connection")
+            .execute(
+                "INSERT INTO token_usage (timestamp, session_id, agent_type, provider, model,
+                    prompt_tokens, completion_tokens, total_tokens, cost_usd, request_type)
+                 VALUES (?1, ?2, 'worker', 'fixture', 'fixture-model', 2, 3, 5, 0.01, 'chat')",
+                params!["2024-02-29 23:59:59", legacy_session],
+            )
+            .expect("seed legacy SQLite token timestamp");
+        tokens_by_local_date
+            .entry(legacy_local_date)
+            .or_default()
+            .push((legacy_session.to_owned(), legacy_timestamp));
+
+        let legacy_worker_id = "timestamp-pair-legacy-worker";
+        db.conn
+            .lock()
+            .expect("analytics connection")
+            .execute(
+                "INSERT INTO worker_stats (worker_id, date, tasks_completed, tasks_failed,
+                    time_spent_minutes, cost_usd, avg_task_duration_minutes, success_rate, last_heartbeat)
+                 VALUES (?1, ?2, 1, 0, 1, 0.01, 1, 1.0, '2024-02-29 23:59:59')",
+                params![legacy_worker_id, legacy_local_date.to_string()],
+            )
+            .expect("seed legacy SQLite worker heartbeat");
+
+        for (date, expected) in tokens_by_local_date {
+            let mut actual = db
+                .get_token_usage_by_date(date)
+                .expect("read token usage by production local-date reader");
+            actual.sort_by(|left, right| left.session_id.cmp(&right.session_id));
+            let mut expected = expected;
+            expected.sort_by(|left, right| left.0.cmp(&right.0));
+            assert_eq!(actual.len(), expected.len(), "token rows on {date}");
+            for (record, (session_id, instant)) in actual.iter().zip(expected) {
+                assert_eq!(record.session_id, session_id);
+                assert_eq!(record.timestamp, instant, "token instant for {session_id}");
+            }
+        }
+
+        for (worker_id, date, expected) in &worker_rows {
+            let row = db
+                .get_worker_stats(worker_id, *date)
+                .expect("read worker stats by production point reader")
+                .expect("worker row exists");
+            assert_eq!(
+                row.last_heartbeat,
+                Some(*expected),
+                "heartbeat for {worker_id}"
+            );
+        }
+        let legacy_worker = db
+            .get_worker_stats(legacy_worker_id, legacy_local_date)
+            .expect("read legacy worker heartbeat through point reader")
+            .expect("legacy worker row exists");
+        assert_eq!(legacy_worker.last_heartbeat, Some(legacy_timestamp));
+
+        let (monthly_worker, monthly_date, monthly_heartbeat) =
+            worker_rows.first().expect("worker corpus row");
+        db.rollup_and_prune_worker_stats_before(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap())
+            .expect("roll historical worker rows into monthly storage");
+        let monthly = db
+            .get_worker_stats_range(monthly_worker, *monthly_date, *monthly_date)
+            .expect("read worker heartbeat through production range reader")
+            .expect("monthly worker coverage exists");
+        assert_eq!(monthly.last_heartbeat, Some(*monthly_heartbeat));
+    }
+
+    #[tokio::test]
+    async fn analytics_timestamp_pairs_failure_and_event_writes_read_a_year_and_legacy_rows() {
+        let directory = tempfile::tempdir().expect("isolated analytics directory");
+        let db = AnalyticsDb::new_at(&directory.path().join("analytics.db"))
+            .await
+            .expect("open isolated analytics database");
+        let mut instants = Vec::with_capacity(374);
+        for ordinal in 1..=366 {
+            let date = NaiveDate::from_yo_opt(2024, ordinal).expect("leap-year date");
+            let offset_seconds = match ordinal % 3 {
+                0 => -43_200,
+                1 => 0,
+                _ => 50_400,
+            };
+            let offset = FixedOffset::east_opt(offset_seconds).expect("valid UTC offset");
+            let wall_time = date.and_hms_opt(12, 0, 0).expect("noon");
+            instants.push(
+                offset
+                    .from_local_datetime(&wall_time)
+                    .single()
+                    .expect("fixed-offset daily time")
+                    .with_timezone(&Utc),
+            );
+        }
+        instants.extend(yearly_and_dst_instants().into_iter().skip(4 * 366 * 3));
+        assert!(
+            instants.len() < 500,
+            "recent system-event reader is capped at 500"
+        );
+
+        let oldest = *instants.iter().min().expect("year corpus is nonempty");
+        let hours = (Utc::now().signed_duration_since(oldest).num_hours() + 48) as i32;
+        let mut expected = HashMap::new();
+        for (index, timestamp) in instants.iter().copied().enumerate() {
+            let request_id = format!("timestamp-pair-{index}");
+            let api_id = db
+                .insert_api_failure(&ApiFailureRecord {
+                    id: None,
+                    timestamp,
+                    provider: "timestamp-pair-fixture".into(),
+                    error_type: "timeout".into(),
+                    error_message: "synthetic failure".into(),
+                    request_id: Some(request_id.clone()),
+                    retry_count: 1,
+                    resolved: false,
+                })
+                .expect("write API failure");
+            let event_id = db
+                .insert_system_event(&SystemEventRecord {
+                    id: None,
+                    timestamp,
+                    component: "timestamp-pair-fixture".into(),
+                    event_type: "synthetic".into(),
+                    message: "synthetic event".into(),
+                    severity: "info".into(),
+                    metadata: None,
+                })
+                .expect("write system event");
+            for (table, id) in [("api_failures", api_id), ("system_events", event_id)] {
+                let stored: String = db
+                    .conn
+                    .lock()
+                    .expect("analytics connection")
+                    .query_row(
+                        &format!("SELECT timestamp FROM {table} WHERE id = ?1"),
+                        [id],
+                        |row| row.get(0),
+                    )
+                    .expect("read timestamp storage");
+                assert_eq!(
+                    stored,
+                    crate::db::timestamps::format_utc_timestamp(timestamp),
+                    "{table} writer must persist canonical UTC for {timestamp}"
+                );
+            }
+            expected.insert((api_id, event_id), timestamp);
+        }
+
+        let legacy_timestamp = Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap();
+        let (legacy_api_id, legacy_event_id) = {
+            let conn = db.conn.lock().expect("analytics connection");
+            conn.execute(
+                "INSERT INTO api_failures (timestamp, provider, error_type, error_message, request_id)
+                 VALUES ('2024-02-29 23:59:59', 'timestamp-pair-legacy', 'timeout', 'legacy', 'timestamp-pair-legacy')",
+                [],
+            )
+            .expect("seed legacy API failure timestamp");
+            let api_id = conn.last_insert_rowid();
+            conn.execute(
+                "INSERT INTO system_events (timestamp, component, event_type, message, severity)
+                 VALUES ('2024-02-29 23:59:59', 'timestamp-pair-legacy', 'legacy', 'legacy', 'info')",
+                [],
+            )
+            .expect("seed legacy system event timestamp");
+            (api_id, conn.last_insert_rowid())
+        };
+
+        let api_rows = db
+            .get_api_failures_recent(hours)
+            .expect("read year of API failures through production reader");
+        let event_rows = db
+            .get_system_events_recent(None, None, hours)
+            .expect("read year of system events through production reader");
+        assert_eq!(api_rows.len(), expected.len() + 1);
+        assert_eq!(event_rows.len(), expected.len() + 1);
+        for (api_id, event_id) in expected.keys() {
+            let instant = expected[&(*api_id, *event_id)];
+            assert_eq!(
+                api_rows
+                    .iter()
+                    .find(|row| row.id == Some(*api_id))
+                    .unwrap()
+                    .timestamp,
+                instant
+            );
+            assert_eq!(
+                event_rows
+                    .iter()
+                    .find(|row| row.id == Some(*event_id))
+                    .unwrap()
+                    .timestamp,
+                instant
+            );
+        }
+        assert_eq!(
+            api_rows
+                .iter()
+                .find(|row| row.id == Some(legacy_api_id))
+                .unwrap()
+                .timestamp,
+            legacy_timestamp
+        );
+        assert_eq!(
+            event_rows
+                .iter()
+                .find(|row| row.id == Some(legacy_event_id))
+                .unwrap()
+                .timestamp,
+            legacy_timestamp
+        );
+    }
+}
+
+#[cfg(test)]
 mod append_only_retention_tests {
     use super::*;
 

@@ -4,8 +4,11 @@
 CI run 37305252643 failed three stale RunsDb tests, blocking platform jobs;
 ADR-LOG-RESTRUCT-0310 records fixture-only repairs. RunsDb now passes 29/29
 on Windows/Ubuntu and the query registry passes 8/8 on Windows. Rerun remote
-CI before claiming platform proof. Analytics timestamp-pair tests are the
-next local unit; retention closure still needs the complete platform corpus.
+CI before claiming platform proof. Retention closure still needs the complete
+platform corpus.
+Analytics timestamp tests now pass 2/2 on both hosts; all six retention
+consumer selections pass on Windows and are wired into the three-host matrix.
+Evidence: `_verify/P4-57-ANALYTICS-PAIR-PROOF-2026-10-06.md`.
 Keep unfinished desktop consent files separate and the expanded goal unread.
 
 Current continuation (2026-10-05): **P4 38/59 checked; TG4 17/33 passing**.

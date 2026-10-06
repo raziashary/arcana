@@ -6,6 +6,12 @@ fixtures after migration 8. The repaired production-reader suite passes
 Remote CI and its supported-platform jobs are the next proof boundary.
 P4 remains 38/59 and TG4 17/33; timestamp and retention closure are pending.
 
+Analytics timestamp-pair tests now pass 2/2 on Windows/Linux through real
+writers/readers and legacy fixtures. The complete six-group retention suite
+passes on Windows and is selected in the three-host CI matrix. Evidence:
+`_verify/P4-57-ANALYTICS-PAIR-PROOF-2026-10-06.md`. Remaining database pairs,
+remote host results and successful Fleet completion are still required.
+
 Current continuation (2026-10-05): **P4 38/59 checked; TG4 17/33 passing**.
 P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. P4-16/TG4-17 and TG4-06 are also proven. Core P4 remains active; 21 tasks
 remain, including owner-run P4-49. The expanded goal stays unread until core

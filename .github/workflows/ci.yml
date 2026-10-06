@@ -262,12 +262,19 @@ jobs:
           cargo test -p arcana --lib skills::loader::portability_tests --locked -- --test-threads=1
           cargo test -p arcana --lib skills::defaults::tg4_17_tests --locked -- --test-threads=1
 
-      # TG4-21: execute the real AnalyticsDb and HooksDb cleanup paths while a
-      # second SQLite connection owns an immediate writer transaction. Keep
-      # this in the three-OS matrix so WAL/busy-timeout behavior is exercised
-      # on every supported desktop target.
-      - name: Append-only retention waits for active writers
-        run: cargo test -p arcana-core --lib serializes_with_an_active_database_writer --locked -- --nocapture --test-threads=1
+      # TG4-21: cover the complete existing retention contract on each host,
+      # including populated upgrades, cutoff/accounting/sealing, contention,
+      # monthly history, real CLI export, and visible cleanup failures.
+      - name: Append-only retention and production consumers (TG4-21)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p arcana-core --lib retention_ --locked -- --test-threads=1
+          cargo test -p arcana-core --lib worker_stats_ --locked -- --test-threads=1
+          cargo test -p arcana-shared --lib db::analytics:: --locked -- --test-threads=1
+          cargo test -p arcanactl --test analytics_export --locked -- --test-threads=1
+          cargo test -p arcana --lib retention_cleanup_failure_is_visible_through_structured_logs_reader --locked -- --test-threads=1
+          cargo test -p arcana --lib hook_retention_failure_is_visible_through_structured_logs_reader --locked -- --test-threads=1
 
       # TG4-18: run Rust, npm and Python command intents through Arcana's
       # production argv resolver and process launcher on each OS in this
