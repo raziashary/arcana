@@ -1,4 +1,10 @@
-# Arcana goal (updated 2026-10-05)
+# Arcana goal (updated 2026-10-06)
+
+2026-10-06 continuation: three RunsDb CI failures were traced to stale test
+fixtures after migration 8. The repaired production-reader suite passes
+29/29 on Windows and Ubuntu WSL; the query registry passes 8/8 on Windows.
+Remote CI and its supported-platform jobs are the next proof boundary.
+P4 remains 38/59 and TG4 17/33; timestamp and retention closure are pending.
 
 Current continuation (2026-10-05): **P4 38/59 checked; TG4 17/33 passing**.
 P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. P4-16/TG4-17 and TG4-06 are also proven. Core P4 remains active; 21 tasks

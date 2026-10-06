@@ -1715,9 +1715,20 @@ mod tests {
             )
             .expect("persist equal-instant fixture time");
         let tied = db.recent(2).expect("stable tied run ordering");
+        let mut expected_tied_ids = vec![later.as_str(), earlier.as_str()];
+        expected_tied_ids.sort_unstable_by(|left, right| right.cmp(left));
         assert_eq!(
             tied.iter().map(|run| run.id.as_str()).collect::<Vec<_>>(),
-            vec![later.as_str(), earlier.as_str()]
+            expected_tied_ids
+        );
+        expected_tied_ids.reverse();
+        assert_eq!(
+            db.open_runs()
+                .expect("stable tied recovery ordering")
+                .iter()
+                .map(|run| run.id.as_str())
+                .collect::<Vec<_>>(),
+            expected_tied_ids
         );
     }
 
@@ -2451,6 +2462,8 @@ mod tests {
         db.conn
             .execute_batch(
                 "DROP INDEX idx_operation_journal_task_cursor;
+                 DROP INDEX idx_runs_started_instant;
+                 DROP INDEX idx_runs_open_instant;
                  PRAGMA user_version = 6;",
             )
             .expect("simulate existing v6 database");
@@ -3487,6 +3500,20 @@ mod tests {
                 let run_id = db
                     .begin_worker_tick(worker, &format!("session-{worker_index}-{tick_index}"))
                     .expect("persist worker tick");
+                let instant_index = worker_index * 4 + tick_index;
+                db.conn
+                    .execute(
+                        "UPDATE runs SET started_at = ?1 WHERE id = ?2",
+                        params![
+                            format!(
+                                "2026-10-02T00:{:02}:{:02}.000Z",
+                                instant_index / 60,
+                                instant_index % 60
+                            ),
+                            run_id
+                        ],
+                    )
+                    .expect("seed distinct worker-history instants");
                 all_runs.push(run_id.clone());
                 if worker == "worker-target" {
                     target_runs.push(run_id.clone());
@@ -3602,18 +3629,15 @@ mod tests {
         assert!(
             open_plan
                 .iter()
-                .any(|detail| detail.contains("idx_runs_open")),
+                .any(|detail| detail.contains("idx_runs_open_instant")),
             "open-run recovery should use its partial open-runs index; plan: {open_plan:?}"
         );
         assert!(
-            !open_plan.iter().any(|detail| detail.contains("SCAN runs")),
-            "open-run recovery should not scan the runs table; plan: {open_plan:?}"
-        );
-        assert!(
-            open_plan
-                .iter()
-                .any(|detail| detail.contains("USE TEMP B-TREE FOR ORDER BY")),
-            "the partial outcome index does not order open runs by start time; plan: {open_plan:?}"
+            !open_plan.iter().any(|detail| {
+                detail.contains("SCAN runs")
+                    && !detail.contains("USING INDEX idx_runs_open_instant")
+            }),
+            "open-run recovery may enumerate its partial index, but must not scan the full runs table; plan: {open_plan:?}"
         );
 
         let target_latest_id = target_runs.last().expect("latest target run fixture");

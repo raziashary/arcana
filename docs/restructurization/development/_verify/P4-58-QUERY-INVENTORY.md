@@ -1,11 +1,20 @@
 # P4-58 SQLite Query Inventory
 
 
-Status: P4-58/TG4-20 current-source reconciliation passes on 2026-10-04.
+Status: P4-58/TG4-20 current-source reconciliation refreshed on 2026-10-06.
 This document is the source-linked inventory; the executable AST registry and
 populated production-plan/result tests are the enforcing evidence. The current
 registry now has no missing or stale owner/fingerprint pairs. Re-run the
 registry after any scoped SQL/source change.
+
+2026-10-06 proof refresh: RunsDb's production-reader/migration suite passes
+29/29 on Windows and Ubuntu WSL; the Windows AST query registry passes 8/8.
+The open-run reader enumerates the exact partial `idx_runs_open_instant`
+index. That indexed walk is permitted; a scan of the runs base table is still
+rejected. Equal-instant ordering is checked against the production ID
+tie-break, and populated worker history uses distinct instants. Production SQL
+and fingerprints are unchanged. See ADR-LOG-RESTRUCT-0310 for the CI baseline
+and stale-fixture repairs; remote platform proof remains pending.
 
 ## Current executable plan assertions
 

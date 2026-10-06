@@ -1,4 +1,12 @@
-# Arcana working memory (updated 2026-10-05)
+# Arcana working memory (updated 2026-10-06)
+
+2026-10-06 recovery: latest pushed commit `c2e3622` bounds Supervisor output.
+CI run 37305252643 failed three stale RunsDb tests, blocking platform jobs;
+ADR-LOG-RESTRUCT-0310 records fixture-only repairs. RunsDb now passes 29/29
+on Windows/Ubuntu and the query registry passes 8/8 on Windows. Rerun remote
+CI before claiming platform proof. Analytics timestamp-pair tests are the
+next local unit; retention closure still needs the complete platform corpus.
+Keep unfinished desktop consent files separate and the expanded goal unread.
 
 Current continuation (2026-10-05): **P4 38/59 checked; TG4 17/33 passing**.
 P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. P4-16/TG4-17 is also proven on all three CI hosts; TG4-02 and TG4-06 are proven through saved recipes on Windows/Linux. Core P4 remains active; 21 tasks
