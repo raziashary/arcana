@@ -1,5 +1,19 @@
 # Arcana working memory (updated 2026-10-06)
 
+Latest active checkpoint: `_verify/P4-SESSION-CHECKPOINT-2026-10-06.md`.
+Current tally: **40/59 P4, 19/33 TG4**. Retention P4-59/TG4-21 is proven
+across the complete Windows/Linux/macOS consumer checks. Startup retry
+P4-52/TG4-26 is proven on its own contract, as the owner approved in ADR-0319;
+successful paid Fleet stays open under P4-50. Capture unit `1cdb7a1` passes
+the current Linux whole-workspace CI job; earlier capture-loss cause remains
+unconfirmed. macOS's six retention groups pass, while its separate command
+corpus fails on the absent signed XPC runner. No full-pipeline claim.
+Session/message annual pairs and hook historical readers pass Windows/Linux
+4/4. Owner approves preserving validated hook execution instants (ADR-0320)
+and an isolated test-build attach diagnostic (ADR-0321); implementation and
+proof remain next work. Expanded goal unread; Calendar owner-only; no second
+paid Fleet run authorized.
+
 2026-10-06 recovery: latest pushed commit `c2e3622` bounds Supervisor output.
 CI run 37305252643 failed three stale RunsDb tests, blocking platform jobs;
 ADR-LOG-RESTRUCT-0310 records fixture-only repairs. RunsDb now passes 29/29
@@ -11,7 +25,7 @@ consumer selections pass on Windows and are wired into the three-host matrix.
 Evidence: `_verify/P4-57-ANALYTICS-PAIR-PROOF-2026-10-06.md`.
 Keep unfinished desktop consent files separate and the expanded goal unread.
 
-Current continuation (2026-10-05): **P4 38/59 checked; TG4 17/33 passing**.
+Historical continuation (2026-10-05): **P4 38/59 checked; TG4 17/33 passing**.
 P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. P4-16/TG4-17 is also proven on all three CI hosts; TG4-02 and TG4-06 are proven through saved recipes on Windows/Linux. Core P4 remains active; 21 tasks
 remain, including owner-run P4-49. The expanded goal stays unread until core
 P4 closes. Claim-safety proof is in

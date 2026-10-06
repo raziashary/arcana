@@ -7201,3 +7201,25 @@ readback.
 **Decision / basis / date.** On 2026-10-06, add tests only for existing SessionStorage and HooksDb paths using disposable files and existing dependencies. Session creation/update and message creation are written and read through the production APIs over 1,106 leap-year, local-midnight and northern/southern DST instants, with canonical storage and legacy readback. Hook historical rows are explicitly reader fixtures, not production-writer proof: its real `insert_log` currently omits the supplied `executed_at`, so SQLite inserts its current timestamp. A current-time real insert/read checks that existing behavior. The owner has been asked whether to preserve the executor-provided instant; no shipped-writer decision or implementation change is made here.
 
 **Proof / limits.** The four-test `analytics_timestamp_pairs_` selection, including the two earlier AnalyticsDb tests, passes Windows 4/4 (59.67s) and Ubuntu WSL 4/4 (130.50s). Source: `session/storage.rs`, `hooks/db.rs`; report: `_verify/P4-57-SESSION-HOOK-PAIRS-2026-10-06.md`. No provider call, API/schema/dependency change or task/gate closure. Full per-pair inventory, macOS properties and hook-writer disposition remain open.
+
+## ADR-LOG-RESTRUCT-0318 — Close the complete append-only retention contract
+
+**Decision / proof / date.** On 2026-10-06, P4-59/TG4-21 closes on the named contract. Windows complete selected retention/consumer checks plus the current parallel desktop run, Linux current whole-workspace CI job 112205610578, and macOS current six-group step 112207740059 cover policy/lifecycle, populated upgrades, exact cutoff, same-day accumulation, atomic/idempotent accounting, advancing-cutoff cost preservation, session sealing, current/historical composition, active writers, full CLI export and cleanup-failure Logs readback. The guarded captures now pass Ubuntu; the previous capture loss mechanism remains unknown. The later macOS command-corpus failure is separately retained under the signed XPC/sandbox work. No complete-pipeline or full-P4 claim. Evidence: `_verify/P4-59-RETENTION-CLOSEOUT-2026-10-06.md`.
+
+## ADR-LOG-RESTRUCT-0319 — Close startup retry independently of successful live Fleet
+
+**Owner decision / date.** On 2026-10-06, the owner approves closing P4-52/TG4-26 on their literal retry contract after focused checks pass, retaining successful paid CLI Fleet completion under P4-50/TG4-24. This reconciles the extra dependency in dated status prose; it does not weaken retry, cancellation, identity/budget preservation, overrun observability or no-replay requirements.
+
+**Proof boundary.** Windows/Linux each pass 11 retry-policy tests, three shipped-worker claim/budget/non-replay tests and one real redacting-logger-to-CLI-export integration. The latter reads permanent failure and setup overrun; scheduled/recovered event correlation has its own captured-event test. There is no interrupting setup-deadline claim. Independent review: `_verify/P4-52-CLOSEOUT-REVIEW-2026-10-06.md`; complete evidence: `_verify/P4-52-STARTUP-RETRY-CLOSEOUT-2026-10-06.md`. Core tally after P4-59 and P4-52: P4 40/59, TG4 19/33. Successful Fleet, mid-run continuity and owner Calendar remain open.
+
+## ADR-LOG-RESTRUCT-0320 — Preserve validated hook execution instants
+
+**Owner decision / date.** On 2026-10-06, the owner approves validating and canonically persisting `HookExecutionLog.executed_at`. The executor supplies the execution instant, but `HooksDb::insert_log` currently discards it and uses insertion time, shifting observability chronology when persistence is delayed. Use the existing shared timestamp parser and formatter; reject malformed inputs without inserting a row. Preserve the schema and legacy reader compatibility. Extend the real writer/reader annual corpus and delayed-persistence/invalid-input checks. Approval is not implementation or TG4-19 closure.
+
+**Where.** `arcana-core/src/hooks/db.rs`; P4-57/TG4-19.
+
+## ADR-LOG-RESTRUCT-0321 — Investigate desktop attachment in an isolated test build
+
+**Owner decision / date.** On 2026-10-06, the owner approves a separate test-only Tauri build with explicit browser arguments and diagnostics after the matched attach test twice failed endpoint readiness. The observed browser received the debugging-port flag; no root cause is established. Keep shipped settings unchanged, use disposable profiles without credentials, bound launch/attachment, and clean only owned process trees and listeners. This authorizes the diagnostic workflow, not a passing consent/UI claim.
+
+**Where.** P4-60/TG4-16, `_verify/P4-60-ATTACH-DIAGNOSTIC-2026-10-06.md`, existing `e2e` native WebDriver harness.

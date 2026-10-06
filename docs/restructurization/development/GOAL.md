@@ -1,5 +1,25 @@
 # Arcana goal (updated 2026-10-06)
 
+Latest boundary: `_verify/P4-SESSION-CHECKPOINT-2026-10-06.md`. Core P4 is
+**40/59 checked**, TG4 **19/33 passing**; 19 tasks remain, including the
+owner-run Calendar acceptance. P4-59/TG4-21 closes on complete retention
+consumer evidence across Windows, Linux and macOS. P4-52/TG4-26 closes on its
+own verified retry contract with owner approval; successful paid Fleet
+completion stays open under P4-50/TG4-24. Reports:
+`_verify/P4-59-RETENTION-CLOSEOUT-2026-10-06.md` and
+`_verify/P4-52-STARTUP-RETRY-CLOSEOUT-2026-10-06.md`.
+
+Capture unit `1cdb7a1` passes the current Linux whole-workspace CI job and
+Windows desktop 167/167. The prior capture-loss cause remains unconfirmed.
+macOS passes all six retention selections; its separate command corpus fails
+because the signed XPC runner is absent. This is not a green full pipeline.
+Session/message annual write/read and hook historical-reader tests pass on
+Windows/Linux. Owner-approved next work: preserve validated hook execution
+instants (ADR-0320), and investigate attachment in an isolated test-only
+desktop build (ADR-0321). Neither is implemented or proven by its approval.
+No second paid Fleet run is authorized. The expanded goal remains unread
+until core P4 closes.
+
 2026-10-06 continuation: three RunsDb CI failures were traced to stale test
 fixtures after migration 8. The repaired production-reader suite passes
 29/29 on Windows and Ubuntu WSL; the query registry passes 8/8 on Windows.
@@ -12,7 +32,7 @@ passes on Windows and is selected in the three-host CI matrix. Evidence:
 `_verify/P4-57-ANALYTICS-PAIR-PROOF-2026-10-06.md`. Remaining database pairs,
 remote host results and successful Fleet completion are still required.
 
-Current continuation (2026-10-05): **P4 38/59 checked; TG4 17/33 passing**.
+Historical continuation (2026-10-05): **P4 38/59 checked; TG4 17/33 passing**.
 P4-55/TG4-29, P4-43, P4-40, P4-23/TG4-10/11 and P4-29/TG4-15 are proven. P4-16/TG4-17 and TG4-06 are also proven. Core P4 remains active; 21 tasks
 remain, including owner-run P4-49. The expanded goal stays unread until core
 P4 closes. Claim-safety proof is in
