@@ -747,3 +747,152 @@ mod retention_tests {
             .is_empty());
     }
 }
+
+#[cfg(test)]
+mod analytics_timestamp_pair_tests {
+    use super::*;
+    use chrono::{FixedOffset, NaiveDate, TimeZone, Utc};
+
+    #[test]
+    fn analytics_timestamp_pairs_hook_writer_and_readers_cover_current_and_legacy_year_rows() {
+        let directory = tempfile::tempdir().expect("isolated config database directory");
+        let mut db = HooksDb::open_at(&directory.path().join("config.db"))
+            .expect("open production config database");
+
+        let offsets = [
+            FixedOffset::west_opt(12 * 60 * 60).unwrap(),
+            FixedOffset::east_opt(0).unwrap(),
+            FixedOffset::east_opt(14 * 60 * 60).unwrap(),
+        ];
+        let mut corpus = Vec::with_capacity(1_110);
+        let year_start = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        for day_index in 0..366 {
+            let day = year_start + chrono::Duration::days(day_index);
+            for offset in offsets {
+                corpus.push(
+                    offset
+                        .from_local_datetime(&day.and_hms_opt(0, 0, 0).unwrap())
+                        .single()
+                        .expect("fixed-offset local midnight")
+                        .with_timezone(&Utc),
+                );
+            }
+        }
+        for boundary in [
+            "2024-03-10T01:59:59-05:00",
+            "2024-03-10T03:00:00-04:00",
+            "2024-11-03T01:59:59-04:00",
+            "2024-11-03T01:00:00-05:00",
+            "2024-04-07T02:59:59+11:00",
+            "2024-04-07T02:00:00+10:00",
+            "2024-10-06T01:59:59+10:00",
+            "2024-10-06T03:00:00+11:00",
+        ] {
+            corpus.push(
+                chrono::DateTime::parse_from_rfc3339(boundary)
+                    .expect("DST edge timestamp")
+                    .with_timezone(&Utc),
+            );
+        }
+        assert!(corpus.len() < 1_200, "keep the isolated fixture bounded");
+
+        // The hook-log API does not accept an explicit timestamp; seed the
+        // historical representations directly to test its actual read path.
+        // The production writer/read pair below exercises its SQLite-now path.
+        {
+            let transaction = db.conn.transaction().expect("begin isolated corpus write");
+            {
+                let mut insert = transaction
+                    .prepare(
+                        "INSERT INTO hook_logs
+                         (hook_id, hook_name, hook_type, outcome, executed_at)
+                         VALUES (?1, ?2, 'pre_tool_use', 'executed', ?3)",
+                    )
+                    .expect("prepare historical log fixture writer");
+                for (index, instant) in corpus.iter().copied().enumerate() {
+                    let timestamp = if index % 2 == 0 {
+                        crate::db::timestamps::format_utc_timestamp(instant)
+                    } else {
+                        instant.format("%Y-%m-%d %H:%M:%S").to_string()
+                    };
+                    insert
+                        .execute(params![
+                            format!("timestamp-corpus-{index}"),
+                            format!("timestamp-corpus-{index}"),
+                            timestamp,
+                        ])
+                        .expect("seed canonical or legacy retained row");
+                }
+            }
+            transaction
+                .commit()
+                .expect("commit isolated history corpus");
+        }
+
+        let cutoff = "2024-07-01T00:00:00Z";
+        let expected_since_cutoff = corpus
+            .iter()
+            .filter(|instant| **instant >= Utc.with_ymd_and_hms(2024, 7, 1, 0, 0, 0).unwrap())
+            .count();
+        let retained = db
+            .get_logs_since("2023-12-31T00:00:00Z")
+            .expect("production retained-export reader");
+        assert_eq!(retained.len(), corpus.len());
+        let filtered = db
+            .get_logs_since(cutoff)
+            .expect("production cutoff reader over mixed timestamp formats");
+        assert_eq!(filtered.len(), expected_since_cutoff);
+        for (index, instant) in corpus.iter().copied().enumerate() {
+            let row = retained
+                .iter()
+                .find(|row| row.hook_id == format!("timestamp-corpus-{index}"))
+                .expect("each persisted corpus row is returned");
+            assert_eq!(
+                crate::db::timestamps::parse_db_timestamp(&row.executed_at)
+                    .expect("reader timestamp remains parseable"),
+                instant,
+                "hook log historical read #{index}"
+            );
+        }
+
+        let supplied_timestamp = "2001-01-01T00:00:00.000Z";
+        let execution = HookExecutionLog {
+            id: 0,
+            hook_id: "production-writer-hook".into(),
+            hook_name: "production writer timestamp".into(),
+            hook_type: "pre_tool_use".into(),
+            outcome: HookOutcome::Executed,
+            output: None,
+            error: None,
+            executed_at: supplied_timestamp.into(),
+            duration_ms: 1,
+        };
+        db.insert_log(&execution)
+            .expect("production execution-log writer");
+        let latest = db
+            .get_logs(Some("production-writer-hook"), 1)
+            .expect("production per-hook reader");
+        assert_eq!(latest.len(), 1);
+        let persisted: String = db
+            .conn
+            .query_row(
+                "SELECT executed_at FROM hook_logs WHERE id=?1",
+                [latest[0].id],
+                |row| row.get(0),
+            )
+            .expect("read actual production writer output");
+        assert_eq!(latest[0].executed_at, persisted);
+        assert_eq!(persisted.len(), 24);
+        assert!(persisted.ends_with('Z'));
+        assert_ne!(
+            persisted, supplied_timestamp,
+            "the current writer uses the schema's SQLite timestamp, not the model field"
+        );
+        crate::db::timestamps::parse_db_timestamp(&persisted)
+            .expect("production SQLite timestamp is canonical and parseable");
+        let exported = db
+            .get_logs_since("2023-12-31T00:00:00Z")
+            .expect("full export includes current production write");
+        assert!(exported.iter().any(|row| row.id == latest[0].id));
+    }
+}

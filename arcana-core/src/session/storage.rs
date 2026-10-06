@@ -563,6 +563,171 @@ mod tests {
     }
 
     #[test]
+    fn analytics_timestamp_pairs_session_and_message_writers_read_full_leap_year_and_dst() {
+        use chrono::{FixedOffset, NaiveDate, TimeZone};
+
+        let directory = tempfile::tempdir().expect("isolated session database directory");
+        let storage = SessionStorage {
+            conn: Connection::open(directory.path().join("sessions.db"))
+                .expect("open isolated session database"),
+        };
+        storage.migrate().expect("production session schema");
+
+        let offsets = [
+            FixedOffset::west_opt(12 * 60 * 60).unwrap(),
+            FixedOffset::east_opt(0).unwrap(),
+            FixedOffset::east_opt(14 * 60 * 60).unwrap(),
+        ];
+        let mut corpus = Vec::with_capacity(1_110);
+        let year_start = NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
+        for day_index in 0..366 {
+            let day = year_start + chrono::Duration::days(day_index);
+            for offset in offsets {
+                let local_midnight = offset
+                    .from_local_datetime(&day.and_hms_opt(0, 0, 0).unwrap())
+                    .single()
+                    .expect("fixed-offset local midnight")
+                    .with_timezone(&Utc);
+                corpus.push(local_midnight);
+            }
+        }
+        for boundary in [
+            "2024-03-10T01:59:59-05:00",
+            "2024-03-10T03:00:00-04:00",
+            "2024-11-03T01:59:59-04:00",
+            "2024-11-03T01:00:00-05:00",
+            "2024-04-07T02:59:59+11:00",
+            "2024-04-07T02:00:00+10:00",
+            "2024-10-06T01:59:59+10:00",
+            "2024-10-06T03:00:00+11:00",
+        ] {
+            corpus.push(
+                chrono::DateTime::parse_from_rfc3339(boundary)
+                    .expect("DST edge timestamp")
+                    .with_timezone(&Utc),
+            );
+        }
+        assert!(corpus.len() < 1_200, "keep the isolated fixture bounded");
+
+        for (index, instant) in corpus.iter().copied().enumerate() {
+            let session_id = format!("timestamp-corpus-session-{index}");
+            let message_id = format!("timestamp-corpus-message-{index}");
+            let session = Session {
+                id: session_id.clone(),
+                title: "timestamp corpus".into(),
+                working_dir: "C:/isolated".into(),
+                provider: "test".into(),
+                model: "test".into(),
+                pa_mode: "fast_development".into(),
+                created_at: instant,
+                updated_at: instant,
+                messages: vec![],
+            };
+            storage.upsert_session(&session).expect("write session");
+            let message = Message {
+                id: message_id.clone(),
+                session_id: session_id.clone(),
+                role: MessageRole::User,
+                content: "timestamp corpus".into(),
+                tool_name: None,
+                tool_input: None,
+                tool_call_id: None,
+                is_error: false,
+                tokens_in: 0,
+                tokens_out: 0,
+                cost_usd: 0.0,
+                created_at: instant,
+            };
+            storage.insert_message(&message).expect("write message");
+
+            let canonical = crate::db::timestamps::format_utc_timestamp(instant);
+            let persisted_session: (String, String) = storage
+                .conn
+                .query_row(
+                    "SELECT created_at, updated_at FROM sessions WHERE id=?1",
+                    [&session_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("read persisted session values");
+            let persisted_message: String = storage
+                .conn
+                .query_row(
+                    "SELECT created_at FROM messages WHERE id=?1",
+                    [&message_id],
+                    |row| row.get(0),
+                )
+                .expect("read persisted message value");
+            assert_eq!(persisted_session, (canonical.clone(), canonical.clone()));
+            assert_eq!(persisted_message, canonical);
+
+            let loaded = storage
+                .get_session_with_messages(&session_id)
+                .expect("production session/message reader")
+                .expect("written session exists");
+            assert_eq!(loaded.created_at, instant, "session created_at #{index}");
+            assert_eq!(loaded.updated_at, instant, "session updated_at #{index}");
+            assert_eq!(loaded.messages.len(), 1, "messages #{index}");
+            assert_eq!(loaded.messages[0].created_at, instant, "message #{index}");
+        }
+
+        storage
+            .conn
+            .execute(
+                "INSERT INTO sessions (id, title, working_dir, provider, model, pa_mode, created_at, updated_at)
+                 VALUES ('legacy-session-sqlite', 'legacy', 'C:/isolated', 'test', 'test',
+                         'fast_development', '2024-02-29 23:59:59', '2024-02-29 23:59:59')",
+                [],
+            )
+            .expect("seed legacy SQLite session row");
+        storage
+            .conn
+            .execute(
+                "INSERT INTO messages (id, session_id, role, content, created_at)
+                 VALUES ('legacy-message-sqlite', 'legacy-session-sqlite', 'user', 'legacy',
+                         '2024-02-29 23:59:59')",
+                [],
+            )
+            .expect("seed legacy SQLite message row");
+        storage
+            .conn
+            .execute(
+                "INSERT INTO sessions (id, title, working_dir, provider, model, pa_mode, created_at, updated_at)
+                 VALUES ('legacy-session-offset', 'legacy', 'C:/isolated', 'test', 'test',
+                         'fast_development', '2024-03-01T00:59:59+01:00', '2024-03-01T00:59:59+01:00')",
+                [],
+            )
+            .expect("seed offset-bearing legacy session row");
+        storage
+            .conn
+            .execute(
+                "INSERT INTO messages (id, session_id, role, content, created_at)
+                 VALUES ('legacy-message-offset', 'legacy-session-offset', 'user', 'legacy',
+                         '2024-03-01T00:59:59+01:00')",
+                [],
+            )
+            .expect("seed offset-bearing legacy message row");
+        for (session_id, expected) in [
+            (
+                "legacy-session-sqlite",
+                Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap(),
+            ),
+            (
+                "legacy-session-offset",
+                Utc.with_ymd_and_hms(2024, 2, 29, 23, 59, 59).unwrap(),
+            ),
+        ] {
+            let loaded = storage
+                .get_session_with_messages(session_id)
+                .expect("read legacy session")
+                .expect("legacy session exists");
+            assert_eq!(loaded.created_at, expected);
+            assert_eq!(loaded.updated_at, expected);
+            assert_eq!(loaded.messages.len(), 1);
+            assert_eq!(loaded.messages[0].created_at, expected);
+        }
+    }
+
+    #[test]
     fn production_session_list_orders_mixed_timestamp_formats_by_instant() {
         let storage = in_memory_storage();
         let canonical = Session {
