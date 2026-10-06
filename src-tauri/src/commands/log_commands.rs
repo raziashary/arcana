@@ -1475,21 +1475,28 @@ mod tests {
 
         let log_path = directory.path().join("arcana-events.test.jsonl");
         let file = std::fs::File::create(&log_path).expect("create structured log fixture");
+        let (writer, writer_guard) = tracing_appender::non_blocking(file);
         let layer = tracing_subscriber::fmt::layer()
             .json()
-            .with_writer(move || file.try_clone().expect("clone structured log writer"))
+            .with_writer(writer)
             .with_filter(filter_fn(|metadata| {
                 metadata.target() == "arcana::telemetry"
                     && *metadata.level() == tracing::Level::INFO
             }));
         let subscriber = Registry::default().with(layer);
         let error = tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "arcana::telemetry", event_type = "retention_capture_probe", "Retention capture active");
             db.prune_append_only_before("2026-07-06T12:00:00Z")
                 .expect_err("malformed timestamps must fail closed")
         });
+        drop(writer_guard);
         assert!(error.to_string().contains("invalid timestamps"));
 
         let persisted = read_full_log(&log_path).expect("read persisted production JSONL");
+        assert!(
+            persisted.contains("retention_capture_probe"),
+            "structured sink must flush its capture probe"
+        );
         assert!(persisted.contains("database_analytics_retention_prune"));
         assert!(persisted.contains("\"outcome\":\"error\""));
         assert!(persisted.contains("\"database\":\"analytics\""));
@@ -1529,22 +1536,29 @@ mod tests {
 
         let log_path = directory.path().join("arcana-events.test.jsonl");
         let file = std::fs::File::create(&log_path).expect("create structured log fixture");
+        let (writer, writer_guard) = tracing_appender::non_blocking(file);
         let layer = tracing_subscriber::fmt::layer()
             .json()
-            .with_writer(move || file.try_clone().expect("clone structured log writer"))
+            .with_writer(writer)
             .with_filter(filter_fn(|metadata| {
                 metadata.target() == "arcana::telemetry"
                     && *metadata.level() == tracing::Level::INFO
             }));
         let subscriber = Registry::default().with(layer);
         let error = tracing::subscriber::with_default(subscriber, || {
+            tracing::info!(target: "arcana::telemetry", event_type = "retention_capture_probe", "Retention capture active");
             hooks
                 .prune_logs_before("2026-07-06T12:00:00Z")
                 .expect_err("injected storage failure must be returned")
         });
+        drop(writer_guard);
         assert!(error.to_string().contains("private-trigger-marker"));
 
         let persisted = read_full_log(&log_path).expect("read persisted production JSONL");
+        assert!(
+            persisted.contains("retention_capture_probe"),
+            "structured sink must flush its capture probe"
+        );
         assert!(persisted.contains("database_hook_logs_retention_prune"));
         assert!(persisted.contains("\"outcome\":\"error\""));
         assert!(persisted.contains("\"database\":\"config\""));
