@@ -1456,6 +1456,8 @@ mod tests {
 
     #[tokio::test]
     async fn retention_cleanup_failure_is_visible_through_structured_logs_reader() {
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
         let directory = tempfile::tempdir().expect("isolated retention log fixture");
         let db =
             arcana_core::analytics::db::AnalyticsDb::new_at(&directory.path().join("analytics.db"))
@@ -1473,11 +1475,14 @@ mod tests {
 
         let log_path = directory.path().join("arcana-events.test.jsonl");
         let file = std::fs::File::create(&log_path).expect("create structured log fixture");
-        let subscriber = tracing_subscriber::fmt()
+        let layer = tracing_subscriber::fmt::layer()
             .json()
-            .with_max_level(tracing::Level::INFO)
             .with_writer(move || file.try_clone().expect("clone structured log writer"))
-            .finish();
+            .with_filter(filter_fn(|metadata| {
+                metadata.target() == "arcana::telemetry"
+                    && *metadata.level() == tracing::Level::INFO
+            }));
+        let subscriber = Registry::default().with(layer);
         let error = tracing::subscriber::with_default(subscriber, || {
             db.prune_append_only_before("2026-07-06T12:00:00Z")
                 .expect_err("malformed timestamps must fail closed")
@@ -1501,6 +1506,8 @@ mod tests {
 
     #[test]
     fn hook_retention_failure_is_visible_through_structured_logs_reader() {
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
         let directory = tempfile::tempdir().expect("isolated hook retention log fixture");
         let config_path = directory.path().join("config.db");
         let mut hooks = arcana_core::hooks::db::HooksDb::open_at(&config_path)
@@ -1522,11 +1529,14 @@ mod tests {
 
         let log_path = directory.path().join("arcana-events.test.jsonl");
         let file = std::fs::File::create(&log_path).expect("create structured log fixture");
-        let subscriber = tracing_subscriber::fmt()
+        let layer = tracing_subscriber::fmt::layer()
             .json()
-            .with_max_level(tracing::Level::INFO)
             .with_writer(move || file.try_clone().expect("clone structured log writer"))
-            .finish();
+            .with_filter(filter_fn(|metadata| {
+                metadata.target() == "arcana::telemetry"
+                    && *metadata.level() == tracing::Level::INFO
+            }));
+        let subscriber = Registry::default().with(layer);
         let error = tracing::subscriber::with_default(subscriber, || {
             hooks
                 .prune_logs_before("2026-07-06T12:00:00Z")
