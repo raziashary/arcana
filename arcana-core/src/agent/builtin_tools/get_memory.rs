@@ -196,3 +196,320 @@ mod observability_tests {
         assert_eq!(event["fields"]["result_count_observed"], true);
     }
 }
+
+#[cfg(test)]
+mod p4_51_memory_executor_matrix_tests {
+    use super::*;
+    use crate::agent::permission::PermissionMode;
+    use crate::agent::tool_executor::ToolExecutor;
+    use crate::agent::tool_registry::ToolRegistry;
+    use crate::agent::tool_trait::{AgentIdentity, ToolResult};
+    use serde_json::{json, Value};
+
+    const SESSION_ID: &str = "p4-51-memory-matrix-session";
+    const AGENT_ID: &str = "worker-memory-matrix";
+    const TASK_ID: i64 = 51251;
+
+    fn invoke(
+        runtime: &tokio::runtime::Runtime,
+        executor: &mut ToolExecutor,
+        registry: &ToolRegistry,
+        name: &str,
+        input: Value,
+        use_id: &str,
+    ) -> ToolResult {
+        let tool = registry
+            .get(name)
+            .unwrap_or_else(|| panic!("FastDevelopment registry omitted {name}"));
+        let mut results = runtime
+            .block_on(executor.execute_batch(vec![(tool, input, use_id.to_string())]))
+            .expect("production ToolExecutor should return the completed batch");
+        assert_eq!(
+            results.len(),
+            1,
+            "one registered call should yield one result"
+        );
+        let (returned_use_id, result) = results.pop().expect("one tool result");
+        assert_eq!(returned_use_id, use_id, "the model call id must survive");
+        result
+    }
+
+    fn assert_bounded_correlated_failure(
+        result: &ToolResult,
+        name: &str,
+        use_id: &str,
+        run_id: &str,
+        planted: &[&str],
+    ) {
+        assert!(result.is_error, "{name} failure was returned as success");
+        assert!(
+            result.output.len() <= 4096,
+            "{name} envelope exceeded 4 KiB"
+        );
+        let envelope: Value =
+            serde_json::from_str(&result.output).expect("failed tool result must be JSON");
+        assert_eq!(envelope["schema_version"], 1, "{name}");
+        assert_eq!(envelope["ok"], false, "{name}");
+        assert_eq!(envelope["tool"], name, "{name}");
+        assert_eq!(envelope["operation"], format!("tool.{name}"), "{name}");
+        assert_eq!(envelope["error"]["tool"], name, "{name}");
+        assert_eq!(envelope["error"]["operation"], format!("tool.{name}"));
+        assert_eq!(envelope["error"]["error_code"], envelope["error_code"]);
+        assert_eq!(envelope["error"]["category"], envelope["category"]);
+        assert!(envelope["error_code"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()));
+        assert!(envelope["category"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(envelope["message"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(envelope["cause"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(envelope["retryable"].is_boolean());
+        assert!(envelope["retry_after_ms"].is_null() || envelope["retry_after_ms"].is_u64());
+        assert!(envelope["suggested_action"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()));
+        assert!(envelope["message"].as_str().unwrap().len() <= 512);
+        assert!(envelope["cause"].as_str().unwrap().len() <= 512);
+        assert!(envelope["suggested_action"].as_str().unwrap().len() <= 512);
+
+        let timestamp = envelope["timestamp"].as_str().expect("timestamp");
+        chrono::DateTime::parse_from_rfc3339(timestamp).expect("RFC3339 timestamp");
+        assert_eq!(envelope["run_id"], run_id);
+        assert_eq!(envelope["agent_id"], AGENT_ID);
+        assert_eq!(envelope["task_id"], TASK_ID);
+        assert_eq!(envelope["context"]["session_id"], SESSION_ID);
+        assert_eq!(envelope["context"]["run_id"], run_id);
+        assert_eq!(envelope["context"]["agent_id"], AGENT_ID);
+        assert_eq!(envelope["context"]["task_id"], TASK_ID);
+        assert!(envelope["run_id"].as_str().unwrap().len() <= 128);
+        assert!(envelope["agent_id"].as_str().unwrap().len() <= 80);
+        assert!(envelope["context"]["session_id"].as_str().unwrap().len() <= 128);
+        assert!(envelope["context"]["tool_call_id"].as_str().unwrap().len() <= 128);
+        assert_eq!(
+            envelope["context"]["tool_call_id"],
+            format!("{SESSION_ID}-{use_id}")
+        );
+        for marker in planted {
+            assert!(
+                !result.output.contains(marker),
+                "{name} reflected planted private value {marker:?}: {}",
+                result.output
+            );
+        }
+        for success_field in ["results", "memories", "count", "id"] {
+            assert!(
+                envelope.get(success_field).is_none(),
+                "{name} failure carried success-shaped field {success_field}"
+            );
+        }
+    }
+
+    fn planted_input_fields() -> Value {
+        json!({
+            "api_key": "P4_51_PRIVATE_CREDENTIAL_CANARY",
+            "prompt": "P4_51_PRIVATE_PROMPT_CANARY",
+            "source_text": "P4_51_PRIVATE_SOURCE_CANARY",
+            "raw_argument": "P4_51_PRIVATE_ARGUMENT_CANARY",
+            "long_os_error": format!(
+                "P4_51_PRIVATE_OS_ERROR_CANARY {}",
+                "Windows error detail ".repeat(64)
+            ),
+        })
+    }
+
+    #[test]
+    fn memory_registered_executor_success_failure_matrix() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let workspace = tempfile::tempdir().expect("isolated memory-tool workspace");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+
+        let mut registry = ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        for name in [
+            "search_memory",
+            "get_memory",
+            "list_memories",
+            "propose_memory",
+        ] {
+            assert!(
+                registry.get(name).is_some(),
+                "missing real registration: {name}"
+            );
+        }
+
+        // The executor's operation journal requires a real run row. It is
+        // created under the redirected home, alongside the isolated memory DB.
+        let run_id = crate::db::runs::RunsDb::open()
+            .expect("open isolated RunsDb")
+            .begin(crate::db::runs::kind::AGENT_TURN, Some(AGENT_ID))
+            .expect("create isolated agent run");
+        let identity = AgentIdentity::worker(AGENT_ID);
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            SESSION_ID.to_string(),
+            workspace.path().to_string_lossy().into_owned(),
+            identity,
+        )
+        .with_run_id(Some(run_id.clone()));
+        executor.set_task_id(Some(TASK_ID));
+        let runtime = tokio::runtime::Runtime::new().expect("test runtime");
+
+        // Exercise the registered writer, then all three registered reader
+        // surfaces against its persisted result.
+        let content =
+            "Synthetic matrix memory records a copper lantern beside the northern archive.";
+        let proposal = invoke(
+            &runtime,
+            &mut executor,
+            &registry,
+            "propose_memory",
+            json!({"content": content, "scope": "project", "confidence": 0.8}),
+            "memory-propose-success",
+        );
+        assert!(!proposal.is_error, "proposal failed: {}", proposal.output);
+        let memory_id = proposal
+            .output
+            .strip_prefix("Stored as ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .expect("proposal output should return the persisted memory ID")
+            .to_string();
+        assert!(
+            memory_id.starts_with("mem-"),
+            "unexpected memory id {memory_id}"
+        );
+
+        let fetched = invoke(
+            &runtime,
+            &mut executor,
+            &registry,
+            "get_memory",
+            json!({"id": memory_id.clone()}),
+            "memory-get-success",
+        );
+        assert!(!fetched.is_error, "get_memory failed: {}", fetched.output);
+        let fetched_json: Value = serde_json::from_str(&fetched.output).expect("get JSON");
+        assert_eq!(fetched_json["content"], content);
+        assert_eq!(fetched_json["source"], "agent_observation");
+
+        let listed = invoke(
+            &runtime,
+            &mut executor,
+            &registry,
+            "list_memories",
+            json!({"limit": 10, "tier": "semantic"}),
+            "memory-list-success",
+        );
+        assert!(!listed.is_error, "list_memories failed: {}", listed.output);
+        let listed_json: Value = serde_json::from_str(&listed.output).expect("list JSON");
+        assert!(listed_json["memories"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["id"] == memory_id)));
+
+        let searched = invoke(
+            &runtime,
+            &mut executor,
+            &registry,
+            "search_memory",
+            json!({"query": "copper lantern northern archive", "tier": "semantic"}),
+            "memory-search-success",
+        );
+        assert!(
+            !searched.is_error,
+            "search_memory failed: {}",
+            searched.output
+        );
+        let searched_json: Value = serde_json::from_str(&searched.output).expect("search JSON");
+        assert!(searched_json["results"]
+            .as_array()
+            .is_some_and(|items| items.iter().any(|item| item["id"] == memory_id)));
+        assert!(searched.output.contains(content));
+
+        // Three tools reject malformed required values before touching the
+        // database. List has no required input, so its deterministic failure
+        // comes from a schema obstruction in this throwaway database.
+        let planted = [
+            "P4_51_PRIVATE_CREDENTIAL_CANARY",
+            "P4_51_PRIVATE_PROMPT_CANARY",
+            "P4_51_PRIVATE_SOURCE_CANARY",
+            "P4_51_PRIVATE_ARGUMENT_CANARY",
+            "P4_51_PRIVATE_OS_ERROR_CANARY",
+        ];
+        let mut search_input = planted_input_fields();
+        search_input["query"] = json!({"invalid": "P4_51_PRIVATE_ARGUMENT_CANARY"});
+        let search_failure = invoke(
+            &runtime,
+            &mut executor,
+            &registry,
+            "search_memory",
+            search_input,
+            "memory-search-malformed",
+        );
+        assert_bounded_correlated_failure(
+            &search_failure,
+            "search_memory",
+            "memory-search-malformed",
+            &run_id,
+            &planted,
+        );
+
+        let mut get_input = planted_input_fields();
+        get_input["id"] = json!({"invalid": "P4_51_PRIVATE_ARGUMENT_CANARY"});
+        let get_failure = invoke(
+            &runtime,
+            &mut executor,
+            &registry,
+            "get_memory",
+            get_input,
+            "memory-get-malformed",
+        );
+        assert_bounded_correlated_failure(
+            &get_failure,
+            "get_memory",
+            "memory-get-malformed",
+            &run_id,
+            &planted,
+        );
+
+        let mut propose_input = planted_input_fields();
+        propose_input["content"] = json!({"invalid": "P4_51_PRIVATE_ARGUMENT_CANARY"});
+        let propose_failure = invoke(
+            &runtime,
+            &mut executor,
+            &registry,
+            "propose_memory",
+            propose_input,
+            "memory-propose-malformed",
+        );
+        assert_bounded_correlated_failure(
+            &propose_failure,
+            "propose_memory",
+            "memory-propose-malformed",
+            &run_id,
+            &planted,
+        );
+
+        let db = crate::memory::db::MemoryDb::open().expect("reopen only the isolated MemoryDb");
+        db.conn
+            .execute_batch("DROP TABLE memories;")
+            .expect("obstruct only the isolated memory table");
+        drop(db);
+        let list_failure = invoke(
+            &runtime,
+            &mut executor,
+            &registry,
+            "list_memories",
+            planted_input_fields(),
+            "memory-list-database-failure",
+        );
+        assert_bounded_correlated_failure(
+            &list_failure,
+            "list_memories",
+            "memory-list-database-failure",
+            &run_id,
+            &planted,
+        );
+    }
+}

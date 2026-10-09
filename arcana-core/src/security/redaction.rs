@@ -331,6 +331,24 @@ pub fn redact_value_text(text: &str) -> String {
 /// A value under a sensitive key is replaced wholesale; every other string is
 /// pattern-redacted. Arrays and nested objects are walked.
 pub fn redact_json(value: &serde_json::Value) -> serde_json::Value {
+    redact_json_with(value, redact_value_text)
+}
+
+/// Redact tool output without applying text substitutions to JSON syntax or numbers.
+///
+/// Output strings retain the free-text policy so source and identifiers remain
+/// usable. Sensitive fields are masked wholesale, as they are for tool arguments.
+pub fn redact_tool_output(output: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(output) {
+        Ok(value) => redact_json_with(&value, redact_text).to_string(),
+        Err(_) => redact_text(output),
+    }
+}
+
+fn redact_json_with(
+    value: &serde_json::Value,
+    redact_string: fn(&str) -> String,
+) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => {
             let mut out = serde_json::Map::with_capacity(map.len());
@@ -340,15 +358,18 @@ pub fn redact_json(value: &serde_json::Value) -> serde_json::Value {
                     // `credentials` is still a secret.
                     out.insert(k.clone(), serde_json::Value::String(REDACTED.to_string()));
                 } else {
-                    out.insert(k.clone(), redact_json(v));
+                    out.insert(k.clone(), redact_json_with(v, redact_string));
                 }
             }
             serde_json::Value::Object(out)
         }
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.iter().map(redact_json).collect())
-        }
-        serde_json::Value::String(s) => serde_json::Value::String(redact_value_text(s)),
+        serde_json::Value::Array(items) => serde_json::Value::Array(
+            items
+                .iter()
+                .map(|item| redact_json_with(item, redact_string))
+                .collect(),
+        ),
+        serde_json::Value::String(s) => serde_json::Value::String(redact_string(s)),
         other => other.clone(),
     }
 }
@@ -360,6 +381,60 @@ pub fn redact_args(args: &serde_json::Value) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tool_json_keeps_numeric_types_and_masks_nested_sensitive_values() {
+        let input = serde_json::json!({
+            "confidence": 0.8500000238418579,
+            "count": 1234567890123456_u64,
+            "prompt_tokens": 1523,
+            "ok": true,
+            "optional": null,
+            "api_key": "synthetic private value",
+            "nested": [
+                {"credentials": {"any_shape": 1234567890123456_u64}},
+                {"password": 1234567890123456_u64},
+                {"note": "Bearer syntheticToken123", "source": "fn long_identifier_remains_usable_here() {}"}
+            ]
+        });
+        let output = redact_tool_output(&input.to_string());
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("the tool consumer must receive valid JSON");
+        for field in ["confidence", "count", "prompt_tokens", "ok", "optional"] {
+            assert_eq!(parsed[field], input[field], "preserve {field} and its type");
+        }
+        assert_eq!(parsed["api_key"], REDACTED);
+        assert_eq!(parsed["nested"][0]["credentials"], REDACTED);
+        assert_eq!(parsed["nested"][1]["password"], REDACTED);
+        assert_eq!(parsed["nested"][2]["source"], input["nested"][2]["source"]);
+        assert!(!output.contains("syntheticToken123"));
+        assert!(!output.contains("synthetic private value"));
+        assert_eq!(
+            redact_tool_output(&output),
+            output,
+            "redaction is idempotent"
+        );
+    }
+
+    #[test]
+    fn tool_output_keeps_free_text_policy_and_json_scalar_types() {
+        for input in ["0.8500000238418579", "1234567890123456", "true", "null"] {
+            let parsed: serde_json::Value = serde_json::from_str(input).unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&redact_tool_output(input)).unwrap(),
+                parsed
+            );
+        }
+        let text = "Authorization: Bearer syntheticToken123\nlong_identifier_remains_usable_here";
+        assert_eq!(redact_tool_output(text), redact_text(text));
+        let string = serde_json::to_string(text).unwrap();
+        assert_eq!(
+            serde_json::from_str::<String>(&redact_tool_output(&string)).unwrap(),
+            redact_text(text)
+        );
+        let malformed = "{\"password\": \"synthetic secret\"";
+        assert_eq!(redact_tool_output(malformed), redact_text(malformed));
+    }
+
     use super::*;
     use serde_json::json;
 

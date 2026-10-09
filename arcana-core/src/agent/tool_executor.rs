@@ -483,7 +483,7 @@ impl ToolExecutor {
     /// the file, so both proofs were green. Found by three independent
     /// post-phase auditors.
     fn redact_result(mut result: ToolResult) -> ToolResult {
-        result.output = crate::security::redaction::redact_text(&result.output);
+        result.output = crate::security::redaction::redact_tool_output(&result.output);
         result
     }
 
