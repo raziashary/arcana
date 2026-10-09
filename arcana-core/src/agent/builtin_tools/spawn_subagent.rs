@@ -249,3 +249,183 @@ const DEFAULT_SUBAGENT_SYSTEM_PROMPT: &str =
      parent's conversation. Read the task carefully, do exactly what is \
      asked, and respond with a clear, structured summary that the parent \
      can act on.";
+
+#[cfg(test)]
+mod p4_51_subagent_executor_matrix_tests {
+    use crate::agent::permission::{new_pending_permissions, PermissionMode};
+    use crate::agent::tool_executor::ToolExecutor;
+    use crate::agent::tool_registry::ToolRegistry;
+    use crate::agent::tool_trait::AgentIdentity;
+    use serde_json::{json, Value};
+
+    const SESSION_ID: &str = "p4-51-subagent-matrix-session";
+    const AGENT_ID: &str = "worker-subagent-matrix";
+    const TASK_ID: i64 = 51510;
+
+    #[tokio::test]
+    async fn registered_subagent_family_returns_correlated_private_failures_without_manager() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let workspace = tempfile::tempdir().expect("isolated subagent workspace");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+
+        let mut registry = ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        for name in [
+            "spawn_subagent",
+            "spawn_parallel_subagents",
+            "spawn_qc_review",
+        ] {
+            assert!(
+                registry.get(name).is_some(),
+                "missing actual FastDevelopment registration: {name}"
+            );
+        }
+
+        // ToolExecutor operation journaling is backed by the isolated home.
+        // Starting this filtered test in a fresh test process leaves the
+        // process-wide manager OnceLock empty, so the handlers fail before any
+        // provider, DB claim, or network operation can begin.
+        assert!(
+            crate::subagent::manager::global().is_none(),
+            "this exact-filter test requires an uninstalled process-local manager"
+        );
+        let run_id = crate::db::runs::RunsDb::open()
+            .expect("open isolated RunsDb")
+            .begin(crate::db::runs::kind::AGENT_TURN, Some(AGENT_ID))
+            .expect("create isolated agent run");
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            new_pending_permissions(),
+            SESSION_ID.to_string(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker(AGENT_ID),
+        )
+        .with_run_id(Some(run_id.clone()));
+        executor.set_task_id(Some(TASK_ID));
+
+        let planted = [
+            "P4_51_PRIVATE_CREDENTIAL_CANARY",
+            "P4_51_PRIVATE_PROMPT_CANARY",
+            "P4_51_PRIVATE_SOURCE_CANARY",
+            "P4_51_PRIVATE_ARGUMENT_CANARY",
+            "P4_51_PRIVATE_PATH_CANARY",
+        ];
+        let cases = [
+            (
+                "spawn_subagent",
+                json!({
+                    "task_description": "delegate P4_51_PRIVATE_PROMPT_CANARY",
+                    "system_prompt": "P4_51_PRIVATE_SOURCE_CANARY",
+                    "api_key": "P4_51_PRIVATE_CREDENTIAL_CANARY",
+                    "raw_argument": "P4_51_PRIVATE_ARGUMENT_CANARY",
+                    "working_path": "P4_51_PRIVATE_PATH_CANARY",
+                }),
+                "spawn-subagent",
+            ),
+            (
+                "spawn_parallel_subagents",
+                json!({
+                    "subtasks": [{
+                        "task_description": "parallel task P4_51_PRIVATE_PROMPT_CANARY",
+                        "system_prompt": "P4_51_PRIVATE_SOURCE_CANARY",
+                    }],
+                    "api_key": "P4_51_PRIVATE_CREDENTIAL_CANARY",
+                    "raw_argument": "P4_51_PRIVATE_ARGUMENT_CANARY",
+                    "working_path": "P4_51_PRIVATE_PATH_CANARY",
+                }),
+                "spawn-parallel-subagents",
+            ),
+            (
+                "spawn_qc_review",
+                json!({
+                    "task_id": TASK_ID,
+                    "repo_path": "P4_51_PRIVATE_PATH_CANARY",
+                    "model": "P4_51_PRIVATE_ARGUMENT_CANARY",
+                    "api_key": "P4_51_PRIVATE_CREDENTIAL_CANARY",
+                    "prompt": "P4_51_PRIVATE_PROMPT_CANARY",
+                    "source_text": "P4_51_PRIVATE_SOURCE_CANARY",
+                }),
+                "spawn-qc-review",
+            ),
+        ];
+
+        for (name, input, call_id) in cases {
+            let tool = registry
+                .get(name)
+                .unwrap_or_else(|| panic!("FastDevelopment registry omitted {name}"));
+            let mut results = executor
+                .execute_batch(vec![(tool, input, call_id.to_string())])
+                .await
+                .expect("production ToolExecutor should return a completed batch");
+            assert_eq!(
+                results.len(),
+                1,
+                "one registered call should yield one result"
+            );
+            let (returned_call_id, result) = results.pop().expect("one tool result");
+            assert_eq!(returned_call_id, call_id, "model call ID must survive");
+            assert!(
+                result.is_error,
+                "{name} reported success without a SubagentManager: {}",
+                result.output
+            );
+            assert!(result.output.len() <= 8192, "{name} failure exceeded bound");
+            for marker in planted {
+                assert!(
+                    !result.output.contains(marker),
+                    "{name} reflected planted private value {marker:?}: {}",
+                    result.output
+                );
+            }
+
+            let envelope: Value = serde_json::from_str(&result.output)
+                .unwrap_or_else(|error| panic!("{name} failure was not JSON: {error}"));
+            assert_eq!(envelope["schema_version"], 1, "{name}: {envelope}");
+            assert_eq!(envelope["ok"], false, "{name}: {envelope}");
+            assert_eq!(envelope["tool"], name, "{name}: {envelope}");
+            assert_eq!(envelope["operation"], format!("tool.{name}"));
+            assert!(envelope["error_code"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()));
+            assert!(envelope["category"].as_str().is_some_and(|s| !s.is_empty()));
+            assert!(envelope["message"].as_str().is_some_and(|s| !s.is_empty()));
+            assert!(envelope["cause"].as_str().is_some_and(|s| !s.is_empty()));
+            assert!(envelope["retryable"].is_boolean());
+            assert!(envelope["retry_after_ms"].is_null() || envelope["retry_after_ms"].is_u64());
+            assert!(envelope["suggested_action"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()));
+            for field in ["message", "cause", "suggested_action"] {
+                assert!(
+                    envelope[field].as_str().unwrap().len() <= 512,
+                    "{name} {field} exceeded its bound"
+                );
+            }
+            assert_eq!(envelope["run_id"], run_id, "{name}");
+            assert_eq!(envelope["agent_id"], AGENT_ID, "{name}");
+            assert_eq!(envelope["task_id"], TASK_ID, "{name}");
+            assert_eq!(envelope["context"]["session_id"], SESSION_ID, "{name}");
+            assert_eq!(envelope["context"]["run_id"], run_id, "{name}");
+            assert_eq!(envelope["context"]["agent_id"], AGENT_ID, "{name}");
+            assert_eq!(envelope["context"]["task_id"], TASK_ID, "{name}");
+            assert_eq!(
+                envelope["context"]["tool_call_id"],
+                format!("{SESSION_ID}-{call_id}"),
+                "{name}"
+            );
+            assert!(envelope["timestamp"]
+                .as_str()
+                .is_some_and(|s| !s.is_empty()));
+            assert!(envelope["error"].is_object(), "{name}");
+            for success_field in ["subagent_id", "results", "combined_summary", "claim_token"] {
+                assert!(
+                    envelope.get(success_field).is_none(),
+                    "{name} failure carried success-shaped field {success_field}"
+                );
+            }
+        }
+    }
+}
