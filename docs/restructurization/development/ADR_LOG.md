@@ -7330,3 +7330,17 @@ readback.
 ## ADR-LOG-RESTRUCT-0351 — Correct model failure fixture run attribution
 
 **Claim correction / date.** On2026-10-09 registered Bash/Git fixtures initially failed before handler dispatch because they supplied invented run IDs to the durable journal. Reading the earlier seventeen-builtin AgentEngine fixture found the same invented run ID without RunsDb.begin_worker_tick. ~~That fixture proves seventeen concrete builtin handler failures reach the model.~~ It proves returned failures reach the model, but mutation rows may exercise operation_intent_unavailable rather than their intended handlers. The error was reading the fixture assertions without tracing the journal prerequisite. Create real isolated worker-run records and assert the intended failure classification, then rerun and replace the affected current claims. Preserve prior evidence as historical; no gate closure depended on this fixture alone.
+
+## ADR-LOG-RESTRUCT-0344 — Require aggregate smoke resource quotas
+
+**Owner decision / date.** Accepted2026-10-09: require per-run tree-wide cgroup process/memory/CPU limits plus an enforceable workspace disk quota before enabling Linux smoke launches. Per-process limits alone are insufficient. Fail closed where the quota boundary is unavailable. This WSL host has USER+NET namespace support but no writable delegated cgroup root; test-only admission proof does not enable the production capability. Windows/macOS equivalents also remain unavailable until independently proved.
+
+## ADR-LOG-RESTRUCT-0349 — Enforce Linux smoke disk bounds with private staged tmpfs
+
+**Owner decision / date.** Accepted2026-10-09: extend Linux smoke execution to a private size/inode-limited staged workspace and validated conflict-safe copy-back after the complete child tree stops. Pair it with delegated per-run cgroup CPU/memory/process bounds; absent delegated cgroup or private mount support remains fail-closed. This matches approved Windows/macOS staging semantics without giving untrusted code original-workspace writes or host network access. Kernel cgroup-v2 and tmpfs documentation grounds the enforcement primitives; limits and namespace/copy-back/cleanup must be behavior-proven before production enablement. Existing per-process rlimits alone cannot authorize launch.
+
+**Sources.** https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html and https://cdn.kernel.org/doc/html/latest/filesystems/tmpfs.html .
+
+## ADR-LOG-RESTRUCT-0350 — Remove the unconfined smoke launcher before capability enablement
+
+**Grounded integration decision / date.** On2026-10-09 the real e2e_probe still spawns model-authored commands with plain Tokio Command and only kills direct children. This contradicts owner-approved ADR0339/0344/0349: no smoke capability may launch before per-platform confinement, aggregate quotas and cleanup are proved. Remove that unrestricted production path and return the existing structured sandbox_violation contract after argument/workspace validation until a proved confined runner is integrated. No arbitrary loopback HTTP request or child launch is allowed on this unavailable path. This enforces the accepted boundary; it does not complete smoke capability or TG4-31. Preserve registration/schema, update the description and verify the real registered executor refuses valid commands without creating a marker.
