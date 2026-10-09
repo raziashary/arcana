@@ -78,6 +78,11 @@ jobs:
       - name: Tests
         run: cargo test --workspace --all-targets -- --test-threads=4
 
+      # This fixture installs process-global native manager/analytics. Keep it
+      # separate from ordinary no-manager failure fixtures.
+      - name: Registered native subagent execution (TG4-25)
+        run: cargo test -p arcana-core --lib registered_subagent_tools_execute_children_and_read_back_qc_accounting --locked -- --ignored --test-threads=1
+
       # TG-P1-03 - the crate boundary, checked transitively.
       #
       # `cargo tree` sees through re-exports, path dependencies and feature

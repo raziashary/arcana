@@ -121,6 +121,8 @@ pub async fn initialize(options: CoreRuntimeOptions) -> Result<Arc<CoreRuntime>>
     let subagents = SubagentManager::new(crate::subagent::native_runner::RunnerDeps {
         state: state.clone(),
         pending: pending_permissions.clone(),
+        #[cfg(test)]
+        provider_override: None,
     });
 
     let analytics = Arc::new(AnalyticsManager::new().await?);

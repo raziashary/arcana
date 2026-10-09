@@ -49,7 +49,12 @@ use crate::state::lock::LockTolerant;
 pub struct RunnerDeps {
     pub state: Arc<Mutex<AppState>>,
     pub pending: PendingPermissions,
+    #[cfg(test)]
+    pub provider_override: Option<Arc<dyn Provider>>,
 }
+
+#[cfg(test)]
+mod registered_tool_success_tests;
 
 /// Choose a model the active provider can actually serve.
 ///
@@ -244,6 +249,14 @@ async fn run_inner(
     let _runtime_lease =
         crate::state::runtime_registry::global().admit(subagent_id, subagent_id)?;
 
+    #[cfg(test)]
+    let provider = match &deps.provider_override {
+        Some(provider) => {
+            crate::provider::capped::CappedProvider::wrap(provider.clone(), deps.state.clone())
+        }
+        None => build_provider(&provider_id, deps.state.clone())?,
+    };
+    #[cfg(not(test))]
     let provider = build_provider(&provider_id, deps.state.clone())?;
 
     emit(

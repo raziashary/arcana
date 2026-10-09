@@ -7314,3 +7314,7 @@ readback.
 
 
 **ADR0345 claim correction, 2026-10-09.** The minimal-host author claimed Tauri reexports Tao/Wry on Windows; actual compile fails because those exports are Android-only. This was an incomplete cfg inspection, not evidence of a runtime restriction. Use Windows-only dev dependency on the same already-locked tauri-runtime-wry2.11.1 reexports, then compile and run before making attachment claims.
+
+## ADR-LOG-RESTRUCT-0346 — Prove native subagents with a test-only provider seam
+
+**Owner decision / date.** Accepted2026-10-09: native_runner may use an explicit test-only scripted provider override analogous to RecipeRunner, so the actual registered subagent tools run real AgentEngine children without Vault keys or paid calls. Shipped provider selection remains unchanged. The process-global manager must be isolated in a dedicated test invocation and cannot contaminate ordinary no-manager failure fixtures. Prove successful child execution and actual returned/result readers rather than substituting a fake manager or tool.

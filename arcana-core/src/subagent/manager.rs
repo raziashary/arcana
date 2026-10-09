@@ -549,6 +549,7 @@ mod p3_24_tests {
         SubagentManager::new(RunnerDeps {
             state: Arc::new(std::sync::Mutex::new(AppState::new())),
             pending: new_pending_permissions(),
+            provider_override: None,
         })
     }
 
