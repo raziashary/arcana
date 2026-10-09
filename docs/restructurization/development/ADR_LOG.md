@@ -7307,3 +7307,10 @@ readback.
 ## ADR-LOG-RESTRUCT-0343 — Derive privacy-safe telemetry call identity
 
 **Owner decision / date.** Accepted2026-10-09: derive a stable canonical telemetry UUID from compound session/provider call IDs in designated Arcana telemetry call fields. Keep provider response IDs and tool-result contracts unchanged; retain normal redaction for arbitrary strings, unknown fields and sensitive keys. Derivation must be consistent across event/span ancestry, domain-separated, and proved through actual registered project_command execution, structured writer and CLI export. This is not an exception permitting raw opaque identifiers to bypass redaction.
+
+## ADR-LOG-RESTRUCT-0345 — Isolate WebView2 attachment from Arcana startup
+
+**Owner decision / date.** Accepted2026-10-09: add a minimal test-only WebView2 host using the existing locked runtime stack, same owned profile/fixed runtime and bounded endpoint deadline. The isolated Tauri build with ephemeral debugging produced no DevToolsActivePort marker or listener; local Edge policy checks provided no explanation. This diagnostic must make no provider calls, open no user databases, change no shipped configuration or machine policy, and clean its owned process tree/ports. It distinguishes host/runtime restriction from application startup; endpoint availability alone is not consent or desktop gate proof.
+
+
+**ADR0345 claim correction, 2026-10-09.** The minimal-host author claimed Tauri reexports Tao/Wry on Windows; actual compile fails because those exports are Android-only. This was an incomplete cfg inspection, not evidence of a runtime restriction. Use Windows-only dev dependency on the same already-locked tauri-runtime-wry2.11.1 reexports, then compile and run before making attachment claims.
