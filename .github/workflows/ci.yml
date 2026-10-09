@@ -281,6 +281,14 @@ jobs:
       - name: Annual analytics, session and hook timestamp pairs (TG4-19)
         run: cargo test -p arcana-core --lib analytics_timestamp_pairs_ --locked -- --test-threads=1
 
+      - name: Explicit task budget resolution and persisted Fleet completion (P4-39)
+        run: |
+          cargo test -p arcana-core --lib task_budget_resolution --locked -- --test-threads=1
+          cargo test -p arcana-core --lib task_identity --locked -- --test-threads=1
+          cargo test -p arcana-core --lib deleted_audit_reader_tests --locked -- --test-threads=1
+          cargo test -p arcana-core --lib installed_supervisor_receives_budget_resolution --locked -- --test-threads=1
+          cargo test -p arcana-core --lib scheduler_fleet_dependency_completion --locked -- --test-threads=1
+
       # TG4-18: run Rust, npm and Python command intents through Arcana's
       # production argv resolver and process launcher on each OS in this
       # matrix, including the real Windows npm.cmd shim path.

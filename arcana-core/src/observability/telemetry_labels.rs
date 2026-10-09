@@ -346,6 +346,8 @@ const OPERATIONS: &[&str] = &[
     "database_task_assign_with_routing",
     "database_task_budget_exceeded",
     "database_task_budget_read",
+    "database_task_budget_resolution",
+    "database_task_budget_resolution_read",
     "database_task_budget_set",
     "database_task_budget_usage_update",
     "database_task_claim_assigned",

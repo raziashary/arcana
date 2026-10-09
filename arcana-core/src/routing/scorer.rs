@@ -168,6 +168,7 @@ mod tests {
     fn task() -> Task {
         Task {
             id: 1,
+            task_identity: uuid::Uuid::new_v4().to_string(),
             title: "Implement API endpoint".into(),
             description: None,
             priority: TaskPriority::P2,

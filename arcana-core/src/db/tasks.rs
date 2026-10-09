@@ -11,6 +11,12 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+const TASK_BUDGET_RESOLUTION_HISTORY_SQL: &str =
+    "SELECT id, task_id, previous_max_tokens, previous_max_usd,
+            previous_max_turns, new_max_tokens, new_max_usd, new_max_turns,
+            tokens_used, cost_usd, turns_used, resolved_by, reason, resolved_at, task_identity
+     FROM task_budget_resolutions WHERE task_id = ?1 ORDER BY id DESC LIMIT ?2";
+
 // ─── Worker→Supervisor Request Types ──────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -203,6 +209,7 @@ impl TaskStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: i64,
+    pub task_identity: String,
     pub title: String,
     pub description: Option<String>,
     pub priority: TaskPriority,
@@ -245,6 +252,26 @@ pub struct Task {
     // across all reviewer runs (including retries) so the QC ROI panel can
     // show qc_cost / worker_cost ratios per task.
     pub task_qc_cost_usd: f64,
+}
+
+/// Immutable record of an explicit Supervisor resolution for an exceeded task budget.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TaskBudgetResolution {
+    pub id: i64,
+    pub task_id: i64,
+    pub task_identity: String,
+    pub previous_max_tokens: Option<i64>,
+    pub previous_max_usd: Option<f64>,
+    pub previous_max_turns: Option<i64>,
+    pub new_max_tokens: i64,
+    pub new_max_usd: f64,
+    pub new_max_turns: i64,
+    pub tokens_used: i64,
+    pub cost_usd: f64,
+    pub turns_used: i64,
+    pub resolved_by: String,
+    pub reason: String,
+    pub resolved_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -362,7 +389,7 @@ const TASK_BY_ID_SQL: &str = "SELECT id, title, description, priority, task_type
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
                     phase, phase_order, milestone, epic_id, blocked_by,
-                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0), task_identity
              FROM tasks WHERE id = ?1";
 const TASKS_BY_STATUS_SQL: &str = "SELECT id, title, description, priority, task_type, status,
                          acceptance_criteria, assigned_worker, rejection_reason, retry_count,
@@ -373,7 +400,7 @@ const TASKS_BY_STATUS_SQL: &str = "SELECT id, title, description, priority, task
                          COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                          budget_exceeded_reason,
                          phase, phase_order, milestone, epic_id, blocked_by,
-                         under_review_by, COALESCE(task_qc_cost_usd, 0.0)
+                         under_review_by, COALESCE(task_qc_cost_usd, 0.0), task_identity
              FROM tasks WHERE status = ?1 ORDER BY julianday(created_at) ASC, id ASC";
 const TASKS_ALL_BY_CREATED_SQL: &str = "SELECT id, title, description, priority, task_type, status,
                          acceptance_criteria, assigned_worker, rejection_reason, retry_count,
@@ -384,7 +411,7 @@ const TASKS_ALL_BY_CREATED_SQL: &str = "SELECT id, title, description, priority,
                          COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                          budget_exceeded_reason,
                          phase, phase_order, milestone, epic_id, blocked_by,
-                         under_review_by, COALESCE(task_qc_cost_usd, 0.0)
+                         under_review_by, COALESCE(task_qc_cost_usd, 0.0), task_identity
              FROM tasks ORDER BY julianday(created_at) ASC, id ASC";
 const TASKS_BY_STATUS_AND_WORKER_SQL: &str =
     "SELECT id, title, description, priority, task_type, status,
@@ -396,7 +423,7 @@ const TASKS_BY_STATUS_AND_WORKER_SQL: &str =
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
                     phase, phase_order, milestone, epic_id, blocked_by,
-                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0), task_identity
              FROM tasks WHERE status = ?1 AND assigned_worker = ?2 ORDER BY id";
 const EPIC_TASKS_SQL: &str = "SELECT id, title, description, priority, task_type, status,
                     acceptance_criteria, assigned_worker, rejection_reason, retry_count,
@@ -407,7 +434,7 @@ const EPIC_TASKS_SQL: &str = "SELECT id, title, description, priority, task_type
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
                     phase, phase_order, milestone, epic_id, blocked_by,
-                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0), task_identity
              FROM tasks WHERE epic_id = ?1
              ORDER BY COALESCE(phase_order, 999), id";
 const READY_TASKS_IN_PHASE_SQL: &str = "SELECT id, title, description, priority, task_type, status,
@@ -419,7 +446,7 @@ const READY_TASKS_IN_PHASE_SQL: &str = "SELECT id, title, description, priority,
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
                     phase, phase_order, milestone, epic_id, blocked_by,
-                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0), task_identity
              FROM tasks
              WHERE epic_id = ?1 AND phase = ?2
                AND status IN ('ready', 'assigned')
@@ -521,7 +548,7 @@ const ORPHAN_CANDIDATES_SQL: &str = "SELECT id, title, description, priority, ta
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
                     phase, phase_order, milestone, epic_id, blocked_by,
-                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0), task_identity
              FROM tasks
              WHERE status IN ('assigned', 'in_progress')
              ORDER BY julianday(updated_at) ASC, id ASC";
@@ -588,7 +615,7 @@ const GET_BLOCKED_TASKS_SQL: &str = "SELECT id, title, description, priority, ta
                     COALESCE(budget_turns_used,0), COALESCE(budget_exceeded,0),
                     budget_exceeded_reason,
                     phase, phase_order, milestone, epic_id, blocked_by,
-                    under_review_by, COALESCE(task_qc_cost_usd, 0.0)
+                    under_review_by, COALESCE(task_qc_cost_usd, 0.0), task_identity
              FROM tasks WHERE blocked_by IS NOT NULL AND blocked_by != '[]'";
 
 pub struct TasksDb {
@@ -1373,6 +1400,180 @@ impl TasksDb {
             END;
         "#,
         },
+        Migration {
+            version: 21,
+            name: "audited-supervisor-task-budget-resolutions",
+            sql: r#"
+            CREATE TABLE task_budget_resolutions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER NOT NULL,
+                previous_max_tokens INTEGER,
+                previous_max_usd REAL,
+                previous_max_turns INTEGER,
+                new_max_tokens INTEGER NOT NULL CHECK (new_max_tokens > 0),
+                new_max_usd REAL NOT NULL CHECK (new_max_usd > 0),
+                new_max_turns INTEGER NOT NULL CHECK (new_max_turns > 0),
+                tokens_used INTEGER NOT NULL CHECK (tokens_used >= 0),
+                cost_usd REAL NOT NULL CHECK (cost_usd >= 0),
+                turns_used INTEGER NOT NULL CHECK (turns_used >= 0),
+                resolved_by TEXT NOT NULL CHECK (resolved_by = 'supervisor'),
+                reason TEXT NOT NULL CHECK (length(trim(reason)) BETWEEN 1 AND 500),
+                resolved_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+                CHECK (new_max_tokens > tokens_used),
+                CHECK (new_max_usd > cost_usd),
+                CHECK (new_max_turns > turns_used)
+            );
+            CREATE INDEX idx_task_budget_resolution_history
+                ON task_budget_resolutions(task_id, id DESC);
+            CREATE TRIGGER task_budget_resolution_insert_guard
+            BEFORE INSERT ON task_budget_resolutions
+            WHEN arcana_supervisor_approval_authorized() != 1
+              OR NEW.resolved_by != 'supervisor'
+              OR length(trim(NEW.reason)) NOT BETWEEN 1 AND 500
+              OR NOT EXISTS (
+                SELECT 1 FROM tasks t WHERE t.id = NEW.task_id
+                  AND t.status = 'needs_info' AND t.budget_exceeded = 1
+                  AND t.budget_max_tokens IS NEW.previous_max_tokens
+                  AND t.budget_max_usd IS NEW.previous_max_usd
+                  AND t.budget_max_turns IS NEW.previous_max_turns
+                  AND t.budget_tokens_used = NEW.tokens_used
+                  AND t.budget_cost_usd = NEW.cost_usd
+                  AND t.budget_turns_used = NEW.turns_used
+                  AND NEW.new_max_tokens > t.budget_tokens_used
+                  AND NEW.new_max_usd > t.budget_cost_usd
+                  AND NEW.new_max_turns > t.budget_turns_used
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'task budget resolution requires an active exceeded task and Supervisor authorization');
+            END;
+            CREATE TRIGGER task_budget_resolution_update_guard
+            BEFORE UPDATE ON task_budget_resolutions
+            BEGIN
+                SELECT RAISE(ABORT, 'task budget resolution audit rows are immutable');
+            END;
+            CREATE TRIGGER task_budget_resolution_delete_guard
+            BEFORE DELETE ON task_budget_resolutions
+            BEGIN
+                SELECT RAISE(ABORT, 'task budget resolution audit rows are immutable');
+            END;
+            CREATE TRIGGER task_budget_resolution_task_clear_guard
+            BEFORE UPDATE OF budget_exceeded ON tasks
+            WHEN OLD.budget_exceeded = 1 AND NEW.budget_exceeded = 0
+              AND (
+                arcana_supervisor_approval_authorized() != 1
+                OR OLD.status != 'needs_info' OR NEW.status IS NOT OLD.status
+                OR NEW.assigned_worker IS NOT OLD.assigned_worker
+                OR NEW.blocked_by IS NOT OLD.blocked_by
+                OR NEW.rejection_reason IS NOT OLD.rejection_reason
+                OR NEW.retry_count IS NOT OLD.retry_count
+                OR NEW.claimed_by_pid IS NOT OLD.claimed_by_pid
+                OR NEW.claim_host IS NOT OLD.claim_host
+                OR NEW.under_review_by IS NOT OLD.under_review_by
+                OR NEW.budget_tokens_used IS NOT OLD.budget_tokens_used
+                OR NEW.budget_cost_usd IS NOT OLD.budget_cost_usd
+                OR NEW.budget_turns_used IS NOT OLD.budget_turns_used
+                OR NEW.budget_exceeded_reason IS NOT NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM task_budget_resolutions r
+                    WHERE r.task_id = NEW.id
+                      AND r.previous_max_tokens IS OLD.budget_max_tokens
+                      AND r.previous_max_usd IS OLD.budget_max_usd
+                      AND r.previous_max_turns IS OLD.budget_max_turns
+                      AND r.new_max_tokens IS NEW.budget_max_tokens
+                      AND r.new_max_usd IS NEW.budget_max_usd
+                      AND r.new_max_turns IS NEW.budget_max_turns
+                      AND r.tokens_used = OLD.budget_tokens_used
+                      AND r.cost_usd = OLD.budget_cost_usd
+                      AND r.turns_used = OLD.budget_turns_used
+                      AND r.resolved_by = 'supervisor'
+                      AND r.id = (SELECT MAX(latest.id) FROM task_budget_resolutions latest
+                                  WHERE latest.task_id = NEW.id)
+                )
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'clearing an exceeded task budget requires an audited Supervisor resolution');
+            END;
+        "#,
+        },
+        Migration {
+            version: 22,
+            name: "stable-task-budget-audit-identity",
+            sql: r#"
+            ALTER TABLE tasks ADD COLUMN task_identity TEXT;
+            ALTER TABLE task_budget_resolutions ADD COLUMN task_identity TEXT;
+
+            DROP TRIGGER task_budget_resolution_update_guard;
+            DROP TRIGGER tasks_updated_at;
+
+            UPDATE tasks SET task_identity =
+                lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+                substr(lower(hex(randomblob(2))), 2, 3) || '-' ||
+                substr('89ab', (random() & 3) + 1, 1) ||
+                substr(lower(hex(randomblob(2))), 2, 3) || '-' ||
+                lower(hex(randomblob(6)))
+            WHERE task_identity IS NULL;
+
+            UPDATE task_budget_resolutions
+            SET task_identity = (
+                SELECT t.task_identity FROM tasks t WHERE t.id = task_budget_resolutions.task_id
+            )
+            WHERE task_identity IS NULL
+              AND EXISTS (SELECT 1 FROM tasks t WHERE t.id = task_budget_resolutions.task_id);
+
+            UPDATE task_budget_resolutions SET task_identity =
+                lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+                substr(lower(hex(randomblob(2))), 2, 3) || '-' ||
+                substr('89ab', (random() & 3) + 1, 1) ||
+                substr(lower(hex(randomblob(2))), 2, 3) || '-' ||
+                lower(hex(randomblob(6)))
+            WHERE task_identity IS NULL;
+
+            CREATE TRIGGER tasks_updated_at
+            AFTER UPDATE ON tasks
+            BEGIN
+                UPDATE tasks SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+                 WHERE id = NEW.id;
+            END;
+
+            CREATE UNIQUE INDEX idx_tasks_task_identity ON tasks(task_identity);
+
+            CREATE TRIGGER task_budget_resolution_update_guard
+            BEFORE UPDATE ON task_budget_resolutions
+            BEGIN
+                SELECT RAISE(ABORT, 'task budget resolution audit rows are immutable');
+            END;
+
+            CREATE TRIGGER tasks_task_identity_fill_insert
+            AFTER INSERT ON tasks
+            WHEN NEW.task_identity IS NULL
+            BEGIN
+                UPDATE tasks SET task_identity =
+                    lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+                    substr(lower(hex(randomblob(2))), 2, 3) || '-' ||
+                    substr('89ab', (random() & 3) + 1, 1) ||
+                    substr(lower(hex(randomblob(2))), 2, 3) || '-' ||
+                    lower(hex(randomblob(6)))
+                WHERE id = NEW.id;
+            END;
+
+            CREATE TRIGGER tasks_task_identity_immutable
+            BEFORE UPDATE OF task_identity ON tasks
+            WHEN OLD.task_identity IS NOT NULL AND NEW.task_identity IS NOT OLD.task_identity
+            BEGIN
+                SELECT RAISE(ABORT, 'task identity is immutable');
+            END;
+
+            CREATE TRIGGER task_budget_resolution_identity_insert_guard
+            BEFORE INSERT ON task_budget_resolutions
+            WHEN NEW.task_identity IS NULL
+              OR NEW.task_identity IS NOT (
+                  SELECT t.task_identity FROM tasks t WHERE t.id = NEW.task_id
+              )
+            BEGIN
+                SELECT RAISE(ABORT, 'task budget resolution identity must match the active task');
+            END;
+        "#,
+        },
     ];
 
     /// Columns added to `tasks` after its original `CREATE TABLE`.
@@ -1470,8 +1671,8 @@ impl TasksDb {
                 .with_database("tasks");
         let created_by = input.created_by.unwrap_or_else(|| "pa".to_string());
         self.conn.execute(
-            "INSERT INTO tasks (title, description, priority, task_type, status, acceptance_criteria, created_by)
-             VALUES (?1, ?2, ?3, ?4, 'ready', ?5, ?6)",
+            "INSERT INTO tasks (title, description, priority, task_type, status, acceptance_criteria, created_by, task_identity)
+             VALUES (?1, ?2, ?3, ?4, 'ready', ?5, ?6, ?7)",
             params![
                 input.title,
                 input.description,
@@ -1479,6 +1680,7 @@ impl TasksDb {
                 input.task_type,
                 input.acceptance_criteria,
                 created_by,
+                uuid::Uuid::new_v4().to_string(),
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -2632,7 +2834,7 @@ impl TasksDb {
         Ok(())
     }
 
-    /// Delete all tasks and reset the auto-increment counter.
+    /// Delete all tasks while preserving task IDs and retained resolution audit.
     /// Used by the UI "Clear Board" action to start fresh.
     ///
     /// IMPORTANT: `worker_requests(task_id) REFERENCES tasks(id)` is an
@@ -2640,10 +2842,11 @@ impl TasksDb {
     /// Bare `DELETE FROM tasks` fails the moment any pending worker request
     /// references a task — which is the normal state after a run with QC
     /// activity. We therefore drain `worker_requests` first, then `tasks`,
-    /// then reset both auto-increment sequences atomically so the next
-    /// `INSERT` starts from id 1 again.
+    /// then reset only the worker-request sequence atomically. Task IDs keep
+    /// increasing so a new task cannot inherit retained audit by reused ID.
     /// GAP-11 / §0.8: this is the one wholesale delete in the task store — every
-    /// task and every worker request, with the id sequences reset — so it takes
+    /// task and every worker request; resolution audit and the task sequence
+    /// are retained. It takes
     /// a backup first. A failure to back up **stops the clear**: emptying the
     /// board on the belief that a snapshot exists is precisely the outcome this
     /// guards against.
@@ -2678,7 +2881,7 @@ impl TasksDb {
             "BEGIN;
              DELETE FROM worker_requests;
              DELETE FROM tasks;
-             DELETE FROM sqlite_sequence WHERE name IN ('tasks', 'worker_requests');
+             DELETE FROM sqlite_sequence WHERE name = 'worker_requests';
              COMMIT;",
         )?;
         operation.with_result_count(1).succeed();
@@ -3646,6 +3849,152 @@ impl TasksDb {
         Ok(())
     }
 
+    /// Resolve an exceeded budget without releasing the task's other holds.
+    /// Every new limit must be explicit and strictly above cumulative usage.
+    pub fn resolve_exceeded_task_budget(
+        &self,
+        task_id: i64,
+        new_max_tokens: u64,
+        new_max_usd: f64,
+        new_max_turns: u32,
+        supervisor_slug: &str,
+        reason: &str,
+    ) -> Result<TaskBudgetResolution> {
+        let mut operation = OperationTimer::start("database_task_budget_resolution")
+            .with_database("tasks")
+            .with_task_id(Some(task_id))
+            .with_worker(supervisor_slug);
+        if supervisor_slug.trim() != "supervisor" {
+            return Err(ArcanaError::Agent(
+                "only the Supervisor can resolve an exceeded task budget".into(),
+            ));
+        }
+        let reason = reason.trim();
+        if reason.is_empty() || reason.len() > 500 {
+            return Err(ArcanaError::Agent(
+                "budget resolution requires a reason between 1 and 500 bytes".into(),
+            ));
+        }
+        crate::budget::validate_budget(
+            Some(new_max_tokens),
+            Some(new_max_usd),
+            Some(new_max_turns),
+        )
+        .map_err(|code| ArcanaError::Agent(format!("Budget validation failed: {code}")))?;
+
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            let task = self
+                .get_by_id(task_id)?
+                .ok_or_else(|| ArcanaError::Agent(format!("Task {task_id} was not found")))?;
+            if task.status.as_str() != "needs_info" || !task.budget_exceeded {
+                return Err(ArcanaError::Agent(
+                    "task is no longer held for an exceeded budget".into(),
+                ));
+            }
+            if new_max_tokens as i64 <= task.budget_tokens_used
+                || new_max_usd <= task.budget_cost_usd
+                || new_max_turns as i64 <= task.budget_turns_used
+            {
+                return Err(ArcanaError::Agent(
+                    "each new task budget limit must exceed its recorded cumulative usage".into(),
+                ));
+            }
+
+            let _authorization = SupervisorApprovalContextGuard::enable(std::sync::Arc::clone(
+                &self.supervisor_approval_context,
+            ));
+            self.conn.execute(
+                "INSERT INTO task_budget_resolutions
+                 (task_id, task_identity, previous_max_tokens, previous_max_usd, previous_max_turns,
+                  new_max_tokens, new_max_usd, new_max_turns, tokens_used, cost_usd,
+                  turns_used, resolved_by, reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'supervisor', ?12)",
+                params![
+                    task_id,
+                    task.task_identity,
+                    task.budget_max_tokens,
+                    task.budget_max_usd,
+                    task.budget_max_turns,
+                    new_max_tokens as i64,
+                    new_max_usd,
+                    new_max_turns as i64,
+                    task.budget_tokens_used,
+                    task.budget_cost_usd,
+                    task.budget_turns_used,
+                    reason,
+                ],
+            )?;
+            let changed = self.conn.execute(
+                "UPDATE tasks SET budget_max_tokens = ?1, budget_max_usd = ?2,
+                 budget_max_turns = ?3, budget_exceeded = 0, budget_exceeded_reason = NULL,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                 WHERE id = ?4 AND status = 'needs_info' AND budget_exceeded = 1",
+                params![
+                    new_max_tokens as i64,
+                    new_max_usd,
+                    new_max_turns as i64,
+                    task_id,
+                ],
+            )?;
+            if changed != 1 {
+                return Err(ArcanaError::Agent(
+                    "task changed while its exceeded budget was being resolved".into(),
+                ));
+            }
+            self.conn
+                .query_row(
+                    TASK_BUDGET_RESOLUTION_HISTORY_SQL,
+                    params![task_id, 1],
+                    row_to_task_budget_resolution,
+                )
+                .map_err(Into::into)
+        })();
+
+        match result {
+            Ok(resolution) => {
+                if let Err(error) = self.conn.execute_batch("COMMIT") {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    return Err(error.into());
+                }
+                operation.with_result_count(1).succeed();
+                Ok(resolution)
+            }
+            Err(error) => {
+                let rollback = self.conn.execute_batch("ROLLBACK");
+                if let Err(rollback_error) = rollback {
+                    return Err(rollback_error.into());
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Return a bounded, newest-first history for the Supervisor's audit reader.
+    pub fn get_task_budget_resolution_history(
+        &self,
+        task_id: i64,
+        limit: usize,
+    ) -> Result<Vec<TaskBudgetResolution>> {
+        let limit = limit.clamp(1, 20);
+        let mut operation = OperationTimer::start("database_task_budget_resolution_read")
+            .with_database("tasks")
+            .with_task_id(Some(task_id));
+        let mut statement = self.conn.prepare(TASK_BUDGET_RESOLUTION_HISTORY_SQL)?;
+        let rows = statement.query_map(
+            params![task_id, limit as i64],
+            row_to_task_budget_resolution,
+        )?;
+        let resolutions = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+        operation = operation.with_result_count(resolutions.len());
+        if resolutions.is_empty() {
+            operation.set_outcome("empty");
+        } else {
+            operation.succeed();
+        }
+        Ok(resolutions)
+    }
+
     /// Persist cumulative budget usage after each agent turn.
     pub fn update_task_budget_usage(
         &self,
@@ -3777,9 +4126,9 @@ impl TasksDb {
     ) -> Result<Task> {
         let mut operation = OperationTimer::start("database_epic_create").with_database("tasks");
         self.conn.execute(
-            "INSERT INTO tasks (title, description, priority, task_type, status, acceptance_criteria, created_by)
-             VALUES (?1, ?2, 'p1', 'epic', 'ready', 'All subtasks complete', ?3)",
-            params![title, description, created_by],
+            "INSERT INTO tasks (title, description, priority, task_type, status, acceptance_criteria, created_by, task_identity)
+             VALUES (?1, ?2, 'p1', 'epic', 'ready', 'All subtasks complete', ?3, ?4)",
+            params![title, description, created_by, uuid::Uuid::new_v4().to_string()],
         )?;
         let id = self.conn.last_insert_rowid();
         let task = self
@@ -3809,8 +4158,8 @@ impl TasksDb {
         self.conn.execute(
             "INSERT INTO tasks (title, description, priority, task_type, status,
                                acceptance_criteria, created_by,
-                               epic_id, phase, phase_order, milestone, blocked_by)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                               epic_id, phase, phase_order, milestone, blocked_by, task_identity)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 input.title,
                 input.description,
@@ -3824,6 +4173,7 @@ impl TasksDb {
                 input.phase_order,
                 input.milestone,
                 blocked_by_json,
+                uuid::Uuid::new_v4().to_string(),
             ],
         )?;
         let id = self.conn.last_insert_rowid();
@@ -4258,6 +4608,29 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         // (indices 30, 31). Both are NULL-safe by SQL COALESCE / Option.
         under_review_by: row.get::<_, Option<String>>(30).unwrap_or(None),
         task_qc_cost_usd: row.get::<_, f64>(31).unwrap_or(0.0),
+        task_identity: row.get(32)?,
+    })
+}
+
+fn row_to_task_budget_resolution(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<TaskBudgetResolution> {
+    Ok(TaskBudgetResolution {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        task_identity: row.get(14)?,
+        previous_max_tokens: row.get(2)?,
+        previous_max_usd: row.get(3)?,
+        previous_max_turns: row.get(4)?,
+        new_max_tokens: row.get(5)?,
+        new_max_usd: row.get(6)?,
+        new_max_turns: row.get(7)?,
+        tokens_used: row.get(8)?,
+        cost_usd: row.get(9)?,
+        turns_used: row.get(10)?,
+        resolved_by: row.get(11)?,
+        reason: row.get(12)?,
+        resolved_at: row.get(13)?,
     })
 }
 
@@ -5420,7 +5793,14 @@ mod tests {
             .unwrap();
         db.conn
             .execute_batch(
-                "DROP TRIGGER tasks_qc_review_evidence_guard;
+                "DROP TRIGGER tasks_task_identity_fill_insert;
+                 DROP TRIGGER tasks_task_identity_immutable;
+                 DROP TRIGGER task_budget_resolution_identity_insert_guard;
+                 DROP INDEX idx_tasks_task_identity;
+                 ALTER TABLE tasks DROP COLUMN task_identity;
+                 DROP TRIGGER task_budget_resolution_task_clear_guard;
+                 DROP TABLE task_budget_resolutions;
+                 DROP TRIGGER tasks_qc_review_evidence_guard;
                  DROP TRIGGER tasks_qc_review_insert_guard;
                  DROP TRIGGER build_retry_approval_revoke_on_task_change;
                  DROP TRIGGER build_retry_approval_insert_guard;
@@ -8962,6 +9342,516 @@ mod tests {
     }
 
     #[test]
+    fn task_budget_resolution_preserves_usage_and_other_holds_across_reopen() {
+        let path = sandbox("task-budget-resolution-preserves-holds");
+        let db = TasksDb::open_at(&path).expect("open isolated DB");
+        let task = ready_task(&db, "explicitly resolved budget hold");
+        let blocker = ready_task(&db, "independent dependency hold");
+        db.set_task_budget(task.id, Some(100), Some(1.0), Some(4))
+            .expect("set original budget");
+        db.update_task_budget_usage(task.id, 100, 1.0, 4)
+            .expect("persist cumulative usage");
+        db.update_status(task.id, "assigned", Some("worker-backend"))
+            .expect("assign task before budget hold");
+        db.claim_task_with_pid(task.id, "worker-backend", 812)
+            .expect("claim before budget hold");
+        db.mark_task_budget_exceeded(task.id, "saved budget reached")
+            .expect("persist budget hold");
+        db.conn
+            .execute(
+                "UPDATE tasks SET blocked_by = ?1,
+                    rejection_reason = '[worker recovery] independent reconciliation required'
+                 WHERE id = ?2",
+                params![
+                    serde_json::json!([blocker.id.to_string()]).to_string(),
+                    task.id
+                ],
+            )
+            .expect("persist independent dependency and recovery holds");
+
+        let resolution = db
+            .resolve_exceeded_task_budget(
+                task.id,
+                200,
+                2.0,
+                8,
+                "supervisor",
+                "reviewed diagnosis and approved bounded continuation",
+            )
+            .expect("Supervisor explicitly resolves exceeded budget");
+        assert_eq!(resolution.previous_max_tokens, Some(100));
+        assert_eq!(resolution.previous_max_usd, Some(1.0));
+        assert_eq!(resolution.previous_max_turns, Some(4));
+        assert_eq!(resolution.tokens_used, 100);
+        assert_eq!(resolution.cost_usd, 1.0);
+        assert_eq!(resolution.turns_used, 4);
+        assert_eq!(resolution.resolved_by, "supervisor");
+        assert_eq!(
+            resolution.reason,
+            "reviewed diagnosis and approved bounded continuation"
+        );
+        assert!(resolution.resolved_at.ends_with('Z'));
+
+        let updated = db.get_by_id(task.id).unwrap().unwrap();
+        assert_eq!(updated.status, TaskStatus::NeedsInfo);
+        assert_eq!(updated.assigned_worker.as_deref(), Some("worker-backend"));
+        assert_eq!(updated.blocked_by, Some(vec![blocker.id.to_string()]));
+        assert_eq!(
+            updated.rejection_reason.as_deref(),
+            Some("[worker recovery] independent reconciliation required")
+        );
+        assert_eq!(updated.claimed_by_pid, None);
+        assert_eq!(updated.claim_host, None);
+        assert_eq!(updated.budget_max_tokens, Some(200));
+        assert_eq!(updated.budget_max_usd, Some(2.0));
+        assert_eq!(updated.budget_max_turns, Some(8));
+        assert!(!updated.budget_exceeded);
+        assert_eq!(updated.budget_exceeded_reason, None);
+        assert_eq!(updated.budget_tokens_used, 100);
+        assert_eq!(updated.budget_cost_usd, 1.0);
+        assert_eq!(updated.budget_turns_used, 4);
+        assert!(
+            db.claim_task_with_pid(task.id, "worker-backend", 813)
+                .is_err(),
+            "resolution alone must not dispatch a task with other holds"
+        );
+
+        drop(db);
+        let reopened = TasksDb::open_at(&path).expect("reopen isolated task database");
+        assert_eq!(reopened.schema_version().unwrap(), 22);
+        let history = reopened
+            .get_task_budget_resolution_history(task.id, usize::MAX)
+            .expect("read bounded persisted audit history");
+        assert_eq!(history, vec![resolution]);
+        let _ = std::fs::remove_dir_all(path.parent().expect("test directory"));
+    }
+
+    #[test]
+    fn task_budget_resolution_refuses_workers_insufficient_caps_and_unaudited_sql() {
+        let db = TasksDb::open_at(&sandbox("task-budget-resolution-refusals"))
+            .expect("open isolated DB");
+        let task = ready_task(&db, "held budget task");
+        db.set_task_budget(task.id, Some(100), Some(1.0), Some(4))
+            .unwrap();
+        db.update_task_budget_usage(task.id, 100, 1.0, 4).unwrap();
+        db.mark_task_budget_exceeded(task.id, "budget reached")
+            .unwrap();
+
+        assert!(db
+            .resolve_exceeded_task_budget(task.id, 200, 2.0, 8, "worker-backend", "self approval")
+            .is_err());
+        for caps in [(100, 2.0, 8), (200, 1.0, 8), (200, 2.0, 4)] {
+            assert!(db
+                .resolve_exceeded_task_budget(
+                    task.id,
+                    caps.0,
+                    caps.1,
+                    caps.2,
+                    "supervisor",
+                    "insufficient headroom",
+                )
+                .is_err());
+        }
+        assert!(db
+            .resolve_exceeded_task_budget(task.id, 1_000_001, 2.0, 8, "supervisor", "over ceiling")
+            .is_err());
+
+        db.set_task_budget(task.id, Some(250), Some(2.5), Some(10))
+            .expect("ordinary cap update can change limits");
+        assert!(db.get_by_id(task.id).unwrap().unwrap().budget_exceeded);
+        assert!(db
+            .conn
+            .execute(
+                "UPDATE tasks SET budget_exceeded = 0, budget_exceeded_reason = NULL WHERE id = ?1",
+                params![task.id],
+            )
+            .is_err(), "direct SQL cannot clear the hold without the authorized audit path");
+        assert!(
+            db.conn
+                .execute(
+                    "INSERT INTO task_budget_resolutions
+                 (task_id, new_max_tokens, new_max_usd, new_max_turns, tokens_used,
+                  cost_usd, turns_used, resolved_by, reason)
+                 VALUES (?1, 250, 2.5, 10, 100, 1.0, 4, 'supervisor', 'forged SQL')",
+                    params![task.id],
+                )
+                .is_err(),
+            "direct SQL cannot forge a Supervisor audit row"
+        );
+        assert!(db
+            .get_task_budget_resolution_history(task.id, 20)
+            .unwrap()
+            .is_empty());
+        let still_held = db.get_by_id(task.id).unwrap().unwrap();
+        assert_eq!(still_held.status, TaskStatus::NeedsInfo);
+        assert!(still_held.budget_exceeded);
+        assert_eq!(still_held.budget_max_tokens, Some(250));
+        assert_eq!(still_held.budget_tokens_used, 100);
+    }
+
+    #[test]
+    fn task_budget_resolution_rolls_back_audit_and_hold_clear_atomically() {
+        let path = sandbox("task-budget-resolution-rollback");
+        let db = TasksDb::open_at(&path).expect("open isolated DB");
+        let task = ready_task(&db, "atomic resolution task");
+        db.set_task_budget(task.id, Some(100), Some(1.0), Some(4))
+            .unwrap();
+        db.update_task_budget_usage(task.id, 100, 1.0, 4).unwrap();
+        db.mark_task_budget_exceeded(task.id, "budget reached")
+            .unwrap();
+        db.conn
+            .execute_batch(&format!(
+                "CREATE TRIGGER inject_budget_resolution_failure
+                 BEFORE UPDATE OF budget_exceeded ON tasks WHEN OLD.id = {}
+                 BEGIN SELECT RAISE(ABORT, 'injected budget resolution failure'); END;",
+                task.id
+            ))
+            .expect("inject failure after audit insert");
+        assert!(db
+            .resolve_exceeded_task_budget(task.id, 200, 2.0, 8, "supervisor", "rollback fixture",)
+            .is_err());
+        assert!(db.get_by_id(task.id).unwrap().unwrap().budget_exceeded);
+        assert!(db
+            .get_task_budget_resolution_history(task.id, 10)
+            .unwrap()
+            .is_empty());
+        db.conn
+            .execute_batch("DROP TRIGGER inject_budget_resolution_failure")
+            .expect("remove injected failure");
+        drop(db);
+
+        let reopened = TasksDb::open_at(&path).expect("reopen after rollback");
+        assert!(
+            reopened
+                .get_by_id(task.id)
+                .unwrap()
+                .unwrap()
+                .budget_exceeded
+        );
+        assert!(reopened
+            .get_task_budget_resolution_history(task.id, 10)
+            .unwrap()
+            .is_empty());
+        reopened
+            .resolve_exceeded_task_budget(
+                task.id,
+                200,
+                2.0,
+                8,
+                "supervisor",
+                "approved after failure injection was removed",
+            )
+            .expect("successful retry commits audit and budget change together");
+        drop(reopened);
+
+        let final_db = TasksDb::open_at(&path).expect("reopen committed resolution");
+        let task_after = final_db.get_by_id(task.id).unwrap().unwrap();
+        assert!(!task_after.budget_exceeded);
+        assert_eq!(task_after.budget_tokens_used, 100);
+        assert_eq!(
+            final_db
+                .get_task_budget_resolution_history(task.id, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(path.parent().expect("test directory"));
+    }
+
+    #[test]
+    fn task_budget_resolution_history_is_bounded_immutable_and_indexed() {
+        let path = sandbox("task-budget-resolution-history-plan");
+        let db = TasksDb::open_at(&path).unwrap();
+        let target = ready_task(&db, "bounded resolution history");
+        let unrelated = ready_task(&db, "unrelated resolution history");
+        for task in [&target, &unrelated] {
+            for index in 0..32 {
+                db.mark_task_budget_exceeded(task.id, "history fixture hold")
+                    .unwrap();
+                db.resolve_exceeded_task_budget(
+                    task.id,
+                    1000 + index,
+                    1.0,
+                    10,
+                    "supervisor",
+                    "bounded continuation",
+                )
+                .unwrap();
+            }
+        }
+        let history = db
+            .get_task_budget_resolution_history(target.id, usize::MAX)
+            .unwrap();
+        assert_eq!(history.len(), 20);
+        assert!(history.iter().all(|row| row.task_id == target.id));
+        assert!(history
+            .iter()
+            .all(|row| row.task_identity == target.task_identity));
+        assert!(history.windows(2).all(|pair| pair[0].id > pair[1].id));
+        assert_eq!(history[0].new_max_tokens, 1031);
+        assert!(db
+            .conn
+            .execute(
+                "UPDATE task_budget_resolutions SET reason='changed' WHERE id=?1",
+                [history[0].id]
+            )
+            .is_err());
+        assert!(db
+            .conn
+            .execute(
+                "DELETE FROM task_budget_resolutions WHERE id=?1",
+                [history[0].id]
+            )
+            .is_err());
+        let mut explain = db
+            .conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {TASK_BUDGET_RESOLUTION_HISTORY_SQL}"
+            ))
+            .unwrap();
+        let plan = explain
+            .query_map(params![target.id, 20], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|line| line.contains("idx_task_budget_resolution_history")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|line| line.contains("USE TEMP B-TREE")),
+            "{plan:?}"
+        );
+        // The migration's task-clear guard locates an exact audit row by
+        // primary key and its newest task row through this same task/id index.
+        let guard_plan = db.conn.prepare("EXPLAIN QUERY PLAN SELECT 1 FROM task_budget_resolutions r
+            WHERE r.task_id=?1 AND r.id=(SELECT MAX(latest.id) FROM task_budget_resolutions latest WHERE latest.task_id=?1)")
+            .unwrap().query_map([target.id], |row| row.get::<_, String>(3)).unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>().unwrap();
+        assert!(
+            guard_plan
+                .iter()
+                .any(|line| line.contains("idx_task_budget_resolution_history")),
+            "{guard_plan:?}"
+        );
+        let task_plan = db
+            .conn
+            .prepare("EXPLAIN QUERY PLAN SELECT 1 FROM tasks WHERE id=?1")
+            .unwrap()
+            .query_map([target.id], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(
+            task_plan
+                .iter()
+                .any(|line| line.contains("INTEGER PRIMARY KEY")),
+            "{task_plan:?}"
+        );
+    }
+
+    #[test]
+    fn task_budget_resolution_audit_survives_delete_and_clear_board() {
+        fn resolve_budget(db: &TasksDb, title: &str) -> (Task, TaskBudgetResolution) {
+            let task = ready_task(db, title);
+            db.set_task_budget(task.id, Some(100), Some(1.0), Some(4))
+                .unwrap();
+            db.update_task_budget_usage(task.id, 100, 1.0, 4).unwrap();
+            db.mark_task_budget_exceeded(task.id, "budget reached")
+                .unwrap();
+            let resolution = db
+                .resolve_exceeded_task_budget(
+                    task.id,
+                    200,
+                    2.0,
+                    8,
+                    "supervisor",
+                    "approved bounded continuation",
+                )
+                .unwrap();
+            (task, resolution)
+        }
+
+        let db = TasksDb::from_connection(
+            Connection::open_in_memory().expect("open isolated task database"),
+        )
+        .expect("register fingerprint function");
+        db.migrate().expect("apply task migrations");
+        let (deleted_task, deleted_resolution) = resolve_budget(&db, "deleted resolved task");
+        let (cleared_task, cleared_resolution) = resolve_budget(&db, "cleared resolved task");
+        assert_eq!(deleted_resolution.task_identity, deleted_task.task_identity);
+        assert_eq!(cleared_resolution.task_identity, cleared_task.task_identity);
+
+        db.delete(deleted_task.id)
+            .expect("delete task with an immutable audit row");
+        assert!(db.get_by_id(deleted_task.id).unwrap().is_none());
+        assert_eq!(
+            db.get_task_budget_resolution_history(deleted_task.id, 20)
+                .unwrap(),
+            vec![deleted_resolution.clone()],
+            "the original numeric task ID still selects its audit after deletion"
+        );
+        assert!(db
+            .conn
+            .execute(
+                "UPDATE task_budget_resolutions SET reason='changed' WHERE id=?1",
+                [deleted_resolution.id]
+            )
+            .is_err());
+        assert!(db
+            .conn
+            .execute(
+                "DELETE FROM task_budget_resolutions WHERE id=?1",
+                [deleted_resolution.id]
+            )
+            .is_err());
+
+        db.clear_all().expect("clear board with another audit row");
+        assert!(db.list(None).unwrap().is_empty());
+        assert!(db.get_by_id(cleared_task.id).unwrap().is_none());
+        assert_eq!(
+            db.get_task_budget_resolution_history(cleared_task.id, 20)
+                .unwrap(),
+            vec![cleared_resolution],
+            "Clear Board leaves immutable audit history readable by its original numeric ID"
+        );
+
+        let new_task = ready_task(&db, "task created after clear board");
+        assert!(new_task.id > cleared_task.id);
+        assert_ne!(new_task.task_identity, cleared_task.task_identity);
+        assert!(db
+            .get_task_budget_resolution_history(new_task.id, 20)
+            .unwrap()
+            .is_empty());
+
+        let missing_task_id = i64::MAX;
+        assert!(db
+            .resolve_exceeded_task_budget(
+                missing_task_id,
+                200,
+                2.0,
+                8,
+                "supervisor",
+                "must not create an orphan audit row",
+            )
+            .is_err());
+        assert!(db
+            .get_task_budget_resolution_history(missing_task_id, 20)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn task_identity_is_unique_and_immutable_for_created_tasks() {
+        let db = TasksDb::from_connection(
+            Connection::open_in_memory().expect("open isolated task database"),
+        )
+        .expect("register fingerprint function");
+        db.migrate().expect("apply task migrations");
+        let regular = ready_task(&db, "identity regular task");
+        db.conn
+            .execute(
+                "INSERT INTO tasks (title, status) VALUES ('identity raw insert task', 'ready')",
+                [],
+            )
+            .expect("legacy SQL writer receives an inserted identity");
+        let raw_insert = db.get_by_id(db.conn.last_insert_rowid()).unwrap().unwrap();
+        let epic = db
+            .create_epic("identity epic", None, "supervisor")
+            .expect("create epic through task API");
+        let phased = db
+            .create_phased_task(CreatePhasedTaskInput {
+                epic_id: epic.id.to_string(),
+                phase: "foundation".into(),
+                phase_order: 1,
+                title: "identity phased task".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "chore".into(),
+                acceptance_criteria: "n/a".into(),
+                blocked_by: Vec::new(),
+                milestone: None,
+                created_by: Some("supervisor".into()),
+            })
+            .expect("create phased task through task API");
+
+        let identities = [
+            regular.task_identity.clone(),
+            raw_insert.task_identity,
+            epic.task_identity,
+            phased.task_identity,
+        ];
+        assert!(identities
+            .iter()
+            .all(|identity| { uuid::Uuid::parse_str(identity).is_ok() }));
+        assert_eq!(
+            identities
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            4
+        );
+        assert!(db
+            .conn
+            .execute(
+                "UPDATE tasks SET task_identity='00000000-0000-4000-8000-000000000000' WHERE id=?1",
+                [regular.id]
+            )
+            .is_err());
+        assert_eq!(
+            db.get_by_id(regular.id).unwrap().unwrap().task_identity,
+            regular.task_identity
+        );
+    }
+
+    #[test]
+    fn task_identity_upgrade_backfills_existing_tasks_and_budget_audits() {
+        let db = TasksDb::from_connection(
+            Connection::open_in_memory().expect("open isolated task database"),
+        )
+        .expect("register fingerprint function");
+        db.migrate().expect("apply task migrations");
+        let task = ready_task(&db, "identity migration task");
+        db.set_task_budget(task.id, Some(100), Some(1.0), Some(4))
+            .unwrap();
+        db.update_task_budget_usage(task.id, 100, 1.0, 4).unwrap();
+        db.mark_task_budget_exceeded(task.id, "budget reached")
+            .unwrap();
+        db.resolve_exceeded_task_budget(
+            task.id,
+            200,
+            2.0,
+            8,
+            "supervisor",
+            "approved bounded continuation",
+        )
+        .unwrap();
+
+        db.conn
+            .execute_batch(
+                "DROP TRIGGER tasks_task_identity_fill_insert;
+                 DROP TRIGGER tasks_task_identity_immutable;
+                 DROP TRIGGER task_budget_resolution_identity_insert_guard;
+                 DROP INDEX idx_tasks_task_identity;
+                 ALTER TABLE task_budget_resolutions DROP COLUMN task_identity;
+                 ALTER TABLE tasks DROP COLUMN task_identity;
+                 PRAGMA user_version = 21;",
+            )
+            .expect("restore populated pre-identity schema version 21 fixture");
+        db.migrate().expect("upgrade populated v21 database");
+
+        let upgraded_task = db.get_by_id(task.id).unwrap().unwrap();
+        let upgraded_history = db.get_task_budget_resolution_history(task.id, 20).unwrap();
+        assert!(uuid::Uuid::parse_str(&upgraded_task.task_identity).is_ok());
+        assert_eq!(upgraded_history.len(), 1);
+        assert_eq!(
+            upgraded_history[0].task_identity,
+            upgraded_task.task_identity
+        );
+    }
+
+    #[test]
     fn p8_69_direct_claim_release_budget_and_unblock_follow_lifecycle() {
         let db = TasksDb::open_at(&sandbox("p8-69-writers")).expect("open");
         let claimed = ready_task(&db, "self serve");
@@ -9250,6 +10140,7 @@ mod tests {
     /// nothing else compares them.
     const EXPECTED_COLUMNS: &[&str] = &[
         "id",
+        "task_identity",
         "title",
         "description",
         "priority",
@@ -9435,7 +10326,14 @@ mod tests {
         // and remain parseable by the shared legacy-compatible reader.
         db.conn
             .execute_batch(
-                "DROP TRIGGER tasks_timestamps_canonical_insert;
+                "DROP TRIGGER tasks_task_identity_fill_insert;
+                 DROP TRIGGER tasks_task_identity_immutable;
+                 DROP TRIGGER task_budget_resolution_identity_insert_guard;
+                 DROP INDEX idx_tasks_task_identity;
+                 ALTER TABLE tasks DROP COLUMN task_identity;
+                 DROP TRIGGER task_budget_resolution_task_clear_guard;
+                 DROP TABLE task_budget_resolutions;
+                 DROP TRIGGER tasks_timestamps_canonical_insert;
                  DROP TRIGGER tasks_qc_review_evidence_guard;
                  DROP TRIGGER tasks_qc_review_insert_guard;
                  DROP TRIGGER build_retry_approval_revoke_on_task_change;
@@ -9478,8 +10376,8 @@ mod tests {
         drop(_home);
         let _upgrade_home = crate::db::test_support::with_home(&upgrade_dir);
         let upgraded =
-            TasksDb::open_at(&upgrade_path).expect("run additive migrations through v20");
-        assert_eq!(upgraded.schema_version().unwrap(), 20);
+            TasksDb::open_at(&upgrade_path).expect("run additive migrations through v22");
+        assert_eq!(upgraded.schema_version().unwrap(), 22);
         let blocked_index_exists: bool = upgraded
             .conn
             .query_row(

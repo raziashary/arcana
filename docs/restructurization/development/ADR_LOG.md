@@ -7235,6 +7235,23 @@ readback.
 **Implementation / proof / date.** On 2026-10-06, ADR-0320 is implemented: HooksDb validates and canonically persists execution time rather than insertion time. Invalid input returns a fixed error without reflecting its value or inserting a row. All hook DB checks pass Windows/Linux 11/11, core check passes, and the actual Windows CLI export subprocess reads the hook record (1/1). Annual writer/reader evidence covers 1,106 instants plus a legacy row. The existing three-host CI matrix now executes selected AnalyticsDb/session/hook annual pairs before the separate command corpus, giving macOS a real execution path for this proof. The full timestamp inventory and TG4-19 stay open; no schema or public signature changes. Report: `_verify/P4-57-HOOK-EXECUTION-INSTANT-2026-10-06.md`.
 
 
+## ADR-LOG-RESTRUCT-0324 — Prove budget resolution through its real consumers
+
+**Implementation / evidence / date.** On2026-10-06, the approved ADR-0302/0322 contract now has additive migration21, immutable Supervisor audit, atomic sufficient-headroom resolution, strict supplied-cap validation and bounded task-detail readback. The existing Supervisor recipe gains additive instructions without losing custom text. Ordinary cap edits retain the hold; resolution preserves cumulative usage, assignment, dependencies and recovery/user state, leaving needs_info until normal lifecycle review. Tests cover raw-SQL/self-approval refusal, rollback/reopen, immutable indexed bounded history and production GetTaskTool readback.
+
+**Proof boundary.** Actual saved Supervisor/backend recipes complete both ordinary dependencies and explicitly resolved budget tasks via scheduler/runner/engine/tools: Windows3.26s, Ubuntu4.80s. Exactly one claim and six generations per case. The invalid initial second-scheduler fixture is replaced by isolated child-process cases because the production global is install-once. Budget tests6/6 on both hosts, TasksDb67/67 Windows, recipe migration1/1, registry8/8 and labels1/1 pass; core check passes. The existing three-host matrix now selects the bounded proof. No paid run, user database, owner Calendar or full-platform phase completion is claimed.
+
+
+## ADR-LOG-RESTRUCT-0325 — Budget audit deletion policy requires owner direction
+
+**Finding / date.** On2026-10-06, the focused Luna High review confirms migration21's restrictive task foreign key plus immutable audit rows makes an explicitly resolved task undeletable through existing TasksDb deletion/Clear Board. The implementation checks pass, but they did not cover this consumer. P4-39 remains open at40/59, TG4 remains19/33; this retracts any inference that the current ledger is ready to ship solely from the passing resolution cases.
+
+**Proposed owner choice.** Preserve audit identity/history after task deletion with a non-FK numeric task reference and the authorized insert existence guard; alternatively delete audit history with tasks, or explicitly change UI/task deletion behavior to retain resolved tasks. The first option preserves existing deletion and audit evidence, but the retention contract requires Rule4 direction. Asked with the user question tool; no choice presumed. Source stays uncommitted until resolved and tested.
+
+## ADR-LOG-RESTRUCT-0326 — Replace the fixture-authored resolution with Supervisor execution
+
+**Correction / proof / date.** On 2026-10-06, ADR-0324's six-call resolved case is insufficient evidence of Supervisor-authored resolution: the fixture itself called the tool. The revised real saved-recipe provider loop now inspects the hold, requests the audited resolution, reads its history/usage back, performs the separate lifecycle transition and dispatches. Seven Supervisor plus three worker calls and one claim are asserted; the ordinary case remains three plus three. Windows1/1 (3.12s) and Linux1/1 (2.57s) pass through scheduler/runner/engine/executor. ADR-0325's deletion policy remains pending; no P4-39 closure or count increase. No production contract is changed by this fixture correction.
+
 ## ADR-LOG-RESTRUCT-0327 — Record the final provider stream outcome once
 
 **Observed bug / bounded correction / date.** On2026-10-06, a real loopback Google adapter→AgentEngine→Analytics reader regression fails: stream establishment errors are recorded, but a body/frame error after establishment exits via `chunk?` without the API-failure writer. Establishment recovery is also marked resolved before its body succeeds. Correct this within stream_response using the same classifier, collector, schema and privacy-safe aggregate: defer recovery until full consumption, record a body/replay-validity failure as unresolved once, and never retry a stream after output. No new dependency, schema, egress, retry policy or logging-content contract. The existing owned HTTP seam is available crate-wide only under cfg(test); production API stays unchanged. Exact terminal and retry-then-malformed-stream readback regressions are being verified. P4-51/TG4-25 remain open for the broader matrix.
@@ -7251,7 +7268,6 @@ readback.
 
 **Observed / date / decision pending.** On2026-10-06, real propose_memory→get_memory through the registered ToolExecutor fails JSON consumer parsing on Windows/Linux. The shared redact_result applies free-text regex replacement to serialized JSON, and digits in a long decimal confidence can become an unquoted marker. The actual reader assertion stays intact. Proposed: parse structured output, preserve JSON types, redact string values under existing text rules, and mask sensitive-key values. Alternative: strict structured-field heuristic with validated-ID exceptions. Changing this shared security/consumer boundary requires Rule4 direction; asked in flight, no choice presumed. Candidate Memory matrix is uncommitted. Existing engine/executor/MCP/provider slice is independently verified and does not include this candidate.
 
-
 ## ADR-LOG-RESTRUCT-0331 — Suppress untrusted ACP database diagnostic text
 
 **Reproduced bug / bounded fix / date.** On2026-10-06, the real ACP matrix reaches send_worker_message's SQLite insert and fails its privacy assertion on both hosts: a planted database diagnostic appears in the returned failure. Fix this current-path handler locally with existing ToolResult constructors: fixed storage-unavailable summaries for roster/open failures, and worker_message_persist_failed/database for insert failure with a fixed corrective action. Do not expose SQLite text or receiver/body values; preserve the durable send/ack and partial-broadcast semantics. The action requires checking inbox effects before retry. No database/schema/dependency or global-redaction policy change; the separate JSON-output policy remains pending. Full matrix reruns will prove the negative and valid paths before commit.
@@ -7259,3 +7275,27 @@ readback.
 ## ADR-LOG-RESTRUCT-0332 — Preserve structured tool JSON while redacting sensitive values
 
 **Owner decision / when / where.** Accepted2026-10-09 for P4-51/TG4-25. The real Memory and routing readers fail because whole-output free-text redaction corrupts long numeric JSON values. Parse valid JSON at the existing ToolExecutor result boundary, preserve numeric/boolean/null types, redact string values under the existing text policy, and mask values under sensitive keys. Plain-text output retains its existing policy. Preserve the actual failing readers and add structured-sensitive-field/type/control regressions; do not change tool schemas or weaken error input filtering. This supersedes the pending choice in ADR0330.
+
+## ADR-LOG-RESTRUCT-0333 — Retain immutable budget audit after task deletion
+
+**Owner decision / when / where.** Accepted2026-10-09 for P4-39. Retain the original numeric task ID in the immutable resolution audit without a restrictive task foreign key; validate task existence when recording a resolution. Task deletion and Clear Board must remain usable while resolution history survives. Correct the uncommitted additive migration and prove task deletion, board clearing, audit readback and rejection of a nonexistent task. Preserve the approved Supervisor-only explicit resolution and durable recovery semantics.
+
+## ADR-LOG-RESTRUCT-0335 — Retained task audit requires non-reused identity
+
+**Confirmed finding / date / decision pending.** On2026-10-09 the scoped budget author verified TasksDb.clear_all resets the tasks sqlite_sequence counter. Removing the restrictive audit FK as approved allows board clearing, but a new task can reuse an old audited numeric ID. Reported immediately to the owner: recommend preserving task AUTOINCREMENT across clears; alternative is a separate immutable task identity. Do not close P4-39 or commit a known ambiguous retained-history contract before the choice and negative/positive proof. Ordinary deletion and the existing immutable-audit guard remain separate valid cases.
+
+
+## ADR-LOG-RESTRUCT-0336 — Preserve numeric IDs and immutable task provenance
+
+**Owner decision / date.** Accepted2026-10-09 in response to ADR0335: add separate immutable task identity for provenance AND preserve task IDs across Clear Board. Backfill existing tasks additively, assign unique identity at creation, enforce immutability, and carry identity into retained budget-audit records/readers. New tasks after clearing cannot inherit prior history by reused identity or numeric ID. This supersedes the pending choice; scoped TasksDb implementation and populated-upgrade/deletion/clear/reader tests are required before closure.
+
+## ADR-LOG-RESTRUCT-0338 — Backfill identity inside the migration transaction
+
+**Bounded migration correction / date.** On2026-10-09 review of the new migration22 found that migration21's whole-row immutable audit UPDATE trigger would reject populated audit identity backfill. Drop that update guard only inside migration22's existing atomic transaction, backfill identities, and immediately recreate the identical guard before commit. The guard is never absent in a committed schema; failed migration rolls back. The populated-v21 regression must prove old rows upgrade and remain immutable. Also correct the test-only moved-string fixture and stale latest-schema assertions; no lifecycle/security policy changes.
+
+
+## ADR-LOG-RESTRUCT-0340 — Make retained audit consumable after task deletion
+
+**Owner decision / date.** Accepted2026-10-09 after the scoped Luna review found get_task rejects a deleted parent before reading retained audit. Add an explicit include_deleted_audit option, default false preserving existing missing-task behavior; return bounded audit-only history clearly marked as deleted with numeric/immutable identity, never synthesize a task. Prove the actual registered reader after delete and Clear Board, no-history refusal and default compatibility. This completes the approved retention consumer rather than changing ordinary task lookup semantics.
+
+**Migration correction, ADR0338 follow-up.** The full TasksDb suite caught tasks_updated_at overwriting historical updated_at during identity backfill. Migration22 temporarily drops/recreates the identical timestamp trigger inside its atomic transaction as well as the audit UPDATE guard. The unchanged legacy timestamp assertion now passes; final full Windows TasksDb70/70 passes61.36s. No committed schema lacks either trigger.

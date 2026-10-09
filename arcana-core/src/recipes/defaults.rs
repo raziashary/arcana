@@ -75,6 +75,7 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
 
     migrate_supervisor_request_fairness(recipes_dir)?;
     migrate_persistent_inbox_protocols(recipes_dir)?;
+    migrate_supervisor_budget_resolution(recipes_dir)?;
     migrate_legacy_shell_smoke_examples(recipes_dir)?;
 
     Ok(())
@@ -233,6 +234,34 @@ not a persisted worker recipient.\n\n";
         "DRAIN YOUR ACP INBOX",
         "## Tick protocol",
         QC_BLOCK,
+    )
+}
+
+/// Update installed Supervisors as well as new defaults with the explicit
+/// budget-resolution protocol, preserving unrelated customized instructions.
+fn migrate_supervisor_budget_resolution(recipes_dir: &Path) -> Result<()> {
+    const BUDGET_BLOCK: &str = concat!(
+        "### Budget-exceeded holds\n",
+        "When a task is `needs_info` with `budget_exceeded=true`, inspect its recorded usage,\n",
+        "exceeded reason, dependencies, recovery reason, and other task holds before acting.\n",
+        "Only after reviewing the diagnosis and deciding bounded additional work is justified,\n",
+        "call `set_task_budget` with `resolve_exceeded=true`, a concise `resolution_reason`,\n",
+        "and numeric `max_tokens`, `max_usd`, and `max_turns` values each above the task's\n",
+        "recorded cumulative usage. The tool records the old/new limits, Supervisor, reason,\n",
+        "and time, and reads the audit record back. Raising caps without this explicit flag\n",
+        "does not resolve the hold. Resolution preserves usage and leaves status `needs_info`,\n",
+        "assignment, dependencies, recovery quarantine, and other holds unchanged. It does not\n",
+        "automatically assign or dispatch the task. Use normal lifecycle tools only after\n",
+        "verifying the budget and every other hold has been resolved; leave user or recovery\n",
+        "holds in place and report them when they remain unresolved.\n\n",
+    );
+
+    migrate_recipe_instruction_block(
+        recipes_dir,
+        SUPERVISOR_RECIPE_ID,
+        "resolve_exceeded=true",
+        "### Step 2 — Dispatch READY tasks",
+        BUDGET_BLOCK,
     )
 }
 
@@ -481,6 +510,20 @@ reconciled. If the available operation history/checkpoints cannot prove that a
 repeat is safe, leave the task held and surface its ID and the uncertainty for
 PA review. Preserve the existing OrphanDetector ownership rule for live
 `in_progress` claims.
+
+### Budget-exceeded holds
+When a task is `needs_info` with `budget_exceeded=true`, inspect its recorded usage,
+exceeded reason, dependencies, recovery reason, and other task holds before acting.
+Only after reviewing the diagnosis and deciding bounded additional work is justified,
+call `set_task_budget` with `resolve_exceeded=true`, a concise `resolution_reason`,
+and numeric `max_tokens`, `max_usd`, and `max_turns` values each above the task's
+recorded cumulative usage. The tool records the old/new limits, Supervisor, reason,
+and time, and reads the audit record back. Raising caps without this explicit flag
+does not resolve the hold. Resolution preserves usage and leaves status `needs_info`,
+assignment, dependencies, recovery quarantine, and other holds unchanged. It does not
+automatically assign or dispatch the task. Use normal lifecycle tools only after
+verifying the budget and every other hold has been resolved; leave user or recovery
+holds in place and report them when they remain unresolved.
 
 ### Step 2 — Dispatch READY tasks (BATCH — do this in ONE tool call)
 For every task with `status='ready'` (process in priority order p0 → p1 → p2 → p3,
@@ -2704,6 +2747,39 @@ mod worker_command_protocol_tests {
             migrated,
             std::fs::read_to_string(sandbox.path().join("qc-dispatcher.yaml")).unwrap()
         );
+    }
+
+    #[test]
+    fn installed_supervisor_receives_budget_resolution_protocol_without_losing_custom_text() {
+        let sandbox = tempfile::tempdir().expect("create recipe sandbox");
+        let mut old_supervisor = supervisor_recipe();
+        let start = old_supervisor
+            .instructions
+            .find("### Budget-exceeded holds")
+            .expect("fresh default contains the approved budget-resolution protocol");
+        let end = old_supervisor.instructions[start..]
+            .find("### Step 2 — Dispatch READY tasks")
+            .map(|offset| start + offset)
+            .expect("budget protocol precedes normal dispatch");
+        old_supervisor.instructions.replace_range(start..end, "");
+        old_supervisor
+            .instructions
+            .push_str("\nOwner budget note remains.\n");
+        save_recipe(sandbox.path(), &old_supervisor).expect("write installed legacy recipe");
+
+        ensure_default_recipes(sandbox.path()).expect("migrate installed Supervisor recipe");
+        let path = sandbox.path().join("supervisor-poll.yaml");
+        let migrated = crate::recipes::parser::parse_recipe(
+            &std::fs::read_to_string(&path).expect("read migrated Supervisor recipe"),
+        )
+        .expect("parse migrated Supervisor recipe");
+        assert!(migrated.instructions.contains("resolve_exceeded=true"));
+        assert!(migrated.instructions.contains("Owner budget note remains."));
+        assert!(migrated.instructions.contains("status `needs_info`"));
+
+        let first_migration = std::fs::read_to_string(&path).unwrap();
+        ensure_default_recipes(sandbox.path()).expect("second migration is a no-op");
+        assert_eq!(first_migration, std::fs::read_to_string(&path).unwrap());
     }
 
     #[test]

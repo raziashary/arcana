@@ -1168,15 +1168,17 @@ mod tests {
 
     struct DependencyCompletionProvider {
         dependent_task_id: i64,
+        resolve_budget: bool,
         supervisor_turns: AtomicUsize,
         worker_turns: AtomicUsize,
         requests: Mutex<Vec<CompletionRequest>>,
     }
 
     impl DependencyCompletionProvider {
-        fn new(dependent_task_id: i64) -> Self {
+        fn new(dependent_task_id: i64, resolve_budget: bool) -> Self {
             Self {
                 dependent_task_id,
+                resolve_budget,
                 supervisor_turns: AtomicUsize::new(0),
                 worker_turns: AtomicUsize::new(0),
                 requests: Mutex::new(Vec::new()),
@@ -1257,19 +1259,54 @@ mod tests {
             );
             let response = if is_supervisor {
                 assert!(request.tools.iter().any(|tool| tool.name == "list_tasks"));
-                match self.supervisor_turns.fetch_add(1, Ordering::SeqCst) {
-                    0 => Self::tool_call(
-                        "p4-39-list-ready",
-                        "list_tasks",
-                        serde_json::json!({"status": "ready", "compact": false}),
-                    ),
-                    1 => Self::tool_call(
-                        "p4-39-route-dependent",
-                        "assign_task",
-                        serde_json::json!({"id": self.dependent_task_id}),
-                    ),
-                    2 => Self::final_answer("Routed the newly unblocked dependency."),
-                    turn => panic!("unexpected Supervisor provider turn {turn}"),
+                let turn = self.supervisor_turns.fetch_add(1, Ordering::SeqCst);
+                if self.resolve_budget && turn < 4 {
+                    assert!(prompt.contains("resolve_exceeded=true"));
+                    assert!(request
+                        .tools
+                        .iter()
+                        .any(|tool| tool.name == "set_task_budget"));
+                    match turn {
+                        0 => Self::tool_call(
+                            "p4-39-inspect-hold",
+                            "get_task",
+                            serde_json::json!({"id": self.dependent_task_id}),
+                        ),
+                        1 => Self::tool_call(
+                            "p4-39-resolve-budget",
+                            "set_task_budget",
+                            serde_json::json!({"task_id": self.dependent_task_id,
+                                "resolve_exceeded": true,
+                                "resolution_reason": "reviewed remaining work and approved bounded continuation",
+                                "max_tokens": 100_000, "max_usd": 1.0, "max_turns": 20}),
+                        ),
+                        2 => Self::tool_call(
+                            "p4-39-read-resolution",
+                            "get_task",
+                            serde_json::json!({"id": self.dependent_task_id}),
+                        ),
+                        3 => Self::tool_call(
+                            "p4-39-release-resolved-budget",
+                            "update_task_status",
+                            serde_json::json!({"id": self.dependent_task_id, "status": "ready"}),
+                        ),
+                        _ => unreachable!(),
+                    }
+                } else {
+                    match turn - if self.resolve_budget { 4 } else { 0 } {
+                        0 => Self::tool_call(
+                            "p4-39-list-ready",
+                            "list_tasks",
+                            serde_json::json!({"status": "ready", "compact": false}),
+                        ),
+                        1 => Self::tool_call(
+                            "p4-39-route-dependent",
+                            "assign_task",
+                            serde_json::json!({"id": self.dependent_task_id}),
+                        ),
+                        2 => Self::final_answer("Routed the newly unblocked dependency."),
+                        turn => panic!("unexpected Supervisor provider turn {turn}"),
+                    }
                 }
             } else {
                 assert!(request.tools.iter().any(|tool| tool.name == "claim_task"));
@@ -1305,7 +1342,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dependency_completion_wakes_persisted_supervisor_and_completes_saved_worker_recipe() {
+    async fn scheduler_fleet_dependency_completion_completes_dependent_and_preserves_budget_hold() {
         const CHILD_MARKER: &str = "ARCANA_P4_39_DEPENDENCY_COMPLETION_CHILD";
 
         if std::env::var_os(CHILD_MARKER).is_none() {
@@ -1313,24 +1350,27 @@ mod tests {
                 .name()
                 .expect("Rust test harness names the current test")
                 .to_owned();
-            let output = std::process::Command::new(
-                std::env::current_exe().expect("resolve current Rust test executable"),
-            )
-            .arg("--exact")
-            .arg(test_name)
-            .arg("--nocapture")
-            .env(CHILD_MARKER, "1")
-            .output()
-            .expect("run scheduler fixture in an isolated test process");
-            assert!(
-                output.status.success(),
-                "isolated P4-39 test process failed\nstdout:\n{}\nstderr:\n{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            );
+            for mode in ["ordinary", "resolved-budget"] {
+                let output = std::process::Command::new(
+                    std::env::current_exe().expect("resolve current Rust test executable"),
+                )
+                .arg("--exact")
+                .arg(&test_name)
+                .arg("--nocapture")
+                .env(CHILD_MARKER, mode)
+                .output()
+                .expect("run scheduler fixture in an isolated test process");
+                assert!(
+                    output.status.success(),
+                    "isolated P4-39 test process failed\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
             return;
         }
 
+        let resolved_budget = std::env::var(CHILD_MARKER).unwrap() == "resolved-budget";
         use crate::agent::builtin_tools::{
             claim_task_tool::ClaimTaskTool, update_task_status_tool::UpdateTaskStatusTool,
         };
@@ -1425,7 +1465,15 @@ mod tests {
             .expect("open isolated consent store")
             .grant(workspace.path(), "provider:google")
             .expect("grant only the scripted workspace destination");
-        let provider = Arc::new(DependencyCompletionProvider::new(dependent));
+        let dependent = if resolved_budget {
+            budget_held
+        } else {
+            dependent
+        };
+        let provider = Arc::new(DependencyCompletionProvider::new(
+            dependent,
+            resolved_budget,
+        ));
         let runner = RecipeRunner::new_with_workspace_override(
             Arc::new(Mutex::new(crate::state::AppState {
                 active_provider: Some("google".into()),
@@ -1441,7 +1489,9 @@ mod tests {
         )
         .with_provider_for_test(provider.clone());
         let scheduler = Arc::new(RecipeScheduler::new(Arc::new(runner)));
-        install_global(scheduler.clone());
+        if !resolved_budget {
+            install_global(scheduler.clone());
+        }
 
         let context = |task_id, agent_role: &str, call_id: &str| ToolContext {
             session_id: "p4-39-dependency-completion".into(),
@@ -1469,6 +1519,23 @@ mod tests {
             "prerequisite status tool failed: {}",
             completed.output
         );
+
+        if resolved_budget {
+            // Completion alone still cannot release a budget hold. A separate
+            // Supervisor decision and lifecycle transition are required.
+            assert!(
+                tasks
+                    .get_by_id(budget_held)
+                    .unwrap()
+                    .unwrap()
+                    .budget_exceeded
+            );
+            tasks
+                .update_task_budget_usage(budget_held, 100, 0.01, 1)
+                .unwrap();
+            install_global(scheduler.clone());
+            scheduler.kick_worker("supervisor");
+        }
 
         tokio::time::timeout(Duration::from_secs(30), async {
             loop {
@@ -1499,6 +1566,7 @@ mod tests {
         })
         .await
         .expect("Supervisor and saved worker recipe autonomously complete the dependent");
+        scheduler.shutdown().await;
 
         let dependent_row = tasks
             .get_by_id(dependent)
@@ -1518,46 +1586,103 @@ mod tests {
         assert_eq!(route.worker_slug, "worker-backend");
         assert_eq!(route.outcome.as_deref(), Some("success"));
 
-        let held_before_claim = tasks
-            .get_by_id(budget_held)
-            .expect("read budget-held dependent")
-            .expect("budget-held dependent remains persisted");
-        assert_eq!(held_before_claim.status.as_str(), "needs_info");
-        assert!(held_before_claim.budget_exceeded);
-        assert_eq!(
-            held_before_claim.budget_exceeded_reason.as_deref(),
-            Some("saved task budget was reached")
-        );
-        let held_claim = ClaimTaskTool
-            .execute(
-                serde_json::json!({"task_id": budget_held}),
-                &context(
-                    Some(budget_held),
-                    "worker-platform",
-                    "p4-39-claim-budget-held",
-                ),
-            )
-            .await;
-        assert!(
-            held_claim.is_error,
-            "budget-held task was claimable without explicit resolution: {}",
-            held_claim.output
-        );
-        assert_eq!(
-            tasks
+        if !resolved_budget {
+            let held_before_claim = tasks
                 .get_by_id(budget_held)
-                .expect("verify held task after refused claim")
-                .expect("held task remains persisted")
-                .status
-                .as_str(),
-            "needs_info"
-        );
+                .expect("read budget-held dependent")
+                .expect("budget-held dependent remains persisted");
+            assert_eq!(held_before_claim.status.as_str(), "needs_info");
+            assert!(held_before_claim.budget_exceeded);
+            assert_eq!(
+                held_before_claim.budget_exceeded_reason.as_deref(),
+                Some("saved task budget was reached")
+            );
+            let held_claim = ClaimTaskTool
+                .execute(
+                    serde_json::json!({"task_id": budget_held}),
+                    &context(
+                        Some(budget_held),
+                        "worker-platform",
+                        "p4-39-claim-budget-held",
+                    ),
+                )
+                .await;
+            assert!(
+                held_claim.is_error,
+                "budget-held task was claimable without explicit resolution: {}",
+                held_claim.output
+            );
+            assert_eq!(
+                tasks
+                    .get_by_id(budget_held)
+                    .expect("verify held task after refused claim")
+                    .expect("held task remains persisted")
+                    .status
+                    .as_str(),
+                "needs_info"
+            );
+        } else {
+            let done = tasks.get_by_id(budget_held).unwrap().unwrap();
+            assert!(!done.budget_exceeded);
+            assert!(done.budget_tokens_used >= 100);
+            assert!(done.budget_turns_used >= 1);
+            assert_eq!(
+                tasks
+                    .get_task_budget_resolution_history(budget_held, 20)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
 
         let requests = provider
             .requests
             .lock()
             .expect("read captured scripted provider requests")
             .clone();
+        assert_eq!(
+            requests.len(),
+            if resolved_budget { 10 } else { 6 },
+            "one Supervisor run and one three-turn backend run must finish without duplicates"
+        );
+        assert_eq!(
+            provider.supervisor_turns.load(Ordering::SeqCst),
+            if resolved_budget { 7 } else { 3 }
+        );
+        assert_eq!(provider.worker_turns.load(Ordering::SeqCst), 3);
+        if resolved_budget {
+            for (call_id, was_exceeded) in [
+                ("p4-39-inspect-hold", true),
+                ("p4-39-read-resolution", false),
+            ] {
+                let detail = requests
+                    .iter()
+                    .flat_map(|request| &request.messages)
+                    .flat_map(|message| &message.content)
+                    .find_map(|content| match content {
+                        MessageContent::ToolResult {
+                            tool_use_id,
+                            name,
+                            content,
+                            is_error,
+                            ..
+                        } if tool_use_id == call_id && name == "get_task" && !is_error => {
+                            Some(content)
+                        }
+                        _ => None,
+                    })
+                    .expect("Supervisor consumes the actual task-detail result");
+                let detail: Value = serde_json::from_str(detail).unwrap();
+                assert_eq!(detail["budget_exceeded"], was_exceeded);
+                assert_eq!(detail["status"], "needs_info");
+                assert_eq!(detail["budget_tokens_used"], 100);
+                assert_eq!(detail["budget_turns_used"], 1);
+                if !was_exceeded {
+                    assert_eq!(detail["budget_resolutions"][0]["resolved_by"], "supervisor");
+                    assert_eq!(detail["budget_resolutions"][0]["task_id"], budget_held);
+                }
+            }
+        }
         let ready_list = requests
             .iter()
             .flat_map(|request| &request.messages)
@@ -1581,7 +1706,9 @@ mod tests {
             .filter_map(|task| task["id"].as_i64())
             .collect::<Vec<_>>();
         assert!(ready_ids.contains(&dependent));
-        assert!(!ready_ids.contains(&budget_held));
+        if !resolved_budget {
+            assert!(!ready_ids.contains(&budget_held));
+        }
 
         assert!(
             requests
@@ -1604,7 +1731,25 @@ mod tests {
                 )),
             "the worker's atomic claim must succeed before completion"
         );
-        scheduler.shutdown().await;
+        let successful_claim_ids = requests
+            .iter()
+            .flat_map(|request| &request.messages)
+            .flat_map(|message| &message.content)
+            .filter_map(|content| match content {
+                MessageContent::ToolResult {
+                    tool_use_id,
+                    name,
+                    is_error: false,
+                    ..
+                } if name == "claim_task" => Some(tool_use_id),
+                _ => None,
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            successful_claim_ids.len(),
+            1,
+            "the dependent must be atomically claimed once across the autonomous run"
+        );
     }
 
     async fn ensure_isolated_test_analytics() {
