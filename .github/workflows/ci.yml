@@ -276,6 +276,15 @@ jobs:
           cargo test -p arcana --lib retention_cleanup_failure_is_visible_through_structured_logs_reader --locked -- --test-threads=1
           cargo test -p arcana --lib hook_retention_failure_is_visible_through_structured_logs_reader --locked -- --test-threads=1
 
+      # TG4-32: the configured writer and shipped export reader must retain
+      # command-stage correlation without exposing opaque provider call IDs.
+      - name: Structured telemetry identity and redaction
+        run: cargo test -p arcana-core --lib observability::logging::tests --locked -- --test-threads=1
+
+      - name: Registered project command to Logs export (TG4-32)
+        if: runner.os != 'macOS'
+        run: cargo test -p arcanactl --test project_command_stage_logs --locked -- --test-threads=1
+
       # Selected TG4-19 producer/reader pairs. This does not substitute for
       # the remaining per-database inventory required to close the gate.
       - name: Annual analytics, session and hook timestamp pairs (TG4-19)

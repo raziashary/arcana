@@ -305,9 +305,38 @@ fn restore_registered_labels(original: &serde_json::Value, output: &mut serde_js
             let is_correlation_uuid = is_correlation_field(field) && is_canonical_uuid(value);
             if is_registered_label || is_correlation_uuid {
                 output.insert(field.clone(), serde_json::Value::String(value.to_owned()));
+            } else if matches!(field.as_str(), "call_id" | "tool_call_id") && !value.is_empty() {
+                output.insert(
+                    field.clone(),
+                    serde_json::Value::String(telemetry_call_id(value)),
+                );
             }
         }
     }
+}
+
+/// Stable, privacy-safe identity for an Arcana telemetry tool call.
+///
+/// Canonical UUIDs retain their existing identity. Compound session/provider
+/// IDs become domain-separated SHA-256-derived UUIDs; their raw text never
+/// bypasses logging redaction. Provider and tool-result IDs are unchanged.
+/// Only designated call fields on Arcana telemetry records use this mapping.
+pub fn telemetry_call_id(raw: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    if is_canonical_uuid(raw) {
+        return raw.to_owned();
+    }
+    let mut hash = Sha256::new();
+    hash.update(b"arcana.telemetry.tool-call.v1\0");
+    hash.update(raw.as_bytes());
+    let digest = hash.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // RFC 9562 version 8 identifies an application-defined deterministic UUID.
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    uuid::Uuid::from_bytes(bytes).to_string()
 }
 
 /// Correlation fields that have Arcana telemetry producers and are consumed
@@ -660,6 +689,43 @@ mod tests {
         assert_eq!(
             redact_telemetry_record(&foreign)["fields"]["operation"],
             "[REDACTED_KEY]"
+        );
+    }
+
+    #[test]
+    fn structured_writer_derives_call_identity_without_exposing_opaque_values() {
+        let raw = "opaque-session-sk-abcdefghijklmnopqrstuvwxyz012345-tool-call";
+        let expected = telemetry_call_id(raw);
+        assert!(is_canonical_uuid(&expected));
+        assert_eq!(telemetry_call_id(raw), expected);
+        assert_ne!(telemetry_call_id(&format!("{raw}-other")), expected);
+        let canonical = uuid::Uuid::new_v4().to_string();
+        assert_eq!(telemetry_call_id(&canonical), canonical);
+        let mut writer = RedactingJsonWriter {
+            inner: Vec::new(),
+            pending: Vec::new(),
+        };
+        let source = serde_json::json!({
+            "target": "arcana::telemetry",
+            "fields": {"call_id":raw, "tool_call_id":raw, "unknown_call_id":raw, "api_key":raw},
+            "span": {"call_id":raw},
+            "spans": [{"tool_call_id":raw}]
+        });
+        writer.write_all(format!("{source}\n").as_bytes()).unwrap();
+        writer.flush().unwrap();
+        let bytes = String::from_utf8(writer.inner).unwrap();
+        assert!(!bytes.contains(raw), "opaque identity must not be exposed");
+        let result: serde_json::Value = serde_json::from_str(bytes.trim()).unwrap();
+        assert_eq!(result["fields"]["call_id"], expected);
+        assert_eq!(result["fields"]["tool_call_id"], expected);
+        assert_eq!(result["span"]["call_id"], expected);
+        assert_eq!(result["spans"][0]["tool_call_id"], expected);
+        assert_ne!(result["fields"]["unknown_call_id"], expected);
+        assert_eq!(result["fields"]["api_key"], "[REDACTED]");
+        let foreign = serde_json::json!({"target":"foreign::telemetry", "fields":{"call_id":raw}});
+        assert_ne!(
+            redact_telemetry_record(&foreign)["fields"]["call_id"],
+            expected
         );
     }
 

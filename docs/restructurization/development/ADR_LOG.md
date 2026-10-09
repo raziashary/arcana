@@ -7303,3 +7303,7 @@ readback.
 ## ADR-LOG-RESTRUCT-0342 — Select the real bridge for every Cargo test harness
 
 **Reproduced bug / bounded correction / date.** On2026-10-09 the new actual ProjectCommand→JSONL→CLI reader test fails before command output because Windows bridge_executable recognizes only core/desktop unit-test basenames, then selects the integration test executable itself as the bridge. Rust test harness main cannot dispatch the private bridge flag. Generalize the existing Cargo deps/name-hash detection to integration harnesses while preserving ordinary installed/debug host paths, and test both positive and negative layouts. This changes test-host routing only; no filesystem/network policy, child permission, argv or installed app path is broadened. Rerun the unchanged real stage/DB/export assertions before claiming proof.
+
+## ADR-LOG-RESTRUCT-0343 — Derive privacy-safe telemetry call identity
+
+**Owner decision / date.** Accepted2026-10-09: derive a stable canonical telemetry UUID from compound session/provider call IDs in designated Arcana telemetry call fields. Keep provider response IDs and tool-result contracts unchanged; retain normal redaction for arbitrary strings, unknown fields and sensitive keys. Derivation must be consistent across event/span ancestry, domain-separated, and proved through actual registered project_command execution, structured writer and CLI export. This is not an exception permitting raw opaque identifiers to bypass redaction.

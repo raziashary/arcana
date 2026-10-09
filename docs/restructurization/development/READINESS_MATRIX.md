@@ -471,3 +471,6 @@ Post-format revalidation update: `cargo fmt --all -- --check` passes. The same p
 
 
 2026-10-09 P4-57 annual worker-history proof: the existing 4,400-instant leap-year/DST writer/readback corpus now verifies every heartbeat and count after production monthly rollup, including the legacy row (4,401 rows pruned). Windows1/1 (37.36s), Linux1/1 (90.30s); the existing CI selector includes the stronger fixture. P4-57/TG4-19 remain open for other timestamp pairs and complete target-host evidence. Evidence: `_verify/P4-57-ANNUAL-WORKER-ROLLUP-2026-10-09.md`.
+
+
+2026-10-09 P4-62 registered command/log consumer proof (ADR-0343): ToolExecutor runs the actual FastDevelopment project_command for a claimed Python build; TasksDb reads a complete passing batch, and the real CLI Logs export reads exactly five successful stage durations under a stable derived telemetry UUID. Raw compound call IDs are absent, original provider/tool-result IDs are unchanged, and missing/wrong-owner claim refusals emit no stage rows. Windows1/1 (111.34s), Linux1/1 (13.65s); logging writer privacy/identity suite10/10 on both. These are whole-fixture times, not compiler measurements. P4-62/TG4-32 remain open for the actual selected-timeout path, finite CLI shutdown, matched platform measurements and macOS execution. Evidence: `_verify/P4-62-COMMAND-LOGS-READER-2026-10-09.md`.
