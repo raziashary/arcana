@@ -2290,15 +2290,34 @@ mod analytics_timestamp_pairs_tests {
             .expect("legacy worker row exists");
         assert_eq!(legacy_worker.last_heartbeat, Some(legacy_timestamp));
 
-        let (monthly_worker, monthly_date, monthly_heartbeat) =
-            worker_rows.first().expect("worker corpus row");
-        db.rollup_and_prune_worker_stats_before(NaiveDate::from_ymd_opt(2025, 1, 1).unwrap())
-            .expect("roll historical worker rows into monthly storage");
-        let monthly = db
-            .get_worker_stats_range(monthly_worker, *monthly_date, *monthly_date)
-            .expect("read worker heartbeat through production range reader")
-            .expect("monthly worker coverage exists");
-        assert_eq!(monthly.last_heartbeat, Some(*monthly_heartbeat));
+        // Include civil dates on either side of the UTC year boundary. A
+        // single sampled month cannot prove that the entire annual corpus
+        // survives the production rollup and historical range reader.
+        let pruned = db
+            .rollup_and_prune_worker_stats_before(NaiveDate::from_ymd_opt(2025, 3, 1).unwrap())
+            .expect("roll the complete annual corpus into monthly storage");
+        assert_eq!(
+            pruned,
+            worker_rows.len() + 1,
+            "all daily and legacy rows pruned"
+        );
+        for (worker_id, date, expected) in &worker_rows {
+            let monthly = db
+                .get_worker_stats_range(worker_id, *date, *date)
+                .expect("read annual heartbeat through production range reader")
+                .expect("monthly worker coverage exists");
+            assert_eq!(
+                monthly.last_heartbeat,
+                Some(*expected),
+                "rolled heartbeat for {worker_id}"
+            );
+            assert_eq!(monthly.tasks_completed, 1, "rolled counts for {worker_id}");
+        }
+        let legacy_monthly = db
+            .get_worker_stats_range(legacy_worker_id, legacy_local_date, legacy_local_date)
+            .expect("read retained legacy heartbeat through production range reader")
+            .expect("legacy monthly coverage exists");
+        assert_eq!(legacy_monthly.last_heartbeat, Some(legacy_timestamp));
     }
 
     #[tokio::test]

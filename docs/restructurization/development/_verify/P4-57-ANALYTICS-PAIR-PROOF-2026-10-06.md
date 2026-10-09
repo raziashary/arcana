@@ -35,3 +35,8 @@ Windows: core retention 23/23, worker-stat 5/5, shared analytics 4/4, CLI export
 1/1, analytics failure Logs reader 1/1, hook failure Logs reader 1/1. The CI
 matrix now selects all six groups on Windows/Linux/macOS; remote current-tree
 results remain pending. No checklist tally changes.
+
+
+## 2026-10-09 stronger historical reader proof
+
+The original monthly-worker sample is superseded by the complete annual heartbeat/count readback, Windows1/1 and Linux1/1. See `P4-57-ANNUAL-WORKER-ROLLUP-2026-10-09.md`. Other timestamp-pair and platform limits above remain.
