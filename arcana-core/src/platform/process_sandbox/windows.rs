@@ -1182,16 +1182,7 @@ fn spawn_experimental_bridge(
 
 fn bridge_executable() -> io::Result<PathBuf> {
     let current_executable = std::env::current_exe()?;
-    let cargo_test_harness = current_executable
-        .parent()
-        .and_then(Path::file_name)
-        .is_some_and(|directory| directory == "deps")
-        && current_executable
-            .file_stem()
-            .and_then(OsStr::to_str)
-            .is_some_and(|name| {
-                name.starts_with("arcana_core-") || name.starts_with("arcana_lib-")
-            });
+    let cargo_test_harness = is_cargo_harness_executable(&current_executable);
 
     if cfg!(test) || cargo_test_harness {
         // Unit-test executables use Rust's test-harness main and cannot enter
@@ -1210,6 +1201,19 @@ fn bridge_executable() -> io::Result<PathBuf> {
         ));
     }
     std::env::current_exe()
+}
+
+// Cargo integration tests use the same deps/<name>-<hash> layout as unit
+// tests; all have a test-harness main instead of Arcana's private entrypoint.
+fn is_cargo_harness_executable(executable: &Path) -> bool {
+    executable.parent().and_then(Path::file_name) == Some(OsStr::new("deps"))
+        && executable
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .and_then(|name| name.rsplit_once('-'))
+            .is_some_and(|(_, hash)| {
+                hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
 }
 
 fn os_to_string(value: &OsStr) -> io::Result<String> {
@@ -2205,6 +2209,25 @@ fn exit_status(code: u32) -> std::process::ExitStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bridge_selection_covers_integration_harnesses_and_preserves_host_paths() {
+        for path in [
+            r"C:\arcana\target\debug\deps\arcana_core-0123456789abcdef.exe",
+            r"C:\arcana\target\debug\deps\project_command_stage_logs-0123456789abcdef.exe",
+        ] {
+            assert!(is_cargo_harness_executable(Path::new(path)));
+        }
+        for path in [
+            r"C:\arcana\target\debug\arcanactl.exe",
+            r"C:\Apps\Arcana\arcana.exe",
+            r"C:\Apps\deps\arcanactl.exe",
+            r"C:\Apps\deps\arcana-not-a-cargo-hash.exe",
+        ] {
+            assert!(!is_cargo_harness_executable(Path::new(path)));
+        }
+    }
+
     use tokio::io::AsyncReadExt;
 
     static ACL_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
