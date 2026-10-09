@@ -753,3 +753,205 @@ mod f19_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod p4_51_probe_planner_matrix_tests {
+    use super::*;
+    use crate::agent::permission::{new_pending_permissions, PermissionMode};
+    use crate::agent::tool_executor::ToolExecutor;
+    use crate::agent::tool_registry::ToolRegistry;
+    use crate::agent::tool_trait::{AgentIdentity, ToolResult};
+    use serde_json::Value;
+
+    const SESSION: &str = "p4-51-probe-planner-matrix";
+
+    async fn invoke_registered(
+        executor: &mut ToolExecutor,
+        registry: &ToolRegistry,
+        name: &str,
+        input: Value,
+        call_id: &str,
+    ) -> ToolResult {
+        let tool = registry
+            .get(name)
+            .unwrap_or_else(|| panic!("FastDevelopment registry is missing {name}"));
+        let results = executor
+            .execute_batch(vec![(tool, input, call_id.to_string())])
+            .await
+            .expect("registered tool call returns a result");
+        assert_eq!(results.len(), 1, "one result for {name}");
+        let (returned_call_id, result) = results.into_iter().next().expect("one result");
+        assert_eq!(
+            returned_call_id, call_id,
+            "executor preserves original call ID"
+        );
+        result
+    }
+
+    fn assert_normalized_failure(
+        result: &ToolResult,
+        tool_name: &str,
+        call_id: &str,
+        private_marker: &str,
+    ) {
+        assert!(result.is_error, "{tool_name} failure must remain an error");
+        assert!(
+            result.output.len() <= 8 * 1024,
+            "bounded error for {tool_name}"
+        );
+        assert!(
+            !result.output.contains(private_marker),
+            "{tool_name} error reflected planted input {private_marker}"
+        );
+        let envelope: Value =
+            serde_json::from_str(&result.output).expect("versioned JSON failure envelope");
+        assert_eq!(envelope["schema_version"], 1, "{tool_name}");
+        assert_eq!(envelope["ok"], false, "{tool_name} failure shape");
+        assert_eq!(envelope["error"]["tool"], tool_name, "{tool_name}");
+        assert_eq!(
+            envelope["error"]["operation"],
+            format!("tool.{tool_name}"),
+            "{tool_name} operation"
+        );
+        assert_eq!(
+            envelope["error"]["context"]["session_id"], SESSION,
+            "{tool_name} session correlation"
+        );
+        assert_eq!(
+            envelope["error"]["context"]["tool_call_id"],
+            format!("{SESSION}-{call_id}"),
+            "{tool_name} normalized call correlation"
+        );
+        for field in [
+            "error_code",
+            "category",
+            "message",
+            "cause",
+            "suggested_action",
+        ] {
+            assert!(
+                envelope["error"][field].as_str().is_some(),
+                "{tool_name} has string {field}: {envelope}"
+            );
+        }
+        for field in ["message", "cause", "suggested_action"] {
+            assert!(
+                envelope["error"][field].as_str().unwrap_or_default().len() <= 512,
+                "{tool_name} {field} is bounded"
+            );
+        }
+        assert!(envelope["error"]["retryable"].is_boolean(), "{tool_name}");
+        assert!(
+            envelope["error"]["retry_after_ms"].is_null()
+                || envelope["error"]["retry_after_ms"].is_u64(),
+            "{tool_name} retry delay is optional and numeric"
+        );
+        assert!(
+            envelope["error"]["timestamp"].as_str().is_some(),
+            "{tool_name} timestamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_and_planner_registered_matrix_uses_executor_and_real_reader() {
+        use crate::agent::{builtin_tools, PAMode};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home and planner database");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated builtin workspace");
+        let mut registry = ToolRegistry::new();
+        builtin_tools::register_for_mode(&mut registry, PAMode::FastDevelopment);
+        assert!(
+            registry.get("planner").is_some(),
+            "planner is a live registration"
+        );
+        assert!(
+            registry.get("e2e_probe").is_some(),
+            "probe is a live registration"
+        );
+
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            new_pending_permissions(),
+            SESSION.into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::supervisor(),
+        );
+
+        let created = invoke_registered(
+            &mut executor,
+            &registry,
+            "planner",
+            json!({
+                "yaml_dsl": "action: create\ntitle: P4-51 planner reader proof\ndescription: isolated executor matrix\nsession_id: p4-51-probe-planner-matrix\n"
+            }),
+            "planner-create",
+        )
+        .await;
+        assert!(
+            !created.is_error,
+            "planner create output: {}",
+            created.output
+        );
+        let created_json: Value =
+            serde_json::from_str(&created.output).expect("planner create result is JSON");
+        let plan_id = created_json["id"]
+            .as_str()
+            .expect("created plan exposes persisted ID")
+            .to_string();
+
+        let reread = invoke_registered(
+            &mut executor,
+            &registry,
+            "planner",
+            json!({"yaml_dsl": format!("action: getPlan\nplan_id: {plan_id}\n")}),
+            "planner-reader",
+        )
+        .await;
+        assert!(
+            !reread.is_error,
+            "planner getPlan output: {}",
+            reread.output
+        );
+        let reread_json: Value =
+            serde_json::from_str(&reread.output).expect("planner reader result is JSON");
+        assert_eq!(reread_json["id"], plan_id);
+        assert_eq!(reread_json["title"], "P4-51 planner reader proof");
+
+        let planner_failure = invoke_registered(
+            &mut executor,
+            &registry,
+            "planner",
+            json!({"yaml_dsl": "private: PRIVATE_PLANNER_MATRIX_ARGUMENT\n"}),
+            "planner-failure",
+        )
+        .await;
+        assert_normalized_failure(
+            &planner_failure,
+            "planner",
+            "planner-failure",
+            "PRIVATE_PLANNER_MATRIX_ARGUMENT",
+        );
+
+        // Fail before URL validation, process creation, or HTTP so this probe
+        // check stays deterministic and performs no external activity.
+        let probe_failure = invoke_registered(
+            &mut executor,
+            &registry,
+            "e2e_probe",
+            json!({
+                "start_cmds": [],
+                "probe_url": "PRIVATE_PROBE_MATRIX_ARGUMENT",
+                "expected_text": "unused"
+            }),
+            "probe-validation-failure",
+        )
+        .await;
+        assert_normalized_failure(
+            &probe_failure,
+            "e2e_probe",
+            "probe-validation-failure",
+            "PRIVATE_PROBE_MATRIX_ARGUMENT",
+        );
+    }
+}
