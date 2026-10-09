@@ -998,4 +998,458 @@ mod tests {
             dir.path().canonicalize().unwrap()
         );
     }
+
+    fn claim_worker_task(worker: &str) -> (crate::db::tasks::TasksDb, i64) {
+        let tasks = crate::db::tasks::TasksDb::open().expect("open isolated task database");
+        let task = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "registered shell and git executor matrix".into(),
+                description: Some("isolated deterministic executor fixture".into()),
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "registered git and shell tools execute through ToolExecutor"
+                    .into(),
+                created_by: Some("p4-51-test".into()),
+            })
+            .expect("create isolated task");
+        tasks
+            .update_status(task.id, "assigned", Some(worker))
+            .expect("assign task to test worker");
+        tasks
+            .claim_task_with_pid(task.id, worker, std::process::id())
+            .expect("atomically claim task for test worker");
+        let claimed = tasks
+            .get_by_id(task.id)
+            .expect("read claimed task")
+            .expect("claimed task exists");
+        assert_eq!(claimed.status.as_str(), "in_progress");
+        assert_eq!(claimed.assigned_worker.as_deref(), Some(worker));
+        (tasks, task.id)
+    }
+
+    fn fastdevelopment_tool(name: &str) -> std::sync::Arc<dyn Tool> {
+        let mut registry = crate::agent::tool_registry::ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        registry
+            .get(name)
+            .unwrap_or_else(|| panic!("FastDevelopment registry is missing {name}"))
+    }
+
+    fn assert_executor_failure(
+        result: &ToolResult,
+        tool: &str,
+        session_id: &str,
+        run_id: &str,
+        worker: &str,
+        task_id: i64,
+        tool_use_id: &str,
+        private_values: &[&str],
+    ) -> serde_json::Value {
+        assert!(
+            result.is_error,
+            "executor must mark {tool} failure as an error"
+        );
+        let envelope: serde_json::Value =
+            serde_json::from_str(&result.output).expect("executor failure must be JSON");
+        assert!(
+            result.output.len() <= 4096,
+            "failure envelope must stay bounded"
+        );
+        assert_eq!(envelope["schema_version"], 1);
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(envelope["tool"], tool);
+        assert_eq!(envelope["operation"], format!("tool.{tool}"));
+        assert!(envelope["error_code"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert!(envelope["category"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert!(envelope["retryable"].is_boolean());
+        assert!(envelope["retry_after_ms"].is_null() || envelope["retry_after_ms"].is_number());
+        for field in ["message", "cause", "suggested_action"] {
+            let value = envelope[field]
+                .as_str()
+                .unwrap_or_else(|| panic!("{field} must be a string: {envelope}"));
+            assert!(!value.is_empty(), "{field} must be actionable");
+            assert!(value.chars().count() <= 512, "{field} must stay bounded");
+        }
+        assert!(envelope["timestamp"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        assert_eq!(envelope["run_id"], run_id);
+        assert_eq!(envelope["agent_id"], worker);
+        assert_eq!(envelope["task_id"], task_id);
+        assert_eq!(envelope["context"]["session_id"], session_id);
+        assert_eq!(envelope["context"]["agent_id"], worker);
+        assert_eq!(envelope["context"]["task_id"], task_id);
+        assert_eq!(envelope["context"]["run_id"], run_id);
+        assert_eq!(
+            envelope["context"]["tool_call_id"],
+            format!("{session_id}-{tool_use_id}")
+        );
+        for value in private_values {
+            assert!(
+                !result.output.contains(value),
+                "private input leaked: {value}"
+            );
+        }
+        envelope
+    }
+
+    #[tokio::test]
+    async fn registered_tool_git_commit_success_and_guard_failure_reach_executor() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let worker = "worker-p4-51-git";
+        let (tasks, task_id) = claim_worker_task(worker);
+        let (workspace, repo) = repo();
+        branch_to_fleet(&repo);
+        fs::write(workspace.path().join("named-change.txt"), "named change\n").unwrap();
+        fs::write(
+            workspace.path().join("leave-alone.txt"),
+            "sibling content\n",
+        )
+        .unwrap();
+        let canonical_workspace = workspace.path().canonicalize().unwrap();
+        let tool = fastdevelopment_tool("git_commit");
+        let session_id = "p4-51-registered-git-session";
+        let runs = crate::db::runs::RunsDb::open().expect("open isolated run ledger");
+        let run_id = runs
+            .begin_worker_tick(worker, session_id)
+            .expect("begin actual worker run");
+        let mut executor = crate::agent::tool_executor::ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            session_id.into(),
+            canonical_workspace.to_string_lossy().into_owned(),
+            crate::agent::tool_trait::AgentIdentity::worker(worker),
+        )
+        .with_run_id(Some(run_id.clone()));
+        executor.set_task_id(Some(task_id));
+
+        let success = executor
+            .execute_batch(vec![(
+                tool.clone(),
+                json!({
+                    "paths": ["named-change.txt"],
+                    "message": "fix(core): commit the named file\n\nThe executor fixture commits only the requested path."
+                }),
+                "git-success".into(),
+            )])
+            .await
+            .expect("execute registered git_commit")
+            .remove(0)
+            .1;
+
+        assert!(
+            !success.is_error,
+            "registered git_commit should succeed: {success:?}"
+        );
+        assert!(success.output.starts_with("Committed task changes as "));
+        let head = repo.head().unwrap();
+        assert_eq!(head.shorthand(), Some("arcana/fleet"));
+        let commit = head.peel_to_commit().unwrap();
+        assert!(repo.find_commit(commit.id()).is_ok());
+        let tree = commit.tree().unwrap();
+        let named = tree
+            .get_path(Path::new("named-change.txt"))
+            .expect("commit contains the named working file")
+            .to_object(&repo)
+            .unwrap()
+            .peel_to_blob()
+            .unwrap();
+        assert_eq!(named.content(), b"named change\n");
+        assert!(tree.get_path(Path::new("leave-alone.txt")).is_err());
+        assert_eq!(
+            fs::read(workspace.path().join("leave-alone.txt")).unwrap(),
+            b"sibling content\n"
+        );
+        // The handler opened a separate Repository. Reload this fixture's
+        // cached index before observing its committed state.
+        let mut current_index = repo.index().unwrap();
+        current_index.read(true).unwrap();
+        assert!(index_changed_paths(&repo, &current_index)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            tasks.get_by_id(task_id).unwrap().unwrap().status.as_str(),
+            "in_progress"
+        );
+
+        fs::write(
+            workspace.path().join("negative-change.txt"),
+            "must remain uncommitted\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace.path().join("pre-staged-sibling.txt"),
+            "preserve staged sibling\n",
+        )
+        .unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("pre-staged-sibling.txt")).unwrap();
+        index.write().unwrap();
+        let index_before = index_changed_paths(&repo, &index).unwrap();
+        let sibling_entry_before = index
+            .get_path(Path::new("pre-staged-sibling.txt"), 0)
+            .expect("pre-staged sibling entry")
+            .id;
+        let head_before = repo.head().unwrap().target();
+        let sibling_before = fs::read(workspace.path().join("pre-staged-sibling.txt")).unwrap();
+        let negative = executor
+            .execute_batch(vec![(
+                tool,
+                json!({
+                    "paths": ["negative-change.txt", "PRIVATE_ARGUMENT_CANARY.txt"],
+                    "message": "fix(core): refuse unsafe mix PRIVATE_PROMPT_CANARY\n\nPRIVATE_SOURCE_CANARY PRIVATE_KEY_CANARY"
+                }),
+                "git-guard-failure".into(),
+            )])
+            .await
+            .expect("execute registered git_commit guard failure")
+            .remove(0)
+            .1;
+        let envelope = assert_executor_failure(
+            &negative,
+            "git_commit",
+            session_id,
+            &run_id,
+            worker,
+            task_id,
+            "git-guard-failure",
+            &[
+                "PRIVATE_KEY_CANARY",
+                "PRIVATE_PROMPT_CANARY",
+                "PRIVATE_SOURCE_CANARY",
+                "PRIVATE_ARGUMENT_CANARY.txt",
+            ],
+        );
+        assert_eq!(envelope["error_code"], "tool_operation_failed");
+        assert_eq!(envelope["category"], "tool_execution");
+        assert_eq!(repo.head().unwrap().target(), head_before);
+        let index_after = repo.index().unwrap();
+        assert_eq!(
+            index_changed_paths(&repo, &index_after).unwrap(),
+            index_before
+        );
+        assert_eq!(
+            index_after
+                .get_path(Path::new("pre-staged-sibling.txt"), 0)
+                .unwrap()
+                .id,
+            sibling_entry_before
+        );
+        assert_eq!(
+            fs::read(workspace.path().join("pre-staged-sibling.txt")).unwrap(),
+            sibling_before
+        );
+        assert_eq!(
+            fs::read(workspace.path().join("negative-change.txt")).unwrap(),
+            b"must remain uncommitted\n"
+        );
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    async fn execute_registered_bash_with_response(
+        workspace: &Path,
+        task_id: i64,
+        worker: &str,
+        session_id: &str,
+        run_id: &str,
+        tool_use_id: &str,
+        command: &str,
+        response: crate::agent::permission::PermissionResponse,
+    ) -> ToolResult {
+        use crate::agent::permission::{new_pending_permissions, PermissionMode};
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let pending = new_pending_permissions();
+        let responder_map = Arc::clone(&pending);
+        let mut executor = crate::agent::tool_executor::ToolExecutor::new(
+            PermissionMode::Autonomous,
+            pending,
+            session_id.into(),
+            workspace.to_string_lossy().into_owned(),
+            crate::agent::tool_trait::AgentIdentity::worker(worker),
+        )
+        .with_run_id(Some(run_id.into()));
+        executor.set_task_id(Some(task_id));
+        let tool = fastdevelopment_tool("bash");
+        let tool_use_id_owned = tool_use_id.to_string();
+        let input = json!({"command": command});
+        let execution = tokio::spawn(async move {
+            executor
+                .execute_batch(vec![(tool, input, tool_use_id_owned)])
+                .await
+        });
+        let permission_id = format!("{session_id}-{tool_use_id}");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if responder_map
+                    .lock()
+                    .expect("pending permission mutex")
+                    .contains_key(&permission_id)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("registered Bash must request per-call host approval");
+        responder_map
+            .lock()
+            .expect("pending permission mutex")
+            .remove(&permission_id)
+            .expect("one-use pending responder")
+            .send(response)
+            .expect("permission waiter still active");
+        let results = execution
+            .await
+            .expect("registered Bash executor task")
+            .expect("registered Bash batch");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, tool_use_id);
+        assert!(
+            responder_map
+                .lock()
+                .expect("pending permission mutex")
+                .is_empty(),
+            "the one-use permission request must be drained"
+        );
+        results.into_iter().next().unwrap().1
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[tokio::test]
+    async fn registered_tool_bash_success_nonzero_and_denial_reach_executor() {
+        use crate::agent::permission::PermissionResponse;
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let worker = "worker-p4-51-bash";
+        let (_tasks, task_id) = claim_worker_task(worker);
+        let workspace_guard = tempfile::tempdir().expect("isolated canonical shell workspace");
+        let workspace = workspace_guard.path().canonicalize().unwrap();
+        let session_id = "p4-51-registered-bash-session";
+        let runs = crate::db::runs::RunsDb::open().expect("open isolated run ledger");
+        let run_id = runs
+            .begin_worker_tick(worker, session_id)
+            .expect("begin actual worker run");
+        let success_command = if cfg!(windows) {
+            "echo ARCANA_SHELL_MARKER> bash-marker.txt"
+        } else {
+            "printf '%s' 'ARCANA_SHELL_MARKER' > bash-marker.txt"
+        };
+        let success = execute_registered_bash_with_response(
+            &workspace,
+            task_id,
+            worker,
+            session_id,
+            &run_id,
+            "bash-success",
+            success_command,
+            PermissionResponse::Allow,
+        )
+        .await;
+        assert!(
+            !success.is_error,
+            "registered Bash should succeed: {success:?}"
+        );
+        assert_eq!(
+            fs::read(workspace.join("bash-marker.txt")).unwrap(),
+            if cfg!(windows) {
+                b"ARCANA_SHELL_MARKER\r\n".as_slice()
+            } else {
+                b"ARCANA_SHELL_MARKER".as_slice()
+            }
+        );
+
+        let nonzero_command = if cfg!(windows) {
+            concat!(
+                "echo PRIVATE_KEY_CANARY PRIVATE_PROMPT_CANARY ",
+                "PRIVATE_SOURCE_CANARY PRIVATE_ARGUMENT_CANARY & exit /b 17"
+            )
+        } else {
+            concat!(
+                "printf '%s' 'PRIVATE_KEY_CANARY PRIVATE_PROMPT_CANARY ",
+                "PRIVATE_SOURCE_CANARY PRIVATE_ARGUMENT_CANARY'; exit 17"
+            )
+        };
+        let nonzero = execute_registered_bash_with_response(
+            &workspace,
+            task_id,
+            worker,
+            session_id,
+            &run_id,
+            "bash-nonzero",
+            nonzero_command,
+            PermissionResponse::Allow,
+        )
+        .await;
+        let nonzero_envelope = assert_executor_failure(
+            &nonzero,
+            "bash",
+            session_id,
+            &run_id,
+            worker,
+            task_id,
+            "bash-nonzero",
+            &[
+                "PRIVATE_KEY_CANARY",
+                "PRIVATE_PROMPT_CANARY",
+                "PRIVATE_SOURCE_CANARY",
+                "PRIVATE_ARGUMENT_CANARY",
+            ],
+        );
+        assert_eq!(nonzero_envelope["error_code"], "process_exit_nonzero");
+        assert_eq!(nonzero_envelope["category"], "command_exit");
+
+        let denied_marker = workspace.join("denied-marker.txt");
+        let denied_command = if cfg!(windows) {
+            concat!(
+                "echo PRIVATE_KEY_CANARY PRIVATE_PROMPT_CANARY ",
+                "PRIVATE_SOURCE_CANARY PRIVATE_ARGUMENT_CANARY> denied-marker.txt"
+            )
+        } else {
+            concat!(
+                "printf '%s' 'PRIVATE_KEY_CANARY PRIVATE_PROMPT_CANARY ",
+                "PRIVATE_SOURCE_CANARY PRIVATE_ARGUMENT_CANARY' > denied-marker.txt"
+            )
+        };
+        let denied = execute_registered_bash_with_response(
+            &workspace,
+            task_id,
+            worker,
+            session_id,
+            &run_id,
+            "bash-denied",
+            denied_command,
+            PermissionResponse::Deny,
+        )
+        .await;
+        let denied_envelope = assert_executor_failure(
+            &denied,
+            "bash",
+            session_id,
+            &run_id,
+            worker,
+            task_id,
+            "bash-denied",
+            &[
+                "PRIVATE_KEY_CANARY",
+                "PRIVATE_PROMPT_CANARY",
+                "PRIVATE_SOURCE_CANARY",
+                "PRIVATE_ARGUMENT_CANARY",
+            ],
+        );
+        assert_eq!(denied_envelope["error_code"], "permission_denied");
+        assert_eq!(denied_envelope["category"], "permission");
+        assert!(!denied_marker.exists(), "denied Bash command must not run");
+    }
 }

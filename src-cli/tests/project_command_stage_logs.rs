@@ -216,7 +216,13 @@ async fn claimed_python_build_stages_survive_jsonl_writer_and_cli_export() {
         std::time::Duration::from_secs(120),
         timeout_executor.execute_batch(vec![(
             registry.get("project_command").unwrap(),
-            serde_json::json!({"intent":"test", "toolchain":"python", "timeout_secs":30}),
+            serde_json::json!({
+                "intent":"test", "toolchain":"python", "timeout_secs":30,
+                "api_key":"P4_PRIVATE_PROJECT_KEY_CANARY",
+                "prompt":"P4_PRIVATE_PROJECT_PROMPT_CANARY",
+                "source":"P4_PRIVATE_PROJECT_SOURCE_CANARY",
+                "command":"P4_PRIVATE_PROJECT_ARGUMENT_CANARY"
+            }),
             timeout_provider_id.clone(),
         )]),
     )
@@ -232,6 +238,35 @@ async fn claimed_python_build_stages_survive_jsonl_writer_and_cli_export() {
         "{timeout_failure}"
     );
     assert_eq!(timeout_failure["category"], "timeout");
+    assert_eq!(timeout_failure["schema_version"], 1);
+    assert_eq!(timeout_failure["ok"], false);
+    assert_eq!(timeout_failure["tool"], "project_command");
+    assert_eq!(timeout_failure["operation"], "tool.project_command");
+    assert_eq!(timeout_failure["agent_id"], "worker-backend");
+    assert_eq!(timeout_failure["task_id"], task.id);
+    assert_eq!(timeout_failure["context"]["tool_call_id"], timeout_raw_id);
+    assert!(timeout_failure["retryable"].is_boolean());
+    assert!(timeout_failure["timestamp"]
+        .as_str()
+        .is_some_and(|s| !s.is_empty()));
+    assert!(timeout_results[0].1.output.len() <= 8192);
+    for field in ["message", "cause", "suggested_action"] {
+        let value = timeout_failure[field]
+            .as_str()
+            .expect("required failure field");
+        assert!(!value.is_empty() && value.len() <= 512, "{field}");
+    }
+    for marker in [
+        "P4_PRIVATE_PROJECT_KEY_CANARY",
+        "P4_PRIVATE_PROJECT_PROMPT_CANARY",
+        "P4_PRIVATE_PROJECT_SOURCE_CANARY",
+        "P4_PRIVATE_PROJECT_ARGUMENT_CANARY",
+    ] {
+        assert!(
+            !timeout_results[0].1.output.contains(marker),
+            "private input reflected: {marker}"
+        );
+    }
     assert!(workspace.0.join("descendant-started.txt").is_file());
     let heartbeat = workspace.0.join("descendant-heartbeat.txt");
     let stopped_length = std::fs::metadata(&heartbeat)

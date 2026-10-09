@@ -409,10 +409,17 @@ mod consent_tests {
 
     #[tokio::test]
     async fn analyze_diff_tool_executes_repository_diff_without_consent_or_provider_key() {
+        use crate::agent::{
+            builtin_tools, permission::PermissionMode, tool_executor::ToolExecutor,
+            tool_registry::ToolRegistry, PAMode,
+        };
+        use crate::db::tasks::{CreateTaskInput, TasksDb};
+
         let home = tempfile::tempdir().expect("isolated Arcana data root");
         let _home = crate::db::test_support::with_home(home.path());
         let workspace = home.path().join("workspace");
         let repo_path = workspace.join("repo");
+        let source_canary = "DIFF_SOURCE_CANARY_b482";
         fs::create_dir_all(&repo_path).expect("create test workspace");
         let mut options = git2::RepositoryInitOptions::new();
         options.initial_head("main");
@@ -439,32 +446,57 @@ mod consent_tests {
         commit_file(
             &repo,
             "README.md",
-            "Calendar baseline\nAdded event planning\n",
+            &format!("Calendar baseline\nAdded event planning\n{source_canary}\n"),
             "feature",
         );
 
-        let context = ToolContext {
-            session_id: "analyze-diff-consent-test".into(),
-            working_dir: workspace.to_string_lossy().into_owned(),
-            call_id: "analyze-diff-call".into(),
-            run_id: None,
-            task_id: None,
-            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
-            depth: 0,
-            agent_role: "qc-agent".into(),
+        let task = TasksDb::open()
+            .expect("open isolated task database")
+            .create(CreateTaskInput {
+                title: "diff executor matrix task".into(),
+                description: Some("isolated persistence fixture".into()),
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "analysis is persisted".into(),
+                created_by: Some("test".into()),
+            })
+            .expect("create isolated task");
 
-            run_token_budget: None,
-        };
-        let result = AnalyzeDiffTool
-            .execute(
+        let run_id = crate::db::runs::RunsDb::open()
+            .expect("open isolated run ledger")
+            .begin_worker_tick("supervisor", "analyze-diff-consent-test")
+            .expect("begin durable supervisor run");
+        let mut registry = ToolRegistry::new();
+        builtin_tools::register_for_mode(&mut registry, PAMode::FastDevelopment);
+        let tool = registry
+            .get("analyze_diff")
+            .expect("FastDevelopment registers analyze_diff");
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            "analyze-diff-consent-test".into(),
+            workspace.to_string_lossy().into_owned(),
+            crate::agent::tool_trait::AgentIdentity::supervisor(),
+        )
+        .with_run_id(Some(run_id.clone()));
+        executor.set_task_id(Some(task.id));
+
+        let result = executor
+            .execute_batch(vec![(
+                tool.clone(),
                 json!({
                     "repo_path": repo_path,
                     "base_branch": "main",
-                    "head_branch": "feature/calendar"
+                    "head_branch": "feature/calendar",
+                    "task_id": task.id
                 }),
-                &context,
-            )
-            .await;
+                "deterministic-success".into(),
+            )])
+            .await
+            .expect("registered executor call returns a result");
+        assert_eq!(result.len(), 1);
+        let (returned_call_id, result) = result.into_iter().next().expect("single tool result");
+        assert_eq!(returned_call_id, "deterministic-success");
         assert!(
             !result.is_error,
             "local structural analysis should work: {}",
@@ -484,6 +516,24 @@ mod consent_tests {
             "tool result should explain why provider analysis was skipped"
         );
 
+        let analysis: Value = serde_json::from_str(&result.output)
+            .expect("successful tool result contains analysis JSON");
+        assert_eq!(analysis["analysis_mode"], "deterministic_only");
+        let persisted = TasksDb::open()
+            .expect("reopen isolated task database through application reader")
+            .get_by_id(task.id)
+            .expect("read task through TasksDb")
+            .expect("task still exists");
+        let stored_analysis = persisted
+            .diff_analysis
+            .expect("registered tool persisted diff analysis to the task");
+        assert_eq!(stored_analysis, result.output);
+        assert_eq!(
+            serde_json::from_str::<Value>(&stored_analysis).expect("stored analysis JSON")
+                ["analysis_mode"],
+            "deterministic_only"
+        );
+
         let config = crate::db::config_db::open().expect("open isolated config DB");
         let denied: i64 = config
             .query_row(
@@ -494,5 +544,79 @@ mod consent_tests {
             )
             .expect("read actual tool egress audit");
         assert_eq!(denied, 1, "the production diff tool must audit the refusal");
+
+        let failure_canaries = [
+            "DIFF_PROMPT_CANARY_71f6",
+            "DIFF_KEY_CANARY_09bc",
+            source_canary,
+            "DIFF_ARGUMENT_CANARY_54d1",
+        ];
+        let failure = executor
+            .execute_batch(vec![(
+                tool,
+                json!({
+                    "repo_path": repo_path,
+                    "base_branch": failure_canaries[3],
+                    "prompt": failure_canaries[0],
+                    "api_key": failure_canaries[1],
+                    "source_text": failure_canaries[2],
+                    "task_id": task.id
+                }),
+                "missing-branch".into(),
+            )])
+            .await
+            .expect("malformed registered call returns a result");
+        assert_eq!(failure.len(), 1);
+        let (returned_call_id, failure) = failure.into_iter().next().expect("single failure");
+        assert_eq!(returned_call_id, "missing-branch");
+        assert!(
+            failure.is_error,
+            "missing branch must remain a failed tool result"
+        );
+        assert!(
+            failure.output.len() <= 8 * 1024,
+            "failure envelope is bounded"
+        );
+        let envelope: Value =
+            serde_json::from_str(&failure.output).expect("failure is a structured JSON envelope");
+        assert_eq!(envelope["schema_version"], 1);
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(envelope["error"]["code"], "tool_operation_failed");
+        assert_eq!(envelope["error"]["category"], "tool_execution");
+        assert_eq!(envelope["error"]["operation"], "tool.analyze_diff");
+        assert_eq!(envelope["error"]["tool"], "analyze_diff");
+        assert!(envelope["error"]["message"].as_str().is_some());
+        assert!(envelope["error"]["cause"].as_str().is_some());
+        assert!(envelope["error"]["suggested_action"].as_str().is_some());
+        assert!(envelope["error"]["retryable"].is_boolean());
+        assert!(
+            envelope["error"]["retry_after_ms"].is_null()
+                || envelope["error"]["retry_after_ms"].is_u64()
+        );
+        assert!(envelope["error"]["timestamp"].as_str().is_some());
+        for field in ["message", "cause", "suggested_action"] {
+            assert!(
+                envelope["error"][field].as_str().unwrap_or_default().len() <= 512,
+                "failure {field} is bounded"
+            );
+        }
+        assert_eq!(envelope["error_code"], "tool_operation_failed");
+        assert_eq!(
+            envelope["error"]["context"]["session_id"],
+            "analyze-diff-consent-test"
+        );
+        assert_eq!(envelope["error"]["context"]["agent_id"], "supervisor");
+        assert_eq!(envelope["error"]["context"]["task_id"], task.id);
+        assert_eq!(
+            envelope["error"]["context"]["tool_call_id"],
+            "analyze-diff-consent-test-missing-branch"
+        );
+        assert_eq!(envelope["error"]["context"]["run_id"], run_id);
+        for canary in failure_canaries {
+            assert!(
+                !failure.output.contains(canary),
+                "structured failure must suppress planted input {canary}"
+            );
+        }
     }
 }
