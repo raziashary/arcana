@@ -2797,32 +2797,220 @@ mod procedural_memory_tests {
             "os_error": "planted-private-os-error".repeat(512),
         });
         // These inputs deliberately omit each handler's required fields. They
-        // exercise the real registry and executor, without spawning commands
-        // or requiring network, a provider credential, or shared user state.
-        let names = [
-            "read_file",
-            "write_file",
-            "edit_file",
+        // exercise the real registry and executor without spawning commands,
+        // invoking an MCP request, requiring a provider credential, or using
+        // shared state. Empty-input list queries fail through an isolated
+        // database-open blocker; no database is replaced or kept open.
+        let expected_live_names = [
+            "acknowledge_worker_message",
+            "analyze_diff",
+            "annotate_file",
             "append_file",
-            "get_task",
-            "create_task",
             "assign_task",
-            "set_task_budget",
+            "assign_tasks",
+            "bash",
+            "check_file",
+            "claim_task",
             "create_epic",
-            "list_directory",
-            "grep",
-            "glob",
             "create_phased_task",
+            "create_task",
+            "edit_file",
+            "e2e_probe",
             "get_epic_progress",
+            "get_memory",
             "get_ready_tasks_in_phase",
-            "mcp_list_tools",
+            "get_task",
+            "git_commit",
+            "glob",
+            "grep",
+            "list_directory",
+            "list_memories",
+            "list_stale_worker_messages",
+            "list_tasks",
+            "list_worker_health",
+            "list_worker_messages",
+            "list_worker_requests",
             "mcp_call_tool",
+            "mcp_list_tools",
+            "planner",
+            "project_command",
+            "propose_memory",
+            "read_file",
+            "reconcile_worker_operation",
+            "request_supervisor_action",
+            "resolve_worker_request",
+            "search_memory",
+            "send_worker_message",
+            "set_task_budget",
+            "spawn_parallel_subagents",
+            "spawn_qc_review",
+            "spawn_subagent",
+            "suggest_worker",
+            "update_task_status",
+            "write_file",
+            "write_interface_spec",
         ];
-        for name in names {
-            let mut input = private_arguments.clone();
-            if name == "list_directory" {
-                input["path"] = serde_json::json!("../planted-private-directory-argument");
-            }
+        let cases: Vec<(&str, serde_json::Value)> = vec![
+            ("list_memories", private_arguments.clone()),
+            ("list_tasks", private_arguments.clone()),
+            ("list_worker_messages", private_arguments.clone()),
+            ("list_worker_requests", private_arguments.clone()),
+            ("mcp_list_tools", private_arguments.clone()),
+            ("mcp_call_tool", private_arguments.clone()),
+            ("read_file", private_arguments.clone()),
+            ("write_file", private_arguments.clone()),
+            ("edit_file", private_arguments.clone()),
+            (
+                "bash",
+                serde_json::json!({
+                    "command": "echo planted-bash-denial > denied-shell-marker.txt",
+                    "private_prompt": "planted-private-prompt",
+                    "source": "planted-private-source",
+                    "api_key": "planted-private-credential"
+                }),
+            ),
+            ("git_commit", private_arguments.clone()),
+            ("project_command", private_arguments.clone()),
+            ("check_file", private_arguments.clone()),
+            ("append_file", private_arguments.clone()),
+            ("get_task", private_arguments.clone()),
+            ("create_task", private_arguments.clone()),
+            ("assign_task", private_arguments.clone()),
+            ("set_task_budget", private_arguments.clone()),
+            ("create_epic", private_arguments.clone()),
+            (
+                "list_directory",
+                serde_json::json!({
+                    "path": "../planted-private-directory-argument",
+                    "private_prompt": "planted-private-prompt",
+                    "source": "planted-private-source",
+                    "api_key": "planted-private-credential",
+                    "os_error": "planted-private-os-error".repeat(512)
+                }),
+            ),
+            ("grep", private_arguments.clone()),
+            ("glob", private_arguments.clone()),
+            ("create_phased_task", private_arguments.clone()),
+            ("get_epic_progress", private_arguments.clone()),
+            ("get_ready_tasks_in_phase", private_arguments.clone()),
+            ("update_task_status", private_arguments.clone()),
+            ("assign_tasks", private_arguments.clone()),
+            ("request_supervisor_action", private_arguments.clone()),
+            ("planner", private_arguments.clone()),
+            ("spawn_subagent", private_arguments.clone()),
+            ("spawn_parallel_subagents", private_arguments.clone()),
+            ("spawn_qc_review", private_arguments.clone()),
+            ("write_interface_spec", private_arguments.clone()),
+            (
+                "e2e_probe",
+                serde_json::json!({
+                    "start_cmds": ["echo planted-e2e-command"],
+                    "probe_url": "http://127.0.0.1:1/",
+                    "expected_text": "planted-e2e-source",
+                    "api_key": "planted-private-credential",
+                    "private_prompt": "planted-private-prompt"
+                }),
+            ),
+            ("search_memory", private_arguments.clone()),
+            ("get_memory", private_arguments.clone()),
+            ("propose_memory", private_arguments.clone()),
+            ("suggest_worker", private_arguments.clone()),
+            ("claim_task", private_arguments.clone()),
+            ("analyze_diff", private_arguments.clone()),
+            ("annotate_file", private_arguments.clone()),
+            ("list_stale_worker_messages", private_arguments.clone()),
+            ("list_worker_health", private_arguments.clone()),
+            ("resolve_worker_request", private_arguments.clone()),
+            ("send_worker_message", private_arguments.clone()),
+            ("reconcile_worker_operation", private_arguments.clone()),
+            ("acknowledge_worker_message", private_arguments.clone()),
+        ];
+        let mut actual_live_names: Vec<_> = {
+            let mut registry = super::super::tool_registry::ToolRegistry::new();
+            super::super::builtin_tools::register_for_mode(
+                &mut registry,
+                super::super::PAMode::FastDevelopment,
+            );
+            registry
+                .all()
+                .iter()
+                .map(|tool| tool.name().to_string())
+                .collect()
+        };
+        actual_live_names.sort();
+        let mut expected_names = expected_live_names
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect::<Vec<_>>();
+        expected_names.sort();
+        assert_eq!(actual_live_names, expected_names);
+        let covered_names: std::collections::BTreeSet<_> =
+            cases.iter().map(|(name, _)| *name).collect();
+        assert_eq!(
+            covered_names.len(),
+            cases.len(),
+            "each registered handler has one unique consumer case"
+        );
+        assert_eq!(
+            covered_names,
+            expected_live_names
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            "every live registration has a safe controlled consumer failure"
+        );
+
+        // Missing required fields provide deterministic local failures. Bash
+        // is denied through the public one-use PendingPermissions responder;
+        // e2e_probe uses valid input and fails closed before process/HTTP work.
+        for (name, input) in cases {
+            let session_id = format!("builtin-failure-{name}");
+            let blocked_database = match name {
+                "list_memories" => Some("memory.db"),
+                "list_tasks" | "list_worker_messages" | "list_worker_requests" => Some("tasks.db"),
+                _ => None,
+            };
+            let blocked_path = blocked_database.map(|database| {
+                let path = crate::db::arcana_dir()
+                    .expect("isolated Arcana database directory")
+                    .join(database);
+                assert!(
+                    !path.exists(),
+                    "isolated database fixture must not already exist: {database}"
+                );
+                std::fs::create_dir(&path).expect("block only the isolated database path");
+                path
+            });
+            let run_id = crate::db::runs::RunsDb::open()
+                .expect("open isolated RunsDb")
+                .begin_worker_tick("worker-backend", &session_id)
+                .expect("persist worker run before tool execution");
+            let pending = super::super::permission::new_pending_permissions();
+            let bash_responder = if name == "bash" {
+                let pending = Arc::clone(&pending);
+                let permission_id = format!("{session_id}-builtin-failure-call");
+                Some(tokio::spawn(async move {
+                    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                        loop {
+                            let responder = pending
+                                .lock()
+                                .expect("pending permission map")
+                                .remove(&permission_id);
+                            if let Some(responder) = responder {
+                                responder
+                                    .send(super::super::permission::PermissionResponse::Deny)
+                                    .expect("Bash permission waiter remains active");
+                                break;
+                            }
+                            tokio::task::yield_now().await;
+                        }
+                    })
+                    .await
+                    .expect("Bash permission request arrives without interaction");
+                }))
+            } else {
+                None
+            };
             let mut provider = scripted_provider(name);
             let scripted = Arc::get_mut(&mut provider).expect("unique scripted provider");
             scripted.responses = Mutex::new(VecDeque::from([
@@ -2856,16 +3044,15 @@ mod procedural_memory_tests {
                 ],
             ]));
             let state = Arc::new(Mutex::new(crate::state::AppState::default()));
-            let session_id = format!("builtin-failure-{name}");
             let engine = AgentEngine::new(
                 provider.clone(),
                 PermissionMode::Autonomous,
                 super::super::PAMode::FastDevelopment,
                 state.clone(),
-                super::super::permission::new_pending_permissions(),
+                Arc::clone(&pending),
                 super::super::tool_trait::AgentIdentity::worker("worker-backend"),
             )
-            .with_worker_run_id("run-builtin-failure");
+            .with_worker_run_id(&run_id);
             assert!(
                 engine.registry.get(name).is_some(),
                 "real builtin {name} is registered"
@@ -2881,6 +3068,10 @@ mod procedural_memory_tests {
                 )
                 .await
                 .expect("scripted model acknowledges the failed builtin");
+            if let Some(blocked_path) = &blocked_path {
+                std::fs::remove_dir(blocked_path)
+                    .expect("restore the isolated database path before the next case");
+            }
 
             let requests = provider.requests.lock().expect("captured requests");
             assert_eq!(
@@ -2911,25 +3102,76 @@ mod procedural_memory_tests {
             assert_eq!(envelope["schema_version"], 1);
             assert_eq!(envelope["ok"], false);
             assert_eq!(envelope["error"]["tool"], name);
+            assert_eq!(envelope["error"]["operation"], format!("tool.{name}"));
+            assert_ne!(
+                envelope["error"]["code"], "operation_intent_unavailable",
+                "{name} must reach its handler or deliberate permission/sandbox guard"
+            );
             assert_eq!(
                 envelope["error"]["context"]["tool_call_id"],
                 format!("{session_id}-builtin-failure-call")
             );
-            assert_eq!(
-                envelope["error"]["context"]["run_id"],
-                "run-builtin-failure"
-            );
+            assert_eq!(envelope["error"]["context"]["run_id"], run_id.as_str());
+            assert!(envelope["error"]["category"].as_str().is_some());
+            assert!(envelope["error"]["code"].as_str().is_some());
+            assert!(envelope["error"]["message"]
+                .as_str()
+                .is_some_and(|message| message.chars().count() <= 512));
+            assert!(envelope["error"]["cause"]
+                .as_str()
+                .is_some_and(|cause| cause.chars().count() <= 512));
             assert!(envelope["error"]["suggested_action"]
                 .as_str()
                 .is_some_and(|text| !text.is_empty()));
+            assert!(envelope["error"]["retryable"].is_boolean());
+            assert!(envelope["error"]["timestamp"].as_str().is_some());
             for marker in [
                 "planted-private-prompt",
                 "planted-private-source",
                 "planted-private-credential",
                 "planted-private-os-error",
                 "planted-private-directory-argument",
+                "planted-bash-denial",
+                "planted-e2e-command",
+                "planted-e2e-source",
             ] {
                 assert!(!content.contains(marker), "{name} must omit {marker}");
+            }
+            if let Some(responder) = bash_responder {
+                responder.await.expect("one-use Bash responder");
+                assert!(
+                    !workspace.path().join("denied-shell-marker.txt").exists(),
+                    "denied Bash command must not launch"
+                );
+                assert!(pending.lock().expect("pending permission map").is_empty());
+                assert_eq!(envelope["error"]["code"], "permission_denied");
+            }
+            if name == "e2e_probe" {
+                assert_eq!(envelope["error"]["code"], "sandbox_violation");
+            }
+            if name == "list_memories" {
+                assert!(envelope["error"]["cause"]
+                    .as_str()
+                    .is_some_and(|cause| cause.contains("memory unavailable")));
+            }
+            if name == "list_tasks"
+                || name == "list_worker_messages"
+                || name == "list_worker_requests"
+            {
+                assert!(envelope["error"]["cause"].as_str().is_some_and(|cause| {
+                    cause.contains("open tasks database") || cause.contains("open tasks DB")
+                }));
+            }
+            if name == "mcp_call_tool" {
+                assert_eq!(
+                    envelope["error"]["cause"],
+                    "A valid remote MCP tool name is required."
+                );
+            }
+            if name == "mcp_list_tools" {
+                assert!(envelope["error"]["cause"]
+                    .as_str()
+                    .is_some_and(|cause| cause.contains("no active consent")));
             }
             assert!(state
                 .lock()
@@ -2937,6 +3179,10 @@ mod procedural_memory_tests {
                 .agents
                 .values()
                 .all(|agent| !agent.is_running));
+            crate::db::runs::RunsDb::open()
+                .expect("reopen isolated RunsDb")
+                .finish_worker_tick(&run_id, "completed", "ok", None)
+                .expect("close the consumed fixture run before the next worker case");
         }
     }
 
@@ -3249,6 +3495,7 @@ mod procedural_memory_tests {
                         Err(error) => panic!("fixture accept failed: {error}"),
                     }
                 };
+                socket.set_nonblocking(false).expect("blocking accepted fixture stream");
                 socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).expect("bounded request read");
                 let mut reader = BufReader::new(socket.try_clone().expect("fixture stream"));
                 let mut line = String::new();

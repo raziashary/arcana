@@ -7344,3 +7344,10 @@ readback.
 ## ADR-LOG-RESTRUCT-0350 — Remove the unconfined smoke launcher before capability enablement
 
 **Grounded integration decision / date.** On2026-10-09 the real e2e_probe still spawns model-authored commands with plain Tokio Command and only kills direct children. This contradicts owner-approved ADR0339/0344/0349: no smoke capability may launch before per-platform confinement, aggregate quotas and cleanup are proved. Remove that unrestricted production path and return the existing structured sandbox_violation contract after argument/workspace validation until a proved confined runner is integrated. No arbitrary loopback HTTP request or child launch is allowed on this unavailable path. This enforces the accepted boundary; it does not complete smoke capability or TG4-31. Preserve registration/schema, update the description and verify the real registered executor refuses valid commands without creating a marker.
+
+## ADR-LOG-RESTRUCT-0352 — Make bounded HTTP fixtures blocking after accept
+
+**Observed fixture correction / date.** On2026-10-09 the surrounding AgentEngine regression suite fails on Windows: the retry-then-stream-error fixture accepts from a nonblocking listener and the accepted socket retains nonblocking mode. A timed blocking BufReader then returns WouldBlock before the request arrives. Explicitly set the accepted socket to blocking before applying its existing ten-second read timeout, matching provider/usage.rs test_response_server. Keep listener admission bounded and preserve response, retry, analytics and privacy assertions. This is test transport setup only; no provider timeout/retry contract changes. Rerun the surrounding module before publishing the all-registration model consumer unit.
+
+
+**ADR0351 verified correction, 2026-10-09.** The corrected all47-registration AgentEngine fixture creates/finishes real durable runs and rejects operation_intent_unavailable. Matrix Windows1/1 (6.13s), Linux1/1 (7.82s); surrounding module15/15 both. Actual handlers or intentional permission/sandbox guards now supply the failed results consumed by the next model request. No full P4-51 closure is claimed.
