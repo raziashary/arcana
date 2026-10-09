@@ -7318,3 +7318,11 @@ readback.
 ## ADR-LOG-RESTRUCT-0346 — Prove native subagents with a test-only provider seam
 
 **Owner decision / date.** Accepted2026-10-09: native_runner may use an explicit test-only scripted provider override analogous to RecipeRunner, so the actual registered subagent tools run real AgentEngine children without Vault keys or paid calls. Shipped provider selection remains unchanged. The process-global manager must be isolated in a dedicated test invocation and cannot contaminate ordinary no-manager failure fixtures. Prove successful child execution and actual returned/result readers rather than substituting a fake manager or tool.
+
+## ADR-LOG-RESTRUCT-0347 — Repair isolated Linux Python test support
+
+**Owner decision / date.** Accepted2026-10-09: install the matching Ubuntu python3-venv package, then pytest9.1.1 only in /home/razi/arcana-p4-python-tools. The selected Linux Python lacked pytest and ensurepip, causing the new real timeout fixture to exit before its descendant starts. The repository CI already requires pytest. Keep this host setup separate from production dependency installation, avoid global pip changes, and rerun the unchanged public timeout/reader assertions. Windows Python and user databases remain untouched.
+
+## ADR-LOG-RESTRUCT-0348 — Run Linux timeout proof on its native filesystem
+
+**Grounded fixture decision / date.** On2026-10-09 the approved isolated pytest setup succeeds. The same sandboxed descendant fixture passes on native /tmp but fails on WSL DrvFS /mnt/c during pytest capture: truncating an already-unlinked temporary file returns ENOENT. The CLI fixture inherited a repository-local parent required for Windows ACLs; Linux has no such requirement. Use a native temporary parent on Linux, retain the repository-owned Windows parent, and preserve the exact production timeout/error, descendant-stop and JSONL/CLI assertions. This is a test-location correction, not a sandbox relaxation or a claim that DrvFS execution is supported. Record the DrvFS limitation; no production workaround is added. Remove the temporary underlying-launcher diagnostic after its controlled comparison.

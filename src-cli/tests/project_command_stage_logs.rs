@@ -73,9 +73,15 @@ async fn claimed_python_build_stages_survive_jsonl_writer_and_cli_export() {
         "the configured JSONL writer must be active"
     );
 
+    #[cfg(windows)]
     let workspace_parent = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("p4-62-stage-log-workspaces");
+    // Windows ACL fixtures require a repository-owned parent. Linux uses its
+    // native filesystem: WSL DrvFS rejects truncating pytest's unlinked capture
+    // temporary files under Landlock, before the test child can run.
+    #[cfg(not(windows))]
+    let workspace_parent = std::env::temp_dir().join("arcana-p4-62-stage-log-workspaces");
     std::fs::create_dir_all(&workspace_parent).expect("create fixture workspace parent");
     let workspace = IsolatedWorkspace(workspace_parent.join(uuid::Uuid::new_v4().to_string()));
     std::fs::create_dir(&workspace.0).expect("create selected workspace");
@@ -154,7 +160,7 @@ async fn claimed_python_build_stages_survive_jsonl_writer_and_cli_export() {
     let mut executor = ToolExecutor::new(
         PermissionMode::Autonomous,
         new_pending_permissions(),
-        session_id,
+        session_id.clone(),
         workspace.0.to_string_lossy().into_owned(),
         AgentIdentity::worker("worker-backend"),
     );
@@ -181,6 +187,61 @@ async fn claimed_python_build_stages_survive_jsonl_writer_and_cli_export() {
         .expect("build batch must be persisted");
     assert_eq!(batch.0, "passed");
     assert_eq!((batch.1, batch.2, batch.3), (1, 1, 1));
+
+    // Select the timeout through the same public tool boundary an agent uses.
+    // pytest starts a real descendant; the production timeout must stop both,
+    // and its incomplete timing must survive the configured writer/reader.
+    std::fs::write(
+        workspace.0.join("descendant.py"),
+        "import pathlib, time\nroot = pathlib.Path(__file__).parent\n(root / 'descendant-started.txt').write_text('started')\nfor _ in range(3000):\n    with (root / 'descendant-heartbeat.txt').open('a') as output:\n        output.write('alive\\n')\n    time.sleep(0.03)\n(root / 'descendant-late.txt').write_text('late')\n",
+    )
+    .expect("write owned descendant fixture");
+    std::fs::write(
+        workspace.0.join("test_slow.py"),
+        "import pathlib, subprocess, sys\ndef test_wait_for_descendant():\n    child = subprocess.Popen([sys.executable, str(pathlib.Path(__file__).with_name('descendant.py'))])\n    assert child.wait() == 0\n",
+    )
+    .expect("write owned pytest fixture");
+    let timeout_provider_id = format!("stage-log-timeout-{}", uuid::Uuid::new_v4());
+    let timeout_raw_id = format!("{session_id}-{timeout_provider_id}");
+    let timeout_call_id = arcana_core::observability::logging::telemetry_call_id(&timeout_raw_id);
+    let mut timeout_executor = ToolExecutor::new(
+        PermissionMode::Autonomous,
+        new_pending_permissions(),
+        session_id,
+        workspace.0.to_string_lossy().into_owned(),
+        AgentIdentity::worker("worker-backend"),
+    );
+    timeout_executor.set_task_id(Some(task.id));
+    let timeout_results = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        timeout_executor.execute_batch(vec![(
+            registry.get("project_command").unwrap(),
+            serde_json::json!({"intent":"test", "toolchain":"python", "timeout_secs":30}),
+            timeout_provider_id.clone(),
+        )]),
+    )
+    .await
+    .expect("production 30-second cap must finish within the fixture safety bound")
+    .expect("executor returns the timeout as a failed tool result");
+    assert_eq!(timeout_results.len(), 1);
+    assert_eq!(timeout_results[0].0, timeout_provider_id);
+    assert!(timeout_results[0].1.is_error);
+    let timeout_failure: Value = serde_json::from_str(&timeout_results[0].1.output).unwrap();
+    assert_eq!(
+        timeout_failure["error_code"], "operation_timed_out",
+        "{timeout_failure}"
+    );
+    assert_eq!(timeout_failure["category"], "timeout");
+    assert!(workspace.0.join("descendant-started.txt").is_file());
+    let heartbeat = workspace.0.join("descendant-heartbeat.txt");
+    let stopped_length = std::fs::metadata(&heartbeat)
+        .expect("descendant wrote heartbeat")
+        .len();
+    assert!(stopped_length > 0);
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    assert_eq!(std::fs::metadata(&heartbeat).unwrap().len(), stopped_length);
+    assert!(!workspace.0.join("descendant-late.txt").exists());
+    drop(timeout_executor);
     drop(tasks);
     drop(logging);
 
@@ -203,6 +264,7 @@ async fn claimed_python_build_stages_survive_jsonl_writer_and_cli_export() {
         !content.contains(&raw_call_id),
         "opaque tool-call identity must not bypass redaction"
     );
+    assert!(!content.contains(&timeout_raw_id));
     let events = content
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -241,6 +303,34 @@ async fn claimed_python_build_stages_survive_jsonl_writer_and_cli_export() {
             "{stage} must export a nonnegative duration"
         );
     }
+    let interrupted_waits = events
+        .iter()
+        .filter(|event| {
+            event["fields"]["event_type"] == "project_command_stage"
+                && event["fields"]["call_id"] == timeout_call_id
+                && event["fields"]["stage"] == "process_wait"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        interrupted_waits.len(),
+        1,
+        "one persisted interrupted process wait"
+    );
+    assert_eq!(interrupted_waits[0]["fields"]["outcome"], "incomplete");
+    assert!(
+        interrupted_waits[0]["fields"]["duration_ns"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+    assert!(
+        events.iter().any(|event| {
+            event["fields"]["event_type"] == "project_command_result"
+                && event["fields"]["tool_call_id"] == timeout_call_id
+                && event["fields"]["outcome"] == "timeout"
+        }),
+        "the CLI reader sees the actual selected timeout result"
+    );
     for refused_call_id in ["stage-log-no-claim", "stage-log-wrong-owner"] {
         assert!(
             events.iter().all(|event| {
