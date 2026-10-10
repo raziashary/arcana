@@ -2056,21 +2056,27 @@ fn main() {
         );
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[tokio::test]
     async fn production_mixed_batch_timeout_cannot_be_hidden_by_passing_sibling() {
         let profile = tempfile::tempdir().expect("isolated Arcana profile");
         let _profile_guard = crate::db::test_support::with_home(profile.path());
+        #[cfg(windows)]
         crate::platform::python_runtime::stage()
             .expect("pre-stage the signed Python runtime outside the command timeout");
+        #[cfg(windows)]
         let fixture_parent = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("target")
             .join("p4-acl-tests");
+        #[cfg(windows)]
         std::fs::create_dir_all(&fixture_parent).expect("create isolated fixture parent");
+        #[cfg(windows)]
         let workspace = tempfile::Builder::new()
             .prefix("project-command-timeout-batch-")
             .tempdir_in(&fixture_parent)
             .expect("create selected workspace");
+        #[cfg(target_os = "linux")]
+        let workspace = tempfile::tempdir().expect("create native Linux workspace");
         std::fs::create_dir_all(workspace.path().join("src"))
             .expect("create Rust source directory");
         std::fs::write(
@@ -2908,20 +2914,25 @@ fn main() {
         }
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[tokio::test]
     async fn production_mixed_project_batch_requires_every_child_to_pass_before_qc() {
         let profile = tempfile::tempdir().expect("isolated Arcana profile");
         let _profile_guard = crate::db::test_support::with_home(profile.path());
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let rust_fixture = manifest_dir.join("tests/fixtures/fx-repo-rust");
+        #[cfg(windows)]
         let fixture_parent = manifest_dir.join("target").join("p4-acl-tests");
+        #[cfg(windows)]
         std::fs::create_dir_all(&fixture_parent)
             .expect("create repository-local ACL fixture parent");
+        #[cfg(windows)]
         let sandbox = tempfile::Builder::new()
             .prefix("project-command-mixed-batch-")
             .tempdir_in(&fixture_parent)
             .expect("create mixed-project workspace");
+        #[cfg(target_os = "linux")]
+        let sandbox = tempfile::tempdir().expect("create native Linux workspace");
         copy_fixture_tree(&rust_fixture, sandbox.path());
         let python = sandbox.path().join("python");
         std::fs::create_dir_all(&python).expect("create nested Python project");
@@ -3033,20 +3044,25 @@ fn main() {
         );
     }
 
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     #[tokio::test]
     async fn production_mixed_batch_stops_after_third_observed_failure() {
         let profile = tempfile::tempdir().expect("isolated Arcana profile");
         let _profile_guard = crate::db::test_support::with_home(profile.path());
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let rust_fixture = manifest_dir.join("tests/fixtures/fx-repo-rust");
+        #[cfg(windows)]
         let fixture_parent = manifest_dir.join("target").join("p4-acl-tests");
+        #[cfg(windows)]
         std::fs::create_dir_all(&fixture_parent)
             .expect("create repository-local ACL fixture parent");
+        #[cfg(windows)]
         let sandbox = tempfile::Builder::new()
             .prefix("project-command-diagnosis-cap-")
             .tempdir_in(&fixture_parent)
             .expect("create mixed-project workspace");
+        #[cfg(target_os = "linux")]
+        let sandbox = tempfile::tempdir().expect("create native Linux workspace");
         copy_fixture_tree(&rust_fixture, sandbox.path());
         std::fs::write(sandbox.path().join("src/main.rs"), "fn main( {\n")
             .expect("break Rust fixture to produce an observed failure");
