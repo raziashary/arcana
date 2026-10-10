@@ -63,10 +63,48 @@ Required decisions remain pending; do not infer approval from elapsed time or a 
 4. Managed write lease plus recoverable atomic host replacements for guarded staged copy-back, preserving displaced files/staged outputs on external-editor conflicts. Existing staging has snapshot/planning only, no host apply.
 5. Extend shared error sanitization to remove truncated reflected argument prefixes, retain useful causes, preserve Unicode/bounds/correlation. Real Windows/Linux reproductions fail; no shared production fix yet.
 
-Working tree: engine.rs contains the deliberate new failing privacy regression; Linux smoke candidate/test module, native macOS prototype, older consent harness/checkpoint and ADR WIP remain unpublished. Current main/upstream align at2513b72. Core goal is active; expanded goal unread; Calendar owner-only; no new paid call authorized. No running test/build process from this continuation remains.
+Historical boundary before the later 2026-10-10 receipts: engine.rs held a deliberately failing privacy fixture and the upstream was2513b72. The later ADR0358 repair and published410b13b supersede that fixture state; see the latest owner-stop checkpoint below.
 
 2026-10-10 P4-57 worker-run chronology: the actual begin/heartbeat/progress/finish APIs now have exact creation, progress-event/state and terminal-run/state timestamp assertions through shared parsing and database reopen. Independent Luna High identified the initially missing creation-reopen assertion, now included. Windows1/1 (0.09s), Linux1/1 (0.13s). This is a concrete consumer proof, not an annual all-pair or monotonic-wall-clock guarantee; P4-57/TG4-19 remain open. Overall41/59 P4 and19/33 TG4 unchanged. Evidence: `_verify/P4-57-RUN-CHRONOLOGY-2026-10-10.md`. No paid provider or Calendar run.
 
 2026-10-10 P4-57 procedural Memory correction: the real topic-write/reopened-search regression failed on Windows by selecting canonical09:00 over legacy noon at limit1. The production search now follows existing Memory instant ordering with julianday(updated_at) and stable ID tie-breaking; no schema/API/index change. Canonical/legacy/offset selection, ties, filtering and zero limits pass in the procedural suite: Windows6/6 (.46s), Linux6/6 (.55s); core/CLI check passes (16.91s). Luna High review reports no scoped defect. The Memory/config source inventory distinguishes actual timestamp consumers from stored-only fields. Annual all-pair/platform coverage remains open; overall41/59 P4 and19/33 TG4 unchanged. Evidence: `_verify/P4-57-PROCEDURAL-ORDER-2026-10-10.md`; ADR0357. No provider or Calendar run.
 
 2026-10-10 P4-51 isolated OS-cause repair (ADR0358): read_file now retains its actual IO cause without echoing the requested path. The real all47-registration next-model matrix passes Windows1/1 (5.98s), Linux1/1 (6.79s), positively checking the observed OS error code and private-prefix omission. File-read bounds pass2/2 per host; core/CLI check passes (36.67s); Luna High reports no scoped defect. This repairs the demonstrated read_to_string case only; other producers and shared truncated-prefix sanitizer hardening remain separate pending scope. Successful tool coverage46/47, P441/59 and TG419/33 unchanged. Evidence: `_verify/P4-51-READ-FILE-CAUSE-2026-10-10.md`. All selected processes exited; no paid provider, Calendar, server or listener activity.
+
+## Owner stop / resume checkpoint — 2026-10-10
+
+Owner explicitly requested immediate stop. The running goal is paused. Resume core P4 first; do not read or execute P4_EXPANDED_GOAL.md until core P4 closes. Calendar P4-49 remains owner-run. No second paid provider run is authorized.
+
+### Published verified units in this continuation
+
+- `1554433`: RunsDb lifecycle timestamps now have canonical parsing and exact creation/progress/terminal equality through production APIs and reopened readers. Windows1/1 (.09s), Linux1/1 (.13s). Independent Luna High creation-readback finding corrected. Evidence: P4-57-RUN-CHRONOLOGY-2026-10-10.md.
+- `853a377`: actual procedural Memory search selected canonical09:00 before legacy noon at limit1. Existing instant-order pattern fixes that real bug with stable ID ties. Procedural suite Windows6/6 (.46s), Linux6/6 (.55s); core/CLI check16.91s. Memory/config timestamp pair inventory published. Evidence: P4-57-PROCEDURAL-ORDER-2026-10-10.md.
+- `410b13b`: isolated read_file IO error no longer reflects the oversized private path and retains the actual OS cause/code. Previously failing real next-model case now passes inside all47-registration matrix: Windows1/1 (5.98s), Linux1/1 (6.79s). File bounds2/2 each host; core/CLI check36.67s. Shared sanitizer unchanged. Evidence: P4-51-READ-FILE-CAUSE-2026-10-10.md.
+- Each unit was deliberately staged, reviewed for whitespace/credentials, committed with a descriptive Conventional Commit body and normally pushed to origin/main. Only GPT-6 Luna High was used for independent reviews. No paid provider calls, user databases or Calendar test.
+
+### Exact remaining core status
+
+P4 **41/59 checked**, TG4 **19/33 passing**; no full task/gate was closed by these selected proofs. The P4-24a lettered item is included in the59-item tally. Open P4 IDs:11,14,15,18,19,20,21,36,49,50,51,53,54,56,57,60,61,62.
+
+- P4-11/14/15/18/61: complete strict supported-platform process/capability corpus; Windows Clippy canonicalization, guarded staging/copy-back and real Linux tree quotas remain; macOS signed executing XPC service is absent. Current macOS native prototype is readiness-only, not execution.
+- P4-19/20/36/53/54: process checkpoint/restore and safe post-reconciliation continuation with task/repository/operation provenance; lease/host replacement decision below gates copy-back.
+- P4-21/50/60: actual desktop IPC/UI proof is still blocked before WebDriver attachment; fresh WebView2 diagnostic endpoint has not appeared. Successful CLI Fleet completion/observability proof remains open; no second paid attempt authorized.
+- P4-51/56: broader error/privacy/retry/security matrix; successful builtin coverage46/47 because confined e2e_probe is unavailable. The observed read_to_string privacy defect is repaired, but other producers/guards and shared truncated-input hardening are not proven fixed.
+- P4-57: remaining full-year writer/reader-pair properties and supported-host evidence. Two finite source inventories now distinguish actual temporal consumers from stored-only fields; selected canonical readback does not close the annual gate.
+- P4-62: remaining production duration/cancellation/stage-log/CLI-deadline conjunctions and platform proof. P4-49 remains owner Calendar acceptance after engineering prerequisites.
+
+### Pending owner decisions — not approvals
+
+1. Temporary owned systemd/WSL delegated test scope for real aggregate cgroup CPU/memory/process enforcement, with cleanup and no persistent machine changes.
+2. Test-build-only scripted provider seam through the actual CLI/shared host initializer, for offline deadline/shutdown/recovery/export proof. Shipped provider selection unchanged.
+3. Race session cancellation against provider preflight/request/retry/body waits, preserving conservative unknown-usage reservations; do not promise cancellation of remote billing.
+4. Managed workspace write lease plus recoverable atomic host replacements for guarded copy-back; preserve displaced host files and staged outputs against external-editor conflicts. Current staging has snapshots/conflict plans but no host apply.
+5. Shared truncated-input sanitizer hardening beyond the isolated read_file producer repair. Keep useful causes, Unicode/bounds and correlation; do not infer universal protection from410b13b.
+
+Do not infer these approvals from a later generic continue. Previous explicit approvals remain valid; do not ask again for settled policies.
+
+### Local state and cleanup
+
+Verified code commits above are pushed. Preserved unpublished work: process_sandbox/mod.rs test-only wiring, linux_smoke candidate and staging directory, readiness-only native/macOS sources/build script, older desktop consent harness/diagnostic reports, older checkpoint/ADR WIP and unread expanded goal. engine.rs/read_file.rs/runs.rs/procedural.rs verified changes are committed. No blind staging or deletion of that older work.
+
+All owned Windows/WSL test and check sessions from this continuation completed. Selected matrix/Memory/run tests started no servers/listeners; no owned dev/test listener remains from this continuation. Resume from this checkpoint and current Git/source before choosing the next concrete P4 unit; keep Rule4 boundaries and the Luna High restriction.
