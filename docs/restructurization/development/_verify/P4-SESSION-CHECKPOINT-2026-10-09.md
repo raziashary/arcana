@@ -49,3 +49,18 @@ Annual worker rollup readback pushed as ece44b2 (every annual/legacy heartbeat a
 
 
 2026-10-10 active continuation: Linux production mixed Cargo/Python gates now pass3/3 (18.27s): failed sibling blocks QC, timed-out sibling leaves an incomplete batch, and three observed failures stop dispatch until one audited Supervisor retry passes both projects. Existing real multi-project spawn failure and cancellation pass Linux1/1 each (1.89s/1.16s), including reopened DB QC refusal and descendant-stop readback. Windows counterpart passes3/3 (266.56s). Linux sandbox candidate admission passes10/10 (.07s); actual delegated-cgroup enforcement and guarded host copy-back remain unproved. The actual oversized read_file OS failure now reproduces private filename-prefix leakage through the next AgentEngine request (ADR0355); correction direction is pending, and its failing fixture is uncommitted. P4 remains41/59; TG419/33. No paid provider or Calendar run. Evidence: `_verify/P4-14-MIXED-LINUX-CLOSEOUT-2026-10-10.md`, `_verify/P4-51-TRUNCATED-OS-ERROR-2026-10-10.md`.
+
+
+2026-10-10 privacy decision boundary: oversized real read_file OS failure leaks a private argument prefix into the next model request on Windows1/1 (1.06s) and Linux1/1 (1.27s). These are deliberate failing regressions, not passing gates. Luna High confirms the mechanism and recommends retaining useful OS cause while removing partial reflection. Production remains unchanged pending Rule4 direction; the new failing engine fixture is uncommitted. Verified mixed-project unit `2513b72` is pushed to origin/main. No new task/gate closes; all owned test processes exited. Evidence: `_verify/P4-51-TRUNCATED-OS-ERROR-2026-10-10.md` and `_verify/P4-51-TRUNCATED-ARGUMENT-REVIEW-2026-10-10.md`.
+
+## Current direction requests (not approvals)
+
+Required decisions remain pending; do not infer approval from elapsed time or a “continue” for the already authorized work.
+
+1. Temporary systemd-owned delegated WSL test scope/service for real cgroup CPU/memory/pids enforcement, with disposable fixtures and owned cleanup; no persistent machine changes.
+2. Explicit test-build-only scripted provider path through the actual CLI/shared initializer, for deadline/shutdown/recovery/export proof without Vault or spend; ordinary builds unchanged.
+3. Race session cancellation against provider preflight/request/retry/body waits, preserving conservative unknown-usage reservations; remote billing cannot be guaranteed cancelled.
+4. Managed write lease plus recoverable atomic host replacements for guarded staged copy-back, preserving displaced files/staged outputs on external-editor conflicts. Existing staging has snapshot/planning only, no host apply.
+5. Extend shared error sanitization to remove truncated reflected argument prefixes, retain useful causes, preserve Unicode/bounds/correlation. Real Windows/Linux reproductions fail; no shared production fix yet.
+
+Working tree: engine.rs contains the deliberate new failing privacy regression; Linux smoke candidate/test module, native macOS prototype, older consent harness/checkpoint and ADR WIP remain unpublished. Current main/upstream align at2513b72. Core goal is active; expanded goal unread; Calendar owner-only; no new paid call authorized. No running test/build process from this continuation remains.
