@@ -140,7 +140,7 @@ impl Tool for ReadFileTool {
         }
 
         match std::fs::read_to_string(&path) {
-            Err(e) => ToolResult::error(format!("Cannot read '{}': {e}", path.display())),
+            Err(e) => ToolResult::error(format!("Cannot read file: {e}")),
             Ok(content) => {
                 let start = input["start_line"].as_u64().map(|n| n as usize);
                 let end = input["end_line"].as_u64().map(|n| n as usize);

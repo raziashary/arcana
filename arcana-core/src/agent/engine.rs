@@ -2790,14 +2790,21 @@ mod procedural_memory_tests {
         let home = tempfile::tempdir().expect("isolated Arcana home");
         let _home = crate::db::test_support::with_home(home.path());
         let workspace = tempfile::tempdir().expect("isolated workspace");
+        // Exercise a real OS error whose path reflection exceeds the handler's
+        // cause bound, rather than planting a fake OS diagnostic in arguments.
+        let private_os_path = format!("planted-private-os-path-{}", "x".repeat(1024));
+        let os_failure = std::fs::read_to_string(workspace.path().join(&private_os_path))
+            .expect_err("oversized filename must fail in the actual OS reader");
+        assert!(os_failure.raw_os_error().is_some());
         let private_arguments = serde_json::json!({
             "private_prompt": "planted-private-prompt",
             "source": "planted-private-source",
             "api_key": "planted-private-credential",
             "os_error": "planted-private-os-error".repeat(512),
         });
-        // These inputs deliberately omit each handler's required fields. They
-        // exercise the real registry and executor without spawning commands,
+        // Most inputs deliberately omit the handler's required fields; read_file
+        // instead reaches a real oversized-filename OS failure. They exercise
+        // the real registry and executor without spawning commands,
         // invoking an MCP request, requiring a provider credential, or using
         // shared state. Empty-input list queries fail through an isolated
         // database-open blocker; no database is replaced or kept open.
@@ -2857,7 +2864,7 @@ mod procedural_memory_tests {
             ("list_worker_requests", private_arguments.clone()),
             ("mcp_list_tools", private_arguments.clone()),
             ("mcp_call_tool", private_arguments.clone()),
-            ("read_file", private_arguments.clone()),
+            ("read_file", serde_json::json!({"path": private_os_path})),
             ("write_file", private_arguments.clone()),
             ("edit_file", private_arguments.clone()),
             (
@@ -3120,6 +3127,16 @@ mod procedural_memory_tests {
             assert!(envelope["error"]["cause"]
                 .as_str()
                 .is_some_and(|cause| cause.chars().count() <= 512));
+            if name == "read_file" {
+                let cause = envelope["error"]["cause"]
+                    .as_str()
+                    .expect("OS failure cause");
+                assert!(cause.starts_with("Cannot read file: "));
+                assert!(cause.contains(&format!(
+                    "os error {}",
+                    os_failure.raw_os_error().expect("real OS error code")
+                )));
+            }
             assert!(envelope["error"]["suggested_action"]
                 .as_str()
                 .is_some_and(|text| !text.is_empty()));
@@ -3130,6 +3147,7 @@ mod procedural_memory_tests {
                 "planted-private-source",
                 "planted-private-credential",
                 "planted-private-os-error",
+                "planted-private-os-path",
                 "planted-private-directory-argument",
                 "planted-bash-denial",
                 "planted-e2e-command",
