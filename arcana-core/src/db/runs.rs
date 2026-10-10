@@ -2880,14 +2880,33 @@ mod tests {
             running.last_progress.as_deref(),
             Some("tool_batch_completed")
         );
-        assert!(running.last_progress_at.is_some());
-        assert!(running.heartbeat_at >= starting.heartbeat_at);
+        let parse = |value: &str| {
+            assert_eq!(value.len(), 24, "fixed-millisecond UTC writer shape");
+            assert!(value.ends_with('Z'), "writer must store canonical UTC");
+            parse_db_timestamp(value).expect("actual writer timestamp is readable")
+        };
+        let started_instant = parse(&starting.heartbeat_at);
+        let creation_instant = parse(&starting.started_at);
+        assert_eq!(creation_instant, started_instant);
+        let progress_instant = parse(
+            running
+                .last_progress_at
+                .as_deref()
+                .expect("persisted progress instant"),
+        );
+        assert_eq!(parse(&running.heartbeat_at), progress_instant);
+        assert!(progress_instant >= started_instant);
         let events = db
             .recent_worker_progress(&run_id, 10)
             .expect("read progress history");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].1, "tool_batch_completed");
         assert_eq!(events[0].2, "ok");
+        assert_eq!(
+            parse(&events[0].0),
+            progress_instant,
+            "Supervisor progress event and worker state must describe the same instant"
+        );
 
         db.finish_worker_tick(&run_id, "completed", outcome::OK, None)
             .expect("finish worker tick");
@@ -2897,9 +2916,60 @@ mod tests {
             .expect("worker run exists");
         assert_eq!(finished.phase, "completed");
         assert_eq!(finished.outcome.as_deref(), Some(outcome::OK));
-        assert!(db.get(&run_id).unwrap().unwrap().ended_at.is_some());
+        let terminal_run = db
+            .get(&run_id)
+            .expect("read terminal run")
+            .expect("run exists");
+        let ended_instant = parse(terminal_run.ended_at.as_deref().expect("terminal instant"));
+        assert_eq!(
+            parse(&finished.heartbeat_at),
+            ended_instant,
+            "terminal run and worker state must describe the same instant"
+        );
+        assert!(ended_instant >= progress_instant);
+        assert!(parse(&terminal_run.started_at) <= progress_instant);
 
         drop(db);
+        let reopened = RunsDb::open_at(&path).expect("reopen the persisted production reader");
+        let reopened_run = reopened
+            .get(&run_id)
+            .expect("read reopened run")
+            .expect("run exists");
+        let reopened_state = reopened
+            .latest_worker_tick("worker-backend")
+            .expect("read reopened worker health")
+            .expect("worker state exists");
+        assert_eq!(
+            parse(
+                reopened_run
+                    .ended_at
+                    .as_deref()
+                    .expect("retained terminal instant")
+            ),
+            ended_instant
+        );
+        assert_eq!(parse(&reopened_state.heartbeat_at), ended_instant);
+        assert_eq!(parse(&reopened_state.started_at), creation_instant);
+        assert_eq!(
+            parse(&reopened_run.started_at),
+            creation_instant,
+            "the run creation instant must survive reopening unchanged"
+        );
+        assert_eq!(
+            parse(
+                reopened_state
+                    .last_progress_at
+                    .as_deref()
+                    .expect("retained progress instant")
+            ),
+            progress_instant
+        );
+        let reopened_events = reopened
+            .recent_worker_progress(&run_id, 10)
+            .expect("read reopened progress events");
+        assert_eq!(reopened_events.len(), 1);
+        assert_eq!(parse(&reopened_events[0].0), progress_instant);
+        drop(reopened);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
