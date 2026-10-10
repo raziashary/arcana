@@ -7351,3 +7351,9 @@ readback.
 
 
 **ADR0351 verified correction, 2026-10-09.** The corrected all47-registration AgentEngine fixture creates/finishes real durable runs and rejects operation_intent_unavailable. Matrix Windows1/1 (6.13s), Linux1/1 (7.82s); surrounding module15/15 both. Actual handlers or intentional permission/sandbox guards now supply the failed results consumed by the next model request. No full P4-51 closure is claimed.
+
+## ADR-LOG-RESTRUCT-0353 — Separate configured timeout proof from shipped provider cancellation
+
+**Claim correction / source / date.** On2026-10-09 a test author inferred that Reqwest's default request timeout was thirty seconds. ~~Client::new times out the held-open Google request after thirty seconds.~~ The pinned reqwest0.12.28 client source sets timeout=None and read_timeout=None; tcp_user_timeout is a different transport option. GoogleProvider::new/new_at use Client::new. The error was assuming a library default instead of reading its initializer. The revised adapter test configures the existing private client with a750ms timeout only inside cfg(test), holds the first real request open, then proves retry and analytics readback. This is error-path proof under test configuration, not a shipped request deadline. Accepted fixture sockets explicitly become blocking before their bounded reads.
+
+**Open owner decision.** Actual AgentEngine cancellation is checked after stream_response returns; request/preflight/retry/body waits are not raced against cancellation. Requested direction to race existing session cancellation against these waits and preserve conservative unknown-usage reservations. No production cancellation/deadline contract is changed pending that direction. P4-51/TG4-25 remain open. Where: provider/google_tests.rs, provider/google.rs, agent/engine.rs and failure-consumer evidence.

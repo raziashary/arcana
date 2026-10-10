@@ -167,6 +167,188 @@ async fn oversized_google_error_body_is_bounded_and_not_returned() {
     server.await.expect("oversized error fixture");
 }
 
+async fn ensure_google_engine_test_analytics() {
+    static INIT: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    INIT.get_or_init(|| async {
+        if crate::analytics::try_global().is_none() {
+            let analytics_home = Box::leak(Box::new(
+                tempfile::tempdir().expect("isolated analytics home"),
+            ));
+            let _home = crate::db::test_support::with_home(analytics_home.path());
+            let manager = std::sync::Arc::new(
+                crate::analytics::AnalyticsManager::new()
+                    .await
+                    .expect("initialize isolated analytics DB"),
+            );
+            crate::analytics::install_global(manager);
+        }
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn actual_google_stream_timeout_reaches_engine_analytics_reader() {
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+
+    ensure_google_engine_test_analytics().await;
+    let home = tempfile::tempdir().expect("isolated Arcana home");
+    let _home = crate::db::test_support::with_home(home.path());
+    let workspace = tempfile::tempdir().expect("isolated workspace");
+    let before = crate::analytics::global()
+        .queries()
+        .get_api_failures(24)
+        .expect("baseline analytics")
+        .recent_failures
+        .into_iter()
+        .filter_map(|row| row.id)
+        .max()
+        .unwrap_or(0);
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("owned loopback timeout fixture");
+    listener
+        .set_nonblocking(true)
+        .expect("bounded fixture accepts");
+    let api_base = format!("http://{}", listener.local_addr().expect("fixture address"));
+    let server = tokio::task::spawn_blocking(move || {
+        let accept_until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let (stalled_request, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < accept_until,
+                        "initial request deadline"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("timeout fixture accept failed: {error}"),
+            }
+        };
+
+        // Keep the first established connection open and unanswered beyond
+        // the explicitly configured test-client timeout. Because the peer
+        // remains open, this cannot turn into a connection-refused case.
+        let retry_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (mut retry, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < retry_deadline,
+                        "timed-out retry deadline"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("timeout fixture retry accept failed: {error}"),
+            }
+        };
+        drop(stalled_request);
+        retry
+            .set_nonblocking(false)
+            .expect("accepted retry stream is blocking");
+        retry
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .expect("bounded retry request read");
+        let mut reader = BufReader::new(retry.try_clone().expect("clone retry stream"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("retry request line");
+        let mut content_length = 0usize;
+        loop {
+            line.clear();
+            reader.read_line(&mut line).expect("retry request header");
+            if line == "\r\n" || line.is_empty() {
+                break;
+            }
+            if let Some((key, value)) = line.split_once(':') {
+                if key.eq_ignore_ascii_case("content-length") {
+                    content_length = value.trim().parse().expect("request length");
+                }
+            }
+        }
+        assert!(
+            content_length < 2 * 1024 * 1024,
+            "bounded retry request body"
+        );
+        reader
+            .read_exact(&mut vec![0; content_length])
+            .expect("drain retry request body");
+        let body = concat!(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"timeout retry recovered\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":1,\"candidatesTokenCount\":1}}\n",
+            "\n"
+        );
+        write!(
+            retry,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("write successful retry stream");
+        retry.flush().expect("flush successful retry stream");
+        2usize
+    });
+
+    let state = Arc::new(Mutex::new(crate::state::AppState::default()));
+    let mut provider = GoogleProvider::new_at("timeout-private-key-marker".into(), api_base);
+    provider.client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(750))
+        .build()
+        .expect("bounded test-only provider client");
+    let engine = crate::agent::engine::AgentEngine::new(
+        Arc::new(provider),
+        crate::agent::permission::PermissionMode::Autonomous,
+        crate::agent::PAMode::FastDevelopment,
+        state,
+        crate::agent::permission::new_pending_permissions(),
+        crate::agent::tool_trait::AgentIdentity::worker("google-timeout-fixture"),
+    );
+    tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        engine.run(
+            "google-provider-timeout-consumer",
+            workspace.path().to_str().expect("workspace path"),
+            "gemini-3.8-flash",
+            Vec::new(),
+            "timeout-private-prompt-marker",
+            Some("timeout-private-system-marker"),
+        ),
+    )
+    .await
+    .expect("bounded engine run")
+    .expect("the retry response must recover the provider call");
+    assert_eq!(server.await.expect("owned timeout fixture finishes"), 2);
+
+    let failures = crate::analytics::global()
+        .queries()
+        .get_api_failures(24)
+        .expect("production analytics reader")
+        .recent_failures;
+    let new_failures: Vec<_> = failures
+        .iter()
+        .filter(|row| row.id.is_some_and(|id| id > before) && row.provider == "google")
+        .collect();
+    assert_eq!(
+        new_failures.len(),
+        1,
+        "one provider call produces one aggregate"
+    );
+    let failure = new_failures[0];
+    assert_eq!(failure.error_type, "retryable");
+    assert_eq!(
+        failure.retry_count, 1,
+        "the unanswered first request timed out before the successful retry stream"
+    );
+    assert!(failure.resolved);
+    assert!(failure.error_message.len() < 512);
+    for private in [
+        "timeout-private-key-marker",
+        "timeout-private-prompt-marker",
+        "timeout-private-system-marker",
+    ] {
+        assert!(!failure.error_message.contains(private));
+    }
+}
+
 #[tokio::test]
 async fn adapter_http_failures_keep_class_and_safe_google_summary() {
     use crate::provider::usage::test_response_server;
