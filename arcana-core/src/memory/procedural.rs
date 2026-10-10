@@ -218,7 +218,7 @@ impl ProceduralStore {
             "SELECT id, topic, title, content, tags, created_at, updated_at
              FROM   procedural_memories
              WHERE  LOWER(content) LIKE ?1 OR LOWER(title) LIKE ?1 OR LOWER(tags) LIKE ?1
-             ORDER  BY updated_at DESC
+             ORDER  BY julianday(updated_at) DESC, id DESC
              LIMIT  ?2",
         )?;
         let malformed_tag_sets = std::cell::Cell::new(0usize);
@@ -312,6 +312,56 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn production_procedural_search_orders_mixed_timestamps_by_instant() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home_guard = crate::db::test_support::with_home(home.path());
+        ProceduralStore::save_topic("canonical", "needle", "needle content", &[])
+            .expect("write canonical topic through production method");
+        ProceduralStore::save_topic("legacy", "needle", "needle content", &[])
+            .expect("write legacy topic through production method");
+        ProceduralStore::save_topic("offset", "needle", "needle content", &[])
+            .expect("write offset topic through production method");
+        let db = MemoryDb::open().expect("open production memory DB");
+        db.conn
+            .execute(
+                "UPDATE procedural_memories SET updated_at = CASE topic
+                    WHEN 'canonical' THEN '2026-10-10T09:00:00.000Z'
+                    WHEN 'legacy' THEN '2026-10-10 12:00:00'
+                    WHEN 'offset' THEN '2026-10-10T23:00:00+14:00'
+                 END WHERE topic IN ('canonical', 'legacy', 'offset')",
+                [],
+            )
+            .expect("retain mixed canonical and legacy timestamp shapes");
+        drop(db);
+        let rows = ProceduralStore::search("needle", 1).expect("reopen actual search reader");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].topic, "legacy", "limit must select newest instant");
+        assert_eq!(
+            rows[0].updated_at,
+            crate::db::timestamps::parse_db_timestamp("2026-10-10T12:00:00Z")
+                .expect("expected UTC instant")
+        );
+        let all = ProceduralStore::search("needle", 10).expect("read equal-instant topics");
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].topic, "legacy");
+        assert_eq!(all[1].updated_at, all[2].updated_at);
+        assert!(all[1].id > all[2].id, "equal instants have stable ID order");
+        for topic in &all {
+            assert_eq!(
+                topic.created_at.timestamp_subsec_nanos() % 1_000_000,
+                0,
+                "the actual topic writer persists millisecond creation time"
+            );
+        }
+        assert!(ProceduralStore::search("unmatched", 10)
+            .expect("normal keyword filter")
+            .is_empty());
+        assert!(ProceduralStore::search("needle", 0)
+            .expect("zero result limit")
+            .is_empty());
+    }
 
     #[test]
     fn procedural_search_result_and_timing_events_agree_on_result_count() {

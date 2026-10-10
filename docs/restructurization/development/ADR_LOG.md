@@ -7372,3 +7372,8 @@ readback.
 ## ADR-LOG-RESTRUCT-0356 — Verify worker progress chronology through real persisted readers
 
 **Grounded proof refinement / date.** On2026-10-10 the existing RunsDb lifecycle fixture reads recent_worker_progress but ignores event_at and compares heartbeat strings lexically. Extend this same real begin/heartbeat/progress/finish API path with shared-parser instant equality across event, worker-state and terminal-run projections, canonical shape, observed normal wall-clock chronology and database-reopen readback. This changes tests only; no shipped timestamp, schema or clock source changes. It closes one concrete consumer assertion gap from the TasksDb/RunsDb inventory, not the annual all-pair/platform TG4-19 contract. Remaining Memory/configuration inventory is independently mapped.
+
+
+## ADR-LOG-RESTRUCT-0357 — Order procedural search by the represented instant
+
+**Grounded correction / date.** On2026-10-10 the production ProceduralStore::search reader selects a canonical09:00 topic ahead of a legacy SQLite noon topic at limit1. The isolated regression drives save_topic, retains both supported persisted formats, and reopens the actual search reader; Windows fails1/1 (0.25s) before the correction. This is the same timestamp-reader defect covered by owner-approved reader fixes (ADR0302); follow existing episodic/semantic/recall chronology using julianday(updated_at) with stable id tie-breaking. No dependency, schema or API changes. The keyword query already scans substring matches and sorts; do not claim index/performance improvements. Verify actual production readback and surrounding procedural tests before committing. Full annual write/read-pair/platform proof remains required by TG4-19.
