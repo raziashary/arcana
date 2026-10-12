@@ -439,6 +439,64 @@ mod portability_tests {
     }
 
     #[test]
+    fn generated_hook_config_writes_round_trip_a_leap_year_and_dst() {
+        let directory = tempfile::tempdir().expect("isolated annual hook configuration");
+        let path = directory.path().join("config.db");
+        let instants = crate::db::test_clock::yearly_and_dst_instants();
+        assert_eq!(instants.len(), 4400);
+        for (index, instant) in instants.into_iter().enumerate() {
+            let _clock = crate::db::test_clock::at(instant);
+            let db = HooksDb::open_at(&path).expect("production config opener");
+            let hook = db
+                .insert(&AddHookInput {
+                    name: format!("annual hook {index}"),
+                    hook_type: HookType::PreToolUse,
+                    enabled: Some(false),
+                    priority: None,
+                    conditions: None,
+                    action: HookAction::Block { message: None },
+                })
+                .expect("actual config writer");
+            drop(db);
+            let reopened = HooksDb::open_at(&path).expect("reopen config store");
+            let observed = reopened.get(&hook.id).unwrap().unwrap();
+            let canonical = crate::db::timestamps::format_utc_timestamp(instant);
+            assert_eq!(
+                observed.created_at, canonical,
+                "hook creation pair #{index}"
+            );
+            assert_eq!(
+                observed.updated_at, canonical,
+                "hook initial update pair #{index}"
+            );
+            let updated = instant + chrono::Duration::milliseconds(1);
+            let _update_clock = crate::db::test_clock::at(updated);
+            reopened
+                .set_enabled(&hook.id, true)
+                .expect("actual configuration update");
+            drop(reopened);
+            let observed = HooksDb::open_at(&path)
+                .unwrap()
+                .get(&hook.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                observed.created_at, canonical,
+                "update preserves creation instant #{index}"
+            );
+            assert_eq!(
+                observed.updated_at,
+                crate::db::timestamps::format_utc_timestamp(updated),
+                "hook update pair #{index}"
+            );
+            assert_eq!(
+                crate::db::timestamps::parse_db_timestamp(&observed.updated_at).unwrap(),
+                updated
+            );
+        }
+    }
+
+    #[test]
     fn file_backed_defaults_and_set_enabled_reader_use_canonical_timestamps() {
         let dir = tempfile::tempdir().expect("isolated config DB directory");
         let conn = crate::db::config_db::open_at(&dir.path().join("config.db"))

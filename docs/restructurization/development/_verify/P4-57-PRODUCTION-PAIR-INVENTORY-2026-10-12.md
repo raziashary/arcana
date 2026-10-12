@@ -1,6 +1,6 @@
 # P4-57 Production Timestamp Pair Inventory
 
-Status: source investigation complete for the named P4 domains plus the direct WorkersDb, PlanDb, and GraphStore owners required by TG4-19 every-database wording. This is an inventory only; it does not claim tests ran or a gate closed.
+Historical source inventory as of2026-10-12; the dated current-coverage follow-up below supersedes annual-gap cells for verified fields. Status: source investigation complete for the named P4 domains plus the direct WorkersDb, PlanDb, and GraphStore owners required by TG4-19 every-database wording. This is an inventory only; it does not claim tests ran or a gate closed.
 Scope: production timestamp columns and actual writers/readers in task, run, session, config/hooks, analytics/events, Memory, WorkersDb, PlanDb, and GraphStore. No tests/builds/runtime/provider/network/git mutations, credentials, env/Vault/user DB/Calendar access.
 
 ## Coverage matrix
@@ -197,3 +197,7 @@ These three owners were explicitly added during the follow-up scope clarificatio
 - **WorkersDb:** `workers.created_at` (dashboard date count), `workers.updated_at` (raw roster/by-slug projection), `workers.last_seen` (heartbeat raw roster/by-slug/CLI projection). Updated/last_seen have no temporal operation, but production value readers exist.
 - **PlanDb:** `plans.created_at` (list chronology), `plans.updated_at` (raw DTO/CLI projection), `plan_items.created_at` (list/claim chronology), `plan_items.completed_at` (raw DTO projection). `plan_executions.started_at/completed_at` are excluded: schema-only with no production writer or reader found.
 - **GraphStore:** `nodes.updated_at` (production `get_stats` max-instant reader). `snapshots.created_at` has only a direct test SQL read, not a production timestamp reader; other GraphStore timestamp fields are schema-only or lack production temporal consumers.
+
+## Current annual coverage follow-up — 2026-10-13
+
+The original matrix above records inventory-time gaps. Windows actual generated-now writer/reopened-reader annual proofs now cover Task.create/update, Runs.begin/end, Workers.create/heartbeat and Plan/Item.create/status (11fields; P4-57-ISOLATED-CLOCK-2026-10-12.md), plus six Memory fields and direct/tier-sync unified writers (P4-57-MEMORY-ANNUAL-2026-10-13.md), checkpoint.created_ms with retention (P4-57-CHECKPOINT-ANNUAL-2026-10-13.md), graph.nodes.updated_at single/batch upsert and hook-config.created_at/updated_at (P4-57-GRAPH-HOOK-ANNUAL-2026-10-13.md). These21distinct fields supersede their old annual-missing cells for Windows only. Existing Session/Analytics/hook-log annual receipts remain valid and separate. Missing task auxiliary and run heartbeat/progress/events/journal pairs, whole-contract legacy/platform evidence and P4-57/TG4-19 closure remain open. No production runtime or format changed in these tests; checkpoint integers remain integers under the approved fixture contract.

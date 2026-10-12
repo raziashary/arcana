@@ -346,4 +346,194 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn generated_memory_writers_round_trip_a_leap_year_and_dst_after_reopen() {
+        use crate::memory::backend::{LexicalBackend, RetrievalBackend, RetrievalQuery};
+        use crate::memory::gateway::{self, Proposal, Proposer, Verdict};
+        use crate::memory::types::{FactCategory, MemoryTier};
+        use crate::memory::{EpisodicStore, ProceduralStore, SemanticStore};
+        use std::collections::HashMap;
+
+        let home = tempfile::tempdir().expect("isolated annual Memory home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let instants = yearly_and_dst_instants();
+        assert_eq!(instants.len(), 4400);
+        let _setup = at(instants[0]);
+        drop(crate::memory::MemoryDb::open().expect("initialize production Memory database"));
+
+        let mut episodic_refs = Vec::with_capacity(instants.len());
+        let mut semantic_refs = Vec::with_capacity(instants.len());
+        let mut unified_refs = Vec::with_capacity(instants.len() * 3);
+
+        for (index, instant) in instants.iter().copied().enumerate() {
+            let _created = at(instant);
+            let episodic_id = EpisodicStore::store_user_message(
+                "annual-memory-session",
+                &format!("annual episodic timestamp record {index}"),
+                None,
+                None,
+            )
+            .expect("actual episodic generated-now writer");
+            unified_refs.push((format!("epi-{episodic_id}"), instant));
+            episodic_refs.push((episodic_id, instant));
+
+            let fact_text = format!("annualsemantic{index} timestamp round trip fact");
+            let semantic_id = SemanticStore::store_fact(
+                &fact_text,
+                FactCategory::Pattern,
+                0.9,
+                "annual_clock_test",
+                None,
+                None,
+                &[],
+            )
+            .expect("actual semantic generated-now create writer");
+            let updated = instant + chrono::Duration::milliseconds(123);
+            let _updated = at(updated);
+            SemanticStore::update_fact(&semantic_id, &format!("{fact_text} refreshed"), None)
+                .expect("actual semantic generated-now update writer");
+            unified_refs.push((format!("sem-{semantic_id}"), instant));
+            semantic_refs.push((semantic_id, instant, updated));
+            drop(_updated);
+
+            let content = format!("annual memory timestamp proof marker uniquely{index}");
+            let proposal = Proposal {
+                content,
+                tier: MemoryTier::Semantic,
+                scope: "global".into(),
+                scope_ref: String::new(),
+                proposer: Proposer::Assistant,
+                claimed_confidence: 0.7,
+                source_file: None,
+                source_line: None,
+            };
+            let unified_id = match gateway::propose(
+                &crate::memory::MemoryDb::open()
+                    .expect("open actual Memory gateway writer database")
+                    .conn,
+                &proposal,
+            )
+            .expect("actual unified Memory generated-now writer")
+            {
+                Verdict::Stored { id, .. } => id,
+                Verdict::Rejected { reason } => panic!("annual proposal rejected: {reason}"),
+            };
+            unified_refs.push((unified_id, instant));
+
+            let topic = format!("annual-procedural-{index}");
+            ProceduralStore::save_topic(
+                &topic,
+                &format!("annual procedural {index}"),
+                &format!("annual procedural marker {index}"),
+                &[],
+            )
+            .expect("actual procedural generated-now create writer");
+            let created_rows = ProceduralStore::search(&format!("marker {index}"), 2)
+                .expect("reopen actual procedural reader after create");
+            assert_eq!(created_rows.len(), 1, "procedural create {index}");
+            assert_eq!(created_rows[0].topic, topic);
+            assert_eq!(created_rows[0].created_at, instant);
+            assert_eq!(created_rows[0].updated_at, instant);
+
+            let procedural_index =
+                crate::memory::MemoryDb::open().expect("reopen procedural index reader database");
+            let indexed_topic = LexicalBackend
+                .search(
+                    &procedural_index.conn,
+                    &RetrievalQuery {
+                        text: format!("annual procedural marker {index}"),
+                        scope_keys: vec!["global".into()],
+                        tiers: vec![MemoryTier::Procedural],
+                        limit: 2,
+                    },
+                )
+                .expect("read procedural tier-sync row through lexical Memory backend");
+            assert_eq!(indexed_topic.len(), 1, "procedural index create {index}");
+            assert_eq!(indexed_topic[0].id, format!("prc-{}", created_rows[0].id));
+            assert_eq!(
+                indexed_topic[0].created_at,
+                crate::db::timestamps::format_utc_timestamp(instant)
+            );
+            assert_eq!(
+                crate::db::timestamps::parse_db_timestamp(&indexed_topic[0].created_at)
+                    .expect("parse procedural unified timestamp"),
+                instant
+            );
+
+            let _procedural_update = at(updated);
+            ProceduralStore::save_topic(
+                &topic,
+                &format!("annual procedural {index}"),
+                &format!("annual procedural marker {index} refreshed"),
+                &[],
+            )
+            .expect("actual procedural generated-now update writer");
+            let updated_rows = ProceduralStore::search(&format!("marker {index}"), 2)
+                .expect("reopen actual procedural reader after update");
+            assert_eq!(updated_rows.len(), 1, "procedural update {index}");
+            assert_eq!(updated_rows[0].topic, topic);
+            assert_eq!(updated_rows[0].created_at, instant);
+            assert_eq!(updated_rows[0].updated_at, updated);
+            ProceduralStore::delete_topic(&topic).expect("remove temporary procedural topic");
+        }
+
+        let timeline = EpisodicStore::get_session_timeline("annual-memory-session")
+            .expect("reopen actual episodic timeline reader");
+        assert_eq!(timeline.len(), episodic_refs.len());
+        let mut expected_episodic = episodic_refs.into_iter().collect::<HashMap<_, _>>();
+        for row in timeline {
+            let expected = expected_episodic
+                .remove(&row.id)
+                .expect("episodic reader returns each actual writer row");
+            assert_eq!(row.created_at, expected);
+        }
+        assert!(expected_episodic.is_empty(), "all episodic rows were read");
+
+        let semantic_rows = SemanticStore::search("annualsemantic", 5000)
+            .expect("reopen actual semantic search reader");
+        assert_eq!(semantic_rows.len(), semantic_refs.len());
+        let mut expected_semantic = semantic_refs
+            .into_iter()
+            .map(|(id, created, updated)| (id, (created, updated)))
+            .collect::<HashMap<_, _>>();
+        for row in semantic_rows {
+            let (created, updated) = expected_semantic
+                .remove(&row.id)
+                .expect("semantic reader returns each actual writer row");
+            assert_eq!(row.created_at, created);
+            assert_eq!(row.updated_at, updated);
+        }
+        assert!(expected_semantic.is_empty(), "all semantic rows were read");
+
+        let reopened = crate::memory::MemoryDb::open().expect("reopen unified Memory database");
+        let candidates = LexicalBackend
+            .search(
+                &reopened.conn,
+                &RetrievalQuery {
+                    text: "annual timestamp".into(),
+                    scope_keys: vec!["global".into()],
+                    tiers: vec![MemoryTier::Episodic, MemoryTier::Semantic],
+                    limit: 20_000,
+                },
+            )
+            .expect("read unified timestamps through the lexical Memory backend");
+        assert_eq!(candidates.len(), unified_refs.len());
+        let mut expected_unified = unified_refs.into_iter().collect::<HashMap<_, _>>();
+        for candidate in candidates {
+            let expected = expected_unified
+                .remove(&candidate.id)
+                .expect("unified reader returns each actual gateway row");
+            assert_eq!(
+                candidate.created_at,
+                crate::db::timestamps::format_utc_timestamp(expected)
+            );
+            assert_eq!(
+                crate::db::timestamps::parse_db_timestamp(&candidate.created_at)
+                    .expect("parse unified candidate timestamp"),
+                expected
+            );
+        }
+        assert!(expected_unified.is_empty(), "all unified rows were read");
+    }
 }

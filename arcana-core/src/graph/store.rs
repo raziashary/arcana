@@ -1174,6 +1174,61 @@ mod timestamp_tests {
     }
 
     #[test]
+    fn generated_graph_writes_round_trip_a_leap_year_and_dst() {
+        let directory = tempfile::tempdir().expect("isolated annual graph database");
+        let path = directory.path().join("graph.db");
+        let instants = crate::db::test_clock::yearly_and_dst_instants();
+        assert_eq!(instants.len(), 4400);
+        for (index, instant) in instants.into_iter().enumerate() {
+            let _clock = crate::db::test_clock::at(instant);
+            let store = GraphStore::open(&path).expect("production graph opener");
+            store
+                .upsert_node(&node("annual"), None, None)
+                .expect("actual node writer");
+            drop(store);
+            let reopened = GraphStore::open(&path).expect("reopen graph store");
+            let observed = reopened
+                .get_stats()
+                .expect("public max-instant reader")
+                .last_updated
+                .expect("written timestamp");
+            assert_eq!(
+                observed,
+                crate::db::timestamps::format_utc_timestamp(instant),
+                "node writer pair #{index}"
+            );
+            assert_eq!(
+                crate::db::timestamps::parse_db_timestamp(&observed).unwrap(),
+                instant
+            );
+            let updated = instant + chrono::Duration::milliseconds(1);
+            let _update_clock = crate::db::test_clock::at(updated);
+            assert_eq!(
+                reopened
+                    .upsert_nodes_batch(&[node("annual")], None, None)
+                    .expect("actual batch update writer"),
+                1
+            );
+            drop(reopened);
+            let observed = GraphStore::open(&path)
+                .unwrap()
+                .get_stats()
+                .unwrap()
+                .last_updated
+                .unwrap();
+            assert_eq!(
+                observed,
+                crate::db::timestamps::format_utc_timestamp(updated),
+                "batch node writer pair #{index}"
+            );
+            assert_eq!(
+                crate::db::timestamps::parse_db_timestamp(&observed).unwrap(),
+                updated
+            );
+        }
+    }
+
+    #[test]
     fn file_backed_graph_writer_default_and_mixed_timestamp_reader_are_canonicalized() {
         let dir = tempfile::tempdir().expect("isolated graph database directory");
         let path = dir.path().join("graph.db");

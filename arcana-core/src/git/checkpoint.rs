@@ -673,4 +673,104 @@ mod task_association_tests {
         assert!(error.to_string().contains("outside the workspace"));
         assert_eq!(std::fs::read_to_string(external).unwrap(), "private");
     }
+
+    #[test]
+    fn generated_checkpoint_writes_round_trip_a_leap_year_and_dst() {
+        use std::collections::BTreeMap;
+
+        let home = tempfile::tempdir().expect("isolated checkpoint Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("separate checkpoint workspace");
+        let file = workspace.path().join("annual-checkpoint.txt");
+        std::fs::write(&file, "prior workspace content").expect("seed workspace file");
+        let file_path = file.to_string_lossy().into_owned();
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+        let session_id = "annual-checkpoint-clock";
+        let mut instants = crate::db::test_clock::yearly_and_dst_instants();
+        assert_eq!(instants.len(), 4_400);
+        instants.sort_by_key(|instant| instant.timestamp_millis());
+
+        // Keep one file while assigning equal-millisecond instants to separate
+        // task scopes. This gives the production ORDER BY created_ms DESC a
+        // unique key in each scope, so every newly-written ID is readable
+        // before the existing per-file/per-owner retention cap can evict it.
+        let mut duplicate_occurrences = BTreeMap::<i64, i64>::new();
+        let mut expected_retained = BTreeMap::<i64, Vec<(i64, String)>>::new();
+        for instant in instants {
+            let _clock = crate::db::test_clock::at(instant);
+            let created_ms = instant.timestamp_millis();
+            let occurrence = duplicate_occurrences.entry(created_ms).or_default();
+            let scope = *occurrence + 1;
+            *occurrence += 1;
+            let checkpoint = create_within_workspace(
+                session_id,
+                Some(scope),
+                &file_path,
+                "annual timestamp round trip",
+                &workspace_path,
+            )
+            .expect("actual checkpoint writer")
+            .expect("existing workspace file is snapshotted");
+            assert_eq!(checkpoint.created_ms, created_ms);
+            assert_eq!(checkpoint.task_id, Some(scope));
+
+            let scope_retained = expected_retained.entry(scope).or_default();
+            assert!(
+                scope_retained
+                    .last()
+                    .is_none_or(|(prior_ms, _)| *prior_ms < created_ms),
+                "duplicate timestamp scopes must advance strictly in time"
+            );
+            scope_retained.push((created_ms, checkpoint.id.clone()));
+            if scope_retained.len() > RETENTION_PER_FILE {
+                scope_retained.remove(0);
+            }
+
+            // list() opens config.db independently and must expose exactly the
+            // production-retained rows in created_ms order after each write.
+            let listed = list(Some(&file_path), Some(session_id), Some(scope))
+                .expect("read through production checkpoint list");
+            assert!(
+                listed.iter().any(|entry| entry.id == checkpoint.id),
+                "newly written checkpoint must be readable before retention can evict it"
+            );
+            assert_eq!(listed.len(), scope_retained.len());
+            assert_eq!(
+                listed
+                    .iter()
+                    .map(|entry| (entry.created_ms, entry.id.as_str()))
+                    .collect::<Vec<_>>(),
+                scope_retained
+                    .iter()
+                    .rev()
+                    .map(|(created_ms, id)| (*created_ms, id.as_str()))
+                    .collect::<Vec<_>>(),
+                "production list mismatch after writing {created_ms}"
+            );
+            assert!(listed.iter().all(|entry| entry.file_path == file_path));
+            assert!(listed.iter().all(|entry| entry.task_id == Some(scope)));
+        }
+
+        // The final read opens a fresh production connection after all scoped
+        // writer clocks have been dropped. Each ownership scope retains at
+        // most 50 rows; this does not claim all 4,400 remain retained.
+        for (scope, expected) in expected_retained {
+            let reopened = list(Some(&file_path), Some(session_id), Some(scope))
+                .expect("read retained checkpoints after writer connections closed");
+            assert_eq!(reopened.len(), expected.len());
+            assert_eq!(
+                reopened
+                    .iter()
+                    .map(|entry| (entry.created_ms, entry.id.as_str()))
+                    .collect::<Vec<_>>(),
+                expected
+                    .iter()
+                    .rev()
+                    .map(|(created_ms, id)| (*created_ms, id.as_str()))
+                    .collect::<Vec<_>>()
+            );
+            assert!(reopened.iter().all(|entry| entry.task_id == Some(scope)));
+            assert!(reopened.iter().all(|entry| entry.created_ms > 0));
+        }
+    }
 }
