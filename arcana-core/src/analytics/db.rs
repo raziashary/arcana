@@ -2094,52 +2094,10 @@ fn parse_optional_timestamp(
 #[cfg(test)]
 mod analytics_timestamp_pairs_tests {
     use super::*;
-    use chrono::{DateTime, Duration, FixedOffset, NaiveDateTime};
+    use chrono::{DateTime, FixedOffset};
     use std::collections::HashMap;
 
-    fn yearly_and_dst_instants() -> Vec<DateTime<Utc>> {
-        let mut instants = Vec::with_capacity(4 * 366 * 3 + 8);
-        for ordinal in 1..=366 {
-            let date = NaiveDate::from_yo_opt(2024, ordinal).expect("leap-year date");
-            for seconds in [0, 1, 43_199, 86_399] {
-                let wall_time =
-                    date.and_hms_opt(0, 0, 0).expect("midnight") + Duration::seconds(seconds);
-                for offset_seconds in [-43_200, 0, 50_400] {
-                    let offset = FixedOffset::east_opt(offset_seconds).expect("valid UTC offset");
-                    instants.push(
-                        offset
-                            .from_local_datetime(&wall_time)
-                            .single()
-                            .expect("fixed-offset wall time")
-                            .with_timezone(&Utc),
-                    );
-                }
-            }
-        }
-
-        for (wall_time, offset_seconds) in [
-            ("2024-03-10 01:59:59", -18_000),
-            ("2024-03-10 03:00:00", -14_400),
-            ("2024-11-03 01:59:59", -14_400),
-            ("2024-11-03 01:00:00", -18_000),
-            ("2024-04-07 02:59:59", 39_600),
-            ("2024-04-07 02:00:00", 36_000),
-            ("2024-10-06 01:59:59", 36_000),
-            ("2024-10-06 03:00:00", 39_600),
-        ] {
-            let wall_time = NaiveDateTime::parse_from_str(wall_time, "%Y-%m-%d %H:%M:%S")
-                .expect("DST edge wall time");
-            let offset = FixedOffset::east_opt(offset_seconds).expect("valid DST offset");
-            instants.push(
-                offset
-                    .from_local_datetime(&wall_time)
-                    .single()
-                    .expect("fixed-offset DST edge")
-                    .with_timezone(&Utc),
-            );
-        }
-        instants
-    }
+    use crate::db::test_clock::yearly_and_dst_instants;
 
     fn token_record(timestamp: DateTime<Utc>, session_id: String) -> TokenUsageRecord {
         TokenUsageRecord {

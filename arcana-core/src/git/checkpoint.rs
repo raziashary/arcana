@@ -43,6 +43,10 @@ fn checkpoints_root() -> Result<PathBuf> {
 }
 
 fn now_ms() -> i64 {
+    #[cfg(test)]
+    if let Some(instant) = crate::db::test_clock::current() {
+        return instant.timestamp_millis();
+    }
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)

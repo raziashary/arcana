@@ -40,6 +40,9 @@ use std::path::PathBuf;
 /// `open_tuned` fixes is `journal_mode` — see below.
 pub const BUSY_TIMEOUT_MS: u64 = 5_000;
 
+#[cfg(test)]
+pub(crate) mod test_clock;
+
 /// Open a SQLite database with the settings every connection here should have.
 ///
 /// The real fix is `journal_mode`. Before P1 it was set at some open sites and

@@ -104,6 +104,10 @@ pub fn age_hours(raw: &str) -> Result<i64> {
 
 /// The current time in Arcana's canonical fixed-millisecond UTC format.
 pub fn now_rfc3339() -> String {
+    #[cfg(test)]
+    if let Some(instant) = crate::db::test_clock::current() {
+        return format_utc_timestamp(instant);
+    }
     format_utc_timestamp(Utc::now())
 }
 

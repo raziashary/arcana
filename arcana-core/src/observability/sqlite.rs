@@ -112,6 +112,8 @@ fn logical_database_name(path: &Path) -> &str {
 /// Attach statement timing when a SQLite connection's role is more specific
 /// than its filename (for example, an integrity-checked backup snapshot).
 pub(crate) fn install_profile_for(conn: &mut Connection, database: &str) {
+    #[cfg(test)]
+    crate::db::test_clock::install(conn).expect("install isolated SQLite test clock");
     let callback = match database {
         "analytics.db" => profile_analytics as fn(&str, Duration),
         "annotations.db" => profile_annotations,
