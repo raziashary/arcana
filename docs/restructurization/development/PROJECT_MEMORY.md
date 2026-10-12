@@ -1,11 +1,12 @@
 # Arcana working memory (updated 2026-10-12)
 
 Current state: active, following owner resume and ADR0359 approvals. Historical
-paused/pending notes are superseded. Shared prefix hardening passes on both hosts;
-CLI completion, provider cancellation accounting and strict sandbox proof continue.
+paused/pending notes are superseded. Shared prefix hardening and provider
+cancellation are verified. Offline CLI Fleet passes5/5; live-provider completion
+and strict sandbox proof remain open.
 
-Latest active checkpoint: `_verify/P4-SESSION-CHECKPOINT-2026-10-09.md`.
-Current tally: **41/59 P4, 19/33 TG4**. P4-39 closed on its saved-Fleet and retained-audit proof; no new item closes in this continuation. Retention P4-59/TG4-21 is proven
+Latest active checkpoint: `_verify/P4-SESSION-CHECKPOINT-2026-10-12.md`.
+Current tally: **42/59 P4, 20/33 TG4**. P4-62/TG4-32 close on their own deadline/timing proof (ADR0374). P4-39 remains closed on its saved-Fleet and retained-audit proof. Retention P4-59/TG4-21 is proven
 across the complete Windows/Linux/macOS consumer checks. Startup retry
 P4-52/TG4-26 is proven on its own contract, as the owner approved in ADR-0319;
 successful paid Fleet stays open under P4-50. Capture unit `1cdb7a1` passes

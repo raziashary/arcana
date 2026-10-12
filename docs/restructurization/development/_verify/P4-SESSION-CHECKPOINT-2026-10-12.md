@@ -4,15 +4,15 @@
 
 The active goal is to complete every P4 item and TG4 gate in MASTER_DEVELOPMENT_PLAN.md and TESTING_GATES.md, maintain READINESS_MATRIX.md, then read and complete P4_EXPANDED_GOAL.md. P5 and P6 remain downstream; they have not started.
 
-Live checklist count: **41/59 P4 tasks checked (18 open)** and **19/33 TG4 gates checked (14 open)**. No checklist item closed during this continuation. P4-49 is the owner-run Calendar desktop acceptance; the other 17 open P4 tasks remain engineering work.
+Live checklist count: **42/59 P4 tasks checked (17 open)** and **20/33 TG4 gates checked (13 open)**. P4-62/TG4-32 closed on the named deadline/timing proof (ADR0374). P4-49 is the owner-run Calendar desktop acceptance; the other 16 open P4 tasks remain engineering work.
 
-Open P4 tasks: P4-11, P4-14, P4-15, P4-18, P4-19, P4-20, P4-21, P4-36, P4-50, P4-51, P4-53, P4-54, P4-56, P4-57, P4-60, P4-61, P4-62, P4-49.
+Open P4 tasks: P4-11, P4-14, P4-15, P4-18, P4-19, P4-20, P4-21, P4-36, P4-50, P4-51, P4-53, P4-54, P4-56, P4-57, P4-60, P4-61, P4-49.
 
-Open TG4 gates: TG4-07, TG4-08, TG4-09, TG4-16, TG4-18, TG4-19, TG4-23, TG4-24, TG4-25, TG4-27, TG4-28, TG4-30, TG4-31, TG4-32.
+Open TG4 gates: TG4-07, TG4-08, TG4-09, TG4-16, TG4-18, TG4-19, TG4-23, TG4-24, TG4-25, TG4-27, TG4-28, TG4-30, TG4-31.
 
 ## New verified work
 
-- The feature-gated offline production CLI Fleet harness passes 4/4. It exercises actual CLI startup, scripted workers and QC, a Rust fixture build, durable task/epic completion, deadline/shutdown behavior, log and analytics export readback, and unmarked-profile denial. Exact evidence and command: P4-50-CLI-OFFLINE-FLEET-2026-10-12.md. This is not live-provider success and does not close P4-50/TG4-24.
+- The feature-gated offline production CLI Fleet harness passes 5/5. It exercises actual CLI startup, scripted workers and QC, a Rust fixture build, durable task/epic completion, deadline/shutdown behavior, log and analytics export readback, and unmarked-profile denial. Exact evidence and command: P4-50-CLI-OFFLINE-FLEET-2026-10-12.md. This is not live-provider success and does not close P4-50/TG4-24.
 - Windows shell hooks now run through the selected-workspace write lease and existing experimental SBOX launcher. Focused tests pass 5/5 for shell-hook routing/admission, 1/1 for failed-stop lease retention/retry, and 1/1 for dropped-child ownership until the OS confirms an empty process job. Provider/database environment variables were removed. Rust formatting and diff checks pass.
 - On failed process-tree confirmation, the bounded cleanup owner retains the child, cleanup admission and write lease; the workspace remains quarantined until the OS confirms the job is empty. Unsupported non-Windows shell-hook execution stays fail-closed.
 - Detailed shell-hook evidence: P4-61-SHELL-HOOK-BOUNDARY-2026-10-12.md. P4-61/TG4-31 remain open because complete command/corpus coverage, guarded staging/copy-back, locked dependency staging, filesystem/network negatives, Linux/macOS production runners, and loopback smoke capability are not yet proven.

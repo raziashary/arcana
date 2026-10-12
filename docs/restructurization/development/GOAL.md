@@ -2,11 +2,12 @@
 
 Current state: **active**. Owner resumed core P4 and approved all five runtime,
 sandbox and privacy decisions in ADR0359. Earlier pause/pending notes below are
-historical. Shared privacy hardening is verified; actual CLI Fleet, cancellation
-accounting and sandbox proof are the current implementation units.
+historical. Shared privacy hardening and provider cancellation are verified.
+The actual offline CLI Fleet success/deadline/export suite passes5/5;
+live-provider completion and strict sandbox proof remain open.
 
-Latest boundary: `_verify/P4-SESSION-CHECKPOINT-2026-10-09.md`. Core P4 is
-**41/59 checked**, TG4 **19/33 passing**; 18 tasks remain, including the
+Latest boundary: `_verify/P4-SESSION-CHECKPOINT-2026-10-12.md`. Core P4 is
+**42/59 checked**, TG4 **20/33 passing**; 17 tasks remain, including the
 owner-run Calendar acceptance. P4-59/TG4-21 closes on complete retention
 consumer evidence across Windows, Linux and macOS. P4-52/TG4-26 closes on its
 own verified retry contract with owner approval; successful paid Fleet
