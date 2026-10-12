@@ -49,7 +49,7 @@ use crate::state::lock::LockTolerant;
 pub struct RunnerDeps {
     pub state: Arc<Mutex<AppState>>,
     pub pending: PendingPermissions,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "offline-fleet-test"))]
     pub provider_override: Option<Arc<dyn Provider>>,
 }
 
@@ -249,14 +249,14 @@ async fn run_inner(
     let _runtime_lease =
         crate::state::runtime_registry::global().admit(subagent_id, subagent_id)?;
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "offline-fleet-test"))]
     let provider = match &deps.provider_override {
         Some(provider) => {
             crate::provider::capped::CappedProvider::wrap(provider.clone(), deps.state.clone())
         }
         None => build_provider(&provider_id, deps.state.clone())?,
     };
-    #[cfg(not(test))]
+    #[cfg(not(any(test, feature = "offline-fleet-test")))]
     let provider = build_provider(&provider_id, deps.state.clone())?;
 
     emit(

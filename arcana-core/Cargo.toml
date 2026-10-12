@@ -32,6 +32,10 @@ embeddings = ["dep:fastembed"]
 #   cargo test -p arcana-core --features live-smoke --test live_provider_smoke -- --nocapture
 live-smoke = []
 
+# Opt-in deterministic provider seam used only by the arcanactl offline Fleet
+# integration test. Never enabled by desktop or ordinary CLI builds.
+offline-fleet-test = []
+
 [dependencies]
 serde       = { version = "1", features = ["derive"] }
 serde_json  = "1"

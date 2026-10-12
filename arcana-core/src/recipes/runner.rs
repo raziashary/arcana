@@ -355,7 +355,7 @@ pub struct RecipeRunner {
     supervisor_budget_override: Option<crate::budget::TaskBudget>,
     fleet_correlation_id: Option<String>,
     host_approval_available: bool,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "offline-fleet-test"))]
     provider_override: Option<Arc<dyn Provider>>,
     #[cfg(test)]
     startup_failures_for_test: Arc<AtomicUsize>,
@@ -387,7 +387,7 @@ impl RecipeRunner {
             supervisor_budget_override: None,
             fleet_correlation_id: None,
             host_approval_available: true,
-            #[cfg(test)]
+            #[cfg(any(test, feature = "offline-fleet-test"))]
             provider_override: None,
             #[cfg(test)]
             startup_failures_for_test: Arc::new(AtomicUsize::new(0)),
@@ -398,6 +398,13 @@ impl RecipeRunner {
     /// scheduler dispatch, recipe resolution, AgentEngine, and tools intact.
     #[cfg(test)]
     pub(crate) fn with_provider_for_test(mut self, provider: Arc<dyn Provider>) -> Self {
+        self.provider_override = Some(provider);
+        self
+    }
+
+    /// Supply the deterministic provider for the opt-in arcanactl integration build.
+    #[cfg(feature = "offline-fleet-test")]
+    pub fn with_provider_for_offline_fleet_test(mut self, provider: Arc<dyn Provider>) -> Self {
         self.provider_override = Some(provider);
         self
     }
@@ -569,7 +576,7 @@ impl RecipeRunner {
             };
 
             let inner: Arc<dyn Provider> = {
-                #[cfg(test)]
+                #[cfg(any(test, feature = "offline-fleet-test"))]
                 if let Some(provider) = &self.provider_override {
                     provider.clone()
                 } else {
@@ -587,7 +594,7 @@ impl RecipeRunner {
                         }
                     }
                 }
-                #[cfg(not(test))]
+                #[cfg(not(any(test, feature = "offline-fleet-test")))]
                 {
                     let api_key = VaultManager::get(&provider_key(provider_id))?.ok_or_else(|| {
                         ArcanaError::Agent(format!(

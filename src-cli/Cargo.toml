@@ -5,6 +5,9 @@ edition = "2021"
 description = "arcanactl — Arcana headless CLI for automation, scripting, and CI/CD"
 authors = ["Arcana"]
 
+[features]
+offline-fleet-test = ["arcana-core/offline-fleet-test"]
+
 [[bin]]
 name = "arcanactl"
 path = "src/main.rs"

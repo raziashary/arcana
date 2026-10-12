@@ -193,6 +193,7 @@ const EVENT_TYPES: &[&str] = &[
     "memory_recall_result",
     "memory_search_result",
     "memory_semantic_extract_result",
+    "offline_fleet_test_step",
     "operation_journal_intent_failed",
     "operation_journal_outcome_failed",
     "operation_reconciliation_required",

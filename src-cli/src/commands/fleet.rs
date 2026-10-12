@@ -90,6 +90,7 @@ async fn run_epic(args: RunArgs, ctx: OutputContext) -> Result<()> {
     .await
     .context("Could not initialize Arcana's production runtime")?;
     let _analytics_maintenance = CliAnalyticsMaintenanceGuard(runtime.analytics.clone());
+    let offline_test = runtime::offline_fleet_test_active()?;
 
     let provider_id = runtime
         .state
@@ -98,14 +99,16 @@ async fn run_epic(args: RunArgs, ctx: OutputContext) -> Result<()> {
         .active_provider
         .clone()
         .ok_or_else(|| anyhow!("No provider is selected; configure Gemini in Arcana Settings or pass --provider google"))?;
-    let key_available = arcana_core::vault::keychain::VaultManager::get(
-        &arcana_core::vault::keychain::provider_key(&provider_id),
-    )?
-    .is_some();
-    if !key_available {
-        bail!(
-            "No API key is stored for provider '{provider_id}'. Configure it in Arcana Settings before running the production Fleet"
-        );
+    if !offline_test {
+        let key_available = arcana_core::vault::keychain::VaultManager::get(
+            &arcana_core::vault::keychain::provider_key(&provider_id),
+        )?
+        .is_some();
+        if !key_available {
+            bail!(
+                "No API key is stored for provider '{provider_id}'. Configure it in Arcana Settings before running the production Fleet"
+            );
+        }
     }
     let workspace = ctx
         .working_dir
