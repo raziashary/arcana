@@ -1,5 +1,10 @@
 # P4 session checkpoint — 2026-10-09
 
+Latest continuation: **2026-10-12, active**. Owner approved all five previously
+pending runtime/sandbox/privacy decisions (ADR0359). Shared prefix hardening is
+verified on Windows/Linux. Earlier owner-stop/pending sections remain historical;
+the latest progress entries govern the current next work.
+
 Core P4 active: **41/59 tasks checked; TG4 19/33**. P4-39 now closes on actual saved-Fleet autonomous ordinary dependency and audited Supervisor budget-resolution completion, with retained deleted audit readback. Proof: P4-39-CLOSEOUT-2026-10-09.md. JSON scalar-preserving output redaction and five real Memory/routing readers are pushed as 1a9fc92; builtin success/failure coverage46/47, including actual command/shell/Git/diff and planner reader proof.
 
 Do core P4 first, then read/do owner P4_EXPANDED_GOAL.md. That owner file is still unread/untracked. Calendar is owner-only P4-49. No second paid provider run is authorized. New Gemini key must come from .env only for authorized live tests; never print it. Subagents only GPT-6 Luna High.
@@ -108,3 +113,7 @@ Do not infer these approvals from a later generic continue. Previous explicit ap
 Verified code commits above are pushed. Preserved unpublished work: process_sandbox/mod.rs test-only wiring, linux_smoke candidate and staging directory, readiness-only native/macOS sources/build script, older desktop consent harness/diagnostic reports, older checkpoint/ADR WIP and unread expanded goal. engine.rs/read_file.rs/runs.rs/procedural.rs verified changes are committed. No blind staging or deletion of that older work.
 
 All owned Windows/WSL test and check sessions from this continuation completed. Selected matrix/Memory/run tests started no servers/listeners; no owned dev/test listener remains from this continuation. Resume from this checkpoint and current Git/source before choosing the next concrete P4 unit; keep Rule4 boundaries and the Luna High restriction.
+
+2026-10-12 resume: goal active; current HEAD/origin main df84370. Owner explicitly approves all five pending runtime/sandbox/sanitizer decisions (ADR0359). Snapshot of tracked diff/non-ignored untracked files taken before fan-out under ignored target/p4-ci-checks/p4-resume-2026-10-12-snapshot. Proceed with scoped implementation and proof; current P441/59, TG419/33. No second paid run, user-database access, Calendar execution or expanded-goal work authorized.
+
+2026-10-12 P4-51 shared prefix hardening (ADR0359/0360): owner-approved executor enrichment now removes bounded full/truncated argument reflections at Unicode boundaries while preserving existing twelve-character matching, useful causes, JSON shape and correlation. Exact tool_result_error_tests pass Windows11/11 (.15s), Linux11/11 (.57s), with credential/database variables absent. Independent Luna High source review found no scoped sanitizer defect. Producer-truncated causes cannot be reconstructed. Evidence: `_verify/P4-51-SHARED-PREFIX-HARDENING-2026-10-12.md`. Provider cancellation and actual offline CLI Fleet proof proceed separately; sandbox/desktop prerequisites remain. No task/gate closure or readiness rescore: P441/59, TG419/33. No paid call, owner Calendar or expanded-goal work.

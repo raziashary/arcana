@@ -194,7 +194,7 @@ impl ToolResult {
         )
     }
 
-    /// Attach executor-owned failure metadata while removing exact values from
+    /// Attach executor-owned failure metadata while removing reflected values from
     /// the untrusted tool arguments. Handlers often include paths or rejected
     /// values in their prose; those can be source text, prompts, or commands.
     pub fn with_execution_context_and_input(
@@ -394,9 +394,9 @@ impl ToolResult {
 }
 
 fn sanitize_tool_error(value: &str, limit: usize, raw_input: Option<&serde_json::Value>) -> String {
-    fn collect_strings(value: &serde_json::Value, output: &mut Vec<String>) {
+    fn collect_strings<'a>(value: &'a serde_json::Value, output: &mut Vec<&'a str>) {
         match value {
-            serde_json::Value::String(value) if !value.is_empty() => output.push(value.clone()),
+            serde_json::Value::String(value) if !value.is_empty() => output.push(value),
             serde_json::Value::Array(values) => {
                 for value in values {
                     collect_strings(value, output);
@@ -411,21 +411,28 @@ fn sanitize_tool_error(value: &str, limit: usize, raw_input: Option<&serde_json:
         }
     }
 
-    let mut sanitized = crate::security::redaction::redact_text(value);
+    let normalize = |value: &str| {
+        crate::security::redaction::redact_text(value)
+            .chars()
+            .map(|character| {
+                if character.is_control() {
+                    ' '
+                } else {
+                    character
+                }
+            })
+            .collect::<String>()
+    };
+    let mut sanitized = normalize(value);
     if let Some(raw_input) = raw_input {
         let mut arguments = Vec::new();
         collect_strings(raw_input, &mut arguments);
         arguments.sort_by_key(|argument| std::cmp::Reverse(argument.len()));
         arguments.dedup();
         for argument in arguments {
-            let matches = if argument.chars().count() < 12 {
-                sanitized == argument
-            } else {
-                sanitized.contains(&argument)
-            };
-            if matches {
-                sanitized = sanitized.replace(&argument, "[argument omitted]");
-            }
+            // Handler errors may already have been redacted, control-normalized
+            // and truncated before reaching this input-aware boundary.
+            sanitized = omit_argument_reflections(&sanitized, &normalize(argument));
         }
     }
     sanitized
@@ -441,10 +448,124 @@ fn sanitize_tool_error(value: &str, limit: usize, raw_input: Option<&serde_json:
         .collect()
 }
 
+fn omit_argument_reflections(value: &str, argument: &str) -> String {
+    const MIN_PREFIX_CHARS: usize = 12;
+    const OMITTED: &str = "[argument omitted]";
+    let prefix: String = argument.chars().take(MIN_PREFIX_CHARS).collect();
+    if prefix.chars().count() < MIN_PREFIX_CHARS {
+        return if value == argument {
+            OMITTED.to_string()
+        } else {
+            value.to_string()
+        };
+    }
+
+    let mut output = String::new();
+    let mut copied_until = 0;
+    for (start, _) in value.match_indices(&prefix) {
+        if start < copied_until {
+            continue;
+        }
+        let mut end = start + prefix.len();
+        for ((offset, reflected), original) in value[end..]
+            .char_indices()
+            .zip(argument[prefix.len()..].chars())
+        {
+            if reflected != original {
+                break;
+            }
+            end = start + prefix.len() + offset + reflected.len_utf8();
+        }
+        output.push_str(&value[copied_until..start]);
+        output.push_str(OMITTED);
+        copied_until = end;
+    }
+    output.push_str(&value[copied_until..]);
+    output
+}
+
 #[cfg(test)]
 mod tool_result_error_tests {
     use super::ToolResult;
     use serde_json::Value;
+
+    #[test]
+    fn executor_context_omits_truncated_argument_prefixes_and_keeps_useful_causes() {
+        let argument = format!("planted private filename {}", "x".repeat(1024));
+        let input = serde_json::json!({"path": argument});
+        for length in [12, 64, 400, 512] {
+            let prefix: String = argument.chars().take(length).collect();
+            let result = ToolResult::error_with_next_step(
+                format!("Cannot open '{prefix}': permission denied (os error 13)"),
+                "Check filesystem access before retrying.",
+            )
+            .with_execution_context_and_input(
+                "write_file",
+                "privacy-session",
+                "worker",
+                Some(7),
+                "privacy-call",
+                Some("privacy-run"),
+                Some(&input),
+            );
+            let value: Value = serde_json::from_str(&result.output).expect("typed failed JSON");
+            let cause = value["cause"].as_str().expect("safe cause");
+            assert!(cause.contains("[argument omitted]"));
+            assert!(!result.output.contains("planted priv"));
+            if length <= 400 {
+                assert!(cause.contains("permission denied (os error 13)"));
+            }
+            assert!(cause.chars().count() <= 512);
+            assert_eq!(value["context"]["tool_call_id"], "privacy-call");
+            assert_eq!(value["run_id"], "privacy-run");
+            assert_eq!(value["task_id"], 7);
+            assert_eq!(value["ok"], false);
+            assert_eq!(
+                value["suggested_action"],
+                "Check filesystem access before retrying."
+            );
+        }
+    }
+
+    #[test]
+    fn executor_context_masks_unicode_nested_overlapping_and_normalized_reflections() {
+        let unicode = format!("私的入力🦀日本語のファイル {}", "界".repeat(800));
+        let shared = "private overlapping input ";
+        let longer = format!("{shared}{}", "alpha ".repeat(160));
+        let controls = format!("private\ncontrol\tinput {}", "beta ".repeat(160));
+        let unicode_prefix: String = unicode.chars().take(35).collect();
+        let input = serde_json::json!({"nested": [unicode, longer, shared, {"text": controls}]});
+        let result = ToolResult::error(format!(
+            "Rejected {unicode_prefix}; private overlapping input alpha alpha; private control input beta beta; permission denied"
+        ))
+        .with_execution_context_and_input(
+            "edit_file", "privacy-session", "worker", None, "privacy-call", None, Some(&input),
+        );
+        let value: Value = serde_json::from_str(&result.output).expect("valid UTF-8 JSON");
+        let cause = value["cause"].as_str().expect("safe Unicode cause");
+        assert!(!cause.contains("私的入力"));
+        assert!(!cause.contains("private overlapping"));
+        assert!(!cause.contains("private control"));
+        assert!(cause.contains("permission denied"));
+        assert_eq!(cause.matches("[argument omitted]").count(), 3);
+        assert!(cause.chars().count() <= 512);
+    }
+
+    #[test]
+    fn argument_prefix_filter_preserves_unrelated_diagnostics_and_short_text() {
+        let input = serde_json::json!({"path": "unrelated private path suffix", "short": "mod"});
+        let cause = "Cannot load module: permission denied (os error 13)";
+        assert_eq!(super::sanitize_tool_error(cause, 512, Some(&input)), cause);
+        assert_eq!(
+            super::sanitize_tool_error("mod", 512, Some(&input)),
+            "[argument omitted]"
+        );
+        assert_eq!(
+            super::sanitize_tool_error("unrelated p; invalid request", 512, Some(&input)),
+            "unrelated p; invalid request",
+            "eleven-character coincidences remain useful diagnostics"
+        );
+    }
 
     #[test]
     fn bounded_error_keeps_actionable_next_step_separate_from_long_cause() {
