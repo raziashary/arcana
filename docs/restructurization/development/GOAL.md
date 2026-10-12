@@ -1,4 +1,4 @@
-# Arcana goal (updated 2026-10-12)
+# Arcana goal (updated 2026-10-13)
 
 Current state: **active**. Owner resumed core P4 and approved all five runtime,
 sandbox and privacy decisions in ADR0359. Earlier pause/pending notes below are
@@ -6,7 +6,7 @@ historical. Shared privacy hardening and provider cancellation are verified.
 The actual offline CLI Fleet success/deadline/export suite passes5/5;
 live-provider completion and strict sandbox proof remain open.
 
-Latest boundary: `_verify/P4-SESSION-CHECKPOINT-2026-10-12.md`. Core P4 is
+Latest boundary: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`. Core P4 is
 **42/59 checked**, TG4 **20/33 passing**; 17 tasks remain, including the
 owner-run Calendar acceptance. P4-59/TG4-21 closes on complete retention
 consumer evidence across Windows, Linux and macOS. P4-52/TG4-26 closes on its
@@ -1173,3 +1173,9 @@ Goal is PAUSED. Resume core P4 from the final Paused checkpoint section of _veri
 2026-10-13 P4-54 real interrupted-worker health proof (ADR0377): actual shipped worker two-mutation/lost-ack fixture now reads the registered Supervisor health tool through ToolExecutor after storage reopen. Windows1/1 (1.33s) proves failed lifecycle/failure/heartbeat, held task ownership/dependency value, two task/session checkpoints, exact acknowledged vs unknown cursors/paths and recovery-required flag; a later kick still makes no call/write. Other full-field/two-worker/reassignment clauses remain open; counts42/59 P4,20/33 TG4. Evidence: _verify/P4-54-INTERRUPTED-WORKER-HEALTH-2026-10-12.md.
 
 2026-10-13 P4-57 worker/plan annual proof: new exact filter passesWindows1/1 (80.19s), driving4400instants through actual WorkersDb create/heartbeat and PlansDb plan/item create/status APIs, then reopening public readers. Seven more generated-now field pairs match exact canonical text and parsed instants, making11new annual pairs with task/run proof. Other inventory pairs and cross-platform closure remain open; no checkbox/count change (42/59 P4,20/33 TG4). Evidence: _verify/P4-57-ISOLATED-CLOCK-2026-10-12.md. These are isolated rows, not running Fleet agents or provider calls.
+
+## Current recovery milestone — 2026-10-13
+
+Source unit `2db3f39` implements approved bounded journal snapshots and host-verified completion. Actual registered acknowledged/lost-ack writes reopen before/after metadata, preserve both files and acknowledge the completed effect exactly once. Windows: recovery3/3, RunsDb29/29, executor20/20, shipped-worker interruption/health smoke1/1, hook presence1/1, input fingerprint1/1 and workspace lease3/3; SQL registry9/9, core/CLI check and workspace formatting pass. See `_verify/P4-53-HOST-SNAPSHOTS-2026-10-13.md`.
+
+RetrySafe is refused in production until a task/operation-bound one-use permit is revalidated and consumed under executor admission's write lease (ADR0379, owner decision pending). Reconciled returns operation_complete=true and retry_permitted=false. P4-53/TG4-27 remain open for durable continuation, replay-safe replacement execution, other interruption/effect classes and task-scoped restore. Counts remain **42/59 P4, 20/33 TG4**:17 open tasks, including owner-only Calendar;16 engineering tasks. No paid provider, owner Calendar, server or listener was used. Core P4 precedes the unread expanded goal and P5/P6. Latest continuation: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`.
