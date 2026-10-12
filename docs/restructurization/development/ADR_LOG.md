@@ -7450,3 +7450,7 @@ readback.
 ## ADR-LOG-RESTRUCT-0376 — Install isolated clocks only in unit-test scopes
 
 **Implementation within owner approval / date.** On2026-10-12 implement ADR0370/0375 with a thread-local RAII scope that cannot move threads, existing Rust timestamp/checkpoint helpers, and per-connection unit-test SQLite date-function interception. Delegate actual SQL date/modifier evaluation to a separate unmodified in-memory connection, replacing only the time-value now argument; retain dynamic scope changes and NULL/numeric/historical behavior. Ordinary builds compile out the fixture. This establishes a reusable producer-test prerequisite, not all-pair annual coverage. Report: _verify/P4-57-ISOLATED-CLOCK-2026-10-12.md.
+
+## ADR-LOG-RESTRUCT-0377 — Verify the actual interrupted worker through Supervisor health
+
+**Bounded proof / date.** Extend the already-proven shipped worker multi-mutation fixture with real registered ToolExecutor Supervisor health readback. Reopened run/task/checkpoint/journal readers establish the expected values, including terminal idle vs unresolved recovery work. Correct an invented empty-array dependency expectation to the actual optional TasksDb value; no production behavior change. Root completes the agent's preserved work after its Luna usage limit. Exact Windows fixture passes1/1 (1.33s); no two-worker/full-field gate closure. Report: _verify/P4-54-INTERRUPTED-WORKER-HEALTH-2026-10-12.md.

@@ -1825,6 +1825,118 @@ mod production_git_commit_recipe_tests {
             .unresolved_task_side_effect(task_id)
             .expect("read unresolved mutation barrier")
             .is_some());
+        let session_checkpoints =
+            crate::git::checkpoint::list(None, Some(&run.session_id), Some(task_id))
+                .expect("read run-scoped checkpoints through the public reader");
+        assert_eq!(session_checkpoints.len(), 2);
+        let checkpoint_ids = session_checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.id.as_str())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            checkpoint_ids.len(),
+            2,
+            "checkpoint references are distinct"
+        );
+        assert!(session_checkpoints.iter().all(|checkpoint| {
+            checkpoint.task_id == Some(task_id) && checkpoint.session_id == run.session_id
+        }));
+
+        let mut registry = crate::agent::tool_registry::ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        let health_tool = registry
+            .get("list_worker_health")
+            .expect("FastDevelopment registers Supervisor health reader");
+        let mut health_executor = crate::agent::tool_executor::ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "p4-54-health-readback".into(),
+            home.path().to_string_lossy().into_owned(),
+            crate::agent::tool_trait::AgentIdentity::supervisor(),
+        );
+        let health_results = health_executor
+            .execute_batch(vec![(
+                health_tool,
+                json!({ "journal_limit": 50 }),
+                "interrupted-worker-health".into(),
+            )])
+            .await
+            .expect("registered Supervisor health read returns a result");
+        assert_eq!(health_results.len(), 1);
+        let (health_call_id, health_result) = health_results
+            .into_iter()
+            .next()
+            .expect("health read result");
+        assert_eq!(health_call_id, "interrupted-worker-health");
+        assert!(!health_result.is_error, "{}", health_result.output);
+        let health: Value =
+            serde_json::from_str(&health_result.output).expect("Supervisor health JSON");
+        let backend_health = health["workers"]
+            .as_array()
+            .expect("Supervisor worker roster")
+            .iter()
+            .find(|worker| worker["slug"] == "worker-backend")
+            .expect("Supervisor-visible backend worker");
+        assert_eq!(backend_health["status"], "error");
+        let supervisor_run = &backend_health["run"];
+        assert_eq!(supervisor_run["run_id"], run.run_id);
+        assert_eq!(supervisor_run["phase"], "failed");
+        assert_eq!(supervisor_run["task_id"], task_id);
+        assert_eq!(supervisor_run["outcome"], "failed");
+        assert_eq!(
+            supervisor_run["failure_code"].as_str(),
+            run.failure_code.as_deref()
+        );
+        assert!(
+            run.failure_code.is_some(),
+            "failed run records its failure class"
+        );
+        assert_eq!(
+            supervisor_run["heartbeat_at"].as_str(),
+            Some(run.heartbeat_at.as_str())
+        );
+
+        let supervisor_task = &supervisor_run["task"];
+        assert_eq!(supervisor_task["state"], "known");
+        assert_eq!(supervisor_task["status"], "needs_info");
+        assert_eq!(supervisor_task["assigned_worker"], "worker-backend");
+        assert_eq!(supervisor_task["blocked_by"], json!(task.blocked_by));
+        assert_eq!(
+            task.status,
+            crate::db::tasks::TaskStatus::NeedsInfo,
+            "direct TasksDb read and Supervisor view agree"
+        );
+
+        assert_eq!(supervisor_run["active_operation"]["state"], "idle");
+        let supervisor_journal = &supervisor_run["operation_journal"];
+        assert_eq!(supervisor_journal["state"], "known");
+        let supervisor_writes = supervisor_journal["entries"]
+            .as_array()
+            .expect("Supervisor-visible operation journal")
+            .iter()
+            .filter(|entry| entry["operation"] == "write_file")
+            .collect::<Vec<_>>();
+        assert_eq!(supervisor_writes.len(), 2);
+        assert_eq!(supervisor_writes[0]["cursor"], acknowledged.cursor);
+        assert_eq!(supervisor_writes[0]["run_id"], run.run_id);
+        assert_eq!(supervisor_writes[0]["task_id"], task_id);
+        assert_eq!(supervisor_writes[0]["target_paths"][0], "acknowledged.txt");
+        assert_eq!(supervisor_writes[0]["outcome"], "ok");
+        assert_eq!(supervisor_writes[0]["changed_paths"][0], "acknowledged.txt");
+        assert_eq!(supervisor_writes[0]["recovery_required"], false);
+        assert_eq!(supervisor_writes[1]["cursor"], unknown.cursor);
+        assert_eq!(supervisor_writes[1]["run_id"], run.run_id);
+        assert_eq!(supervisor_writes[1]["task_id"], task_id);
+        assert_eq!(supervisor_writes[1]["target_paths"][0], "lost-ack.txt");
+        assert_eq!(supervisor_writes[1]["outcome"], "unknown");
+        assert_eq!(supervisor_writes[1]["reconciliation"], "unresolved");
+        assert_eq!(supervisor_writes[1]["recovery_required"], true);
+        assert_eq!(supervisor_run["checkpoints"]["state"], "known");
+        assert_eq!(supervisor_run["checkpoints"]["count"], 2);
+
         assert!(provider.requests.lock().expect("provider requests").len() == 4);
 
         // Recreate the scheduler and runner to ensure the later kick consults
