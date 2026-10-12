@@ -246,4 +246,102 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn generated_worker_and_plan_writers_round_trip_a_leap_year_and_dst_after_reopen() {
+        use crate::db::plans::{CreatePlanInput, CreatePlanItemInput, PlanScope, PlansDb};
+        use crate::db::workers::WorkersDb;
+        let home = tempfile::tempdir().expect("isolated worker/plan annual home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let instants = yearly_and_dst_instants();
+        assert_eq!(instants.len(), 4400);
+        let _setup = at(instants[0]);
+        let workers = WorkersDb::open().expect("actual worker store and indexes");
+        let plans = PlansDb::open().expect("actual plan store");
+        let mut references = Vec::with_capacity(instants.len());
+        for (index, instant) in instants.iter().copied().enumerate() {
+            let _created = at(instant);
+            let slug = format!("clock-worker-{index}");
+            workers
+                .create(
+                    "Annual writer fixture",
+                    &slug,
+                    "backend",
+                    "gemini-3.8-flash",
+                    &[],
+                    120,
+                    None,
+                )
+                .expect("actual worker create writer");
+            let plan = plans
+                .create_plan(CreatePlanInput {
+                    title: format!("annual plan {index}"),
+                    description: None,
+                    session_id: None,
+                    assigned_agent: None,
+                    created_by: Some("clock-test".into()),
+                    agent_scope: PlanScope::Personal,
+                    parent_plan_id: None,
+                    task_id: None,
+                })
+                .expect("actual plan create writer");
+            let item = plans
+                .add_plan_item(CreatePlanItemInput {
+                    plan_id: plan.id.clone(),
+                    parent_id: None,
+                    title: "annual item".into(),
+                    description: None,
+                    order_index: 0,
+                    agent_type: None,
+                    estimated_tools: None,
+                    assigned_worker: None,
+                    worktree_branch: None,
+                })
+                .expect("actual plan item create writer");
+            let updated = instant + chrono::Duration::milliseconds(123);
+            let _updated = at(updated);
+            workers
+                .heartbeat(&slug)
+                .expect("actual worker heartbeat writer");
+            plans
+                .update_plan_status(&plan.id, "active")
+                .expect("actual plan update writer");
+            plans
+                .update_plan_item_status(&item.id, "done", None)
+                .expect("actual item completion writer");
+            references.push((slug, plan.id, item.id, instant, updated));
+        }
+        drop(workers);
+        drop(plans);
+        let workers = WorkersDb::open().expect("reopen worker store");
+        let plans = PlansDb::open().expect("reopen plan store");
+        for (slug, plan_id, item_id, created, updated) in references {
+            let worker = workers
+                .get_by_slug(&slug)
+                .unwrap()
+                .expect("persisted worker");
+            let plan = plans.get_plan(&plan_id).unwrap().expect("persisted plan");
+            let item = plans
+                .get_plan_item(&item_id)
+                .unwrap()
+                .expect("persisted item");
+            for (raw, expected) in [
+                (worker.created_at.as_str(), created),
+                (worker.updated_at.as_str(), updated),
+                (worker.last_seen.as_deref().expect("heartbeat"), updated),
+                (plan.created_at.as_str(), created),
+                (plan.updated_at.as_str(), updated),
+                (item.created_at.as_str(), created),
+                (
+                    item.completed_at.as_deref().expect("completed item"),
+                    updated,
+                ),
+            ] {
+                assert_eq!(raw, crate::db::timestamps::format_utc_timestamp(expected));
+                assert_eq!(
+                    crate::db::timestamps::parse_db_timestamp(raw).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
 }
