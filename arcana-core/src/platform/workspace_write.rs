@@ -14,9 +14,14 @@ use sha2::{Digest, Sha256};
 /// releases its handle; lock files are retained to avoid inode replacement.
 pub(crate) struct WorkspaceWriteLease {
     _file: File,
+    identity: String,
 }
 
 impl WorkspaceWriteLease {
+    pub(crate) fn covers(&self, workspace: &Path) -> bool {
+        super::workspace::workspace_identity(workspace)
+            .is_ok_and(|identity| identity == self.identity)
+    }
     pub(crate) async fn acquire(workspace: &Path) -> io::Result<Self> {
         Self::acquire_with_deadline(workspace, Duration::from_secs(30)).await
     }
@@ -67,7 +72,12 @@ impl WorkspaceWriteLease {
         let started = Instant::now();
         loop {
             match file.try_lock() {
-                Ok(()) => return Ok(Self { _file: file }),
+                Ok(()) => {
+                    return Ok(Self {
+                        _file: file,
+                        identity,
+                    })
+                }
                 Err(std::fs::TryLockError::WouldBlock) if started.elapsed() < timeout => {
                     tokio::time::sleep(Duration::from_millis(25)).await;
                 }

@@ -14,6 +14,18 @@ pub struct HooksDb {
 }
 
 impl HooksDb {
+    /// Recovery needs only presence, not decoded configurations. Anything other
+    /// than an exact disabled integer is conservatively considered enabled.
+    pub(crate) fn has_enabled_hooks(&self) -> Result<bool> {
+        let operation = OperationTimer::start("database_hook_presence").with_database("config");
+        let present = self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM hooks WHERE enabled IS NOT 0)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?;
+        operation.with_result_count(usize::from(present)).succeed();
+        Ok(present)
+    }
     /// Open `config.db` through its schema owner.
     ///
     /// The `hooks` and `hook_logs` DDL now lives in `db::config_db`'s ladder
@@ -384,6 +396,46 @@ mod portability_tests {
         )
         .unwrap();
         HooksDb { conn }
+    }
+
+    #[test]
+    fn enabled_hook_presence_does_not_decode_or_hide_malformed_rows() {
+        let db = db();
+        assert!(!db.has_enabled_hooks().unwrap());
+        let hook = db
+            .insert(&AddHookInput {
+                name: "presence guard".into(),
+                hook_type: HookType::PreToolUse,
+                enabled: Some(true),
+                priority: None,
+                conditions: None,
+                action: HookAction::Block { message: None },
+            })
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE hooks SET priority = 'malformed' WHERE id = ?1",
+                [&hook.id],
+            )
+            .unwrap();
+        assert!(
+            db.has_enabled_hooks().unwrap(),
+            "malformed enabled hook must still block replay"
+        );
+        db.conn
+            .execute("UPDATE hooks SET enabled = 0 WHERE id = ?1", [&hook.id])
+            .unwrap();
+        assert!(!db.has_enabled_hooks().unwrap());
+        db.conn
+            .execute(
+                "UPDATE hooks SET enabled = 'unknown' WHERE id = ?1",
+                [&hook.id],
+            )
+            .unwrap();
+        assert!(
+            db.has_enabled_hooks().unwrap(),
+            "unknown enabled value fails closed"
+        );
     }
 
     #[test]

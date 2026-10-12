@@ -1,0 +1,32 @@
+# P4-53 durable snapshots and host verification
+
+Owner approval: ADR0371/0375. Report created before implementation.
+
+The existing journal is append-only and the public reconciliation API authorizes a Supervisor assertion without inspecting workspace state. This unit adds bounded, versioned intent/outcome snapshots and a host-verification boundary. Legacy rows without snapshots remain held. Snapshots contain immutable task identity/assignment/dependency references, selected workspace identity and input state, Git HEAD/branch/index state and task-associated checkpoint references; never task prose, file content, credentials or remotes.
+
+Verification must refuse a live originating run, another workspace/task, changed dependency/ownership/Git state, absent or malformed snapshots and unprovable effects. Local file completion must be established from sealed host-derived artifact expectations, not a model boolean. Arbitrary command/network effects cannot be declared complete merely because files look unchanged. Keep unknown effect holds where proof is unavailable, and make any narrower first-unit limits explicit rather than closing TG4-27.
+
+## Review integration
+
+Independent Luna High confirms generated-directory replay can bypass an input-only fingerprint. Seal the exact target's pre-state separately (absence or bounded digest/identity/permissions) and compare it on retry; completion still checks the expected content and other inputs. This corrects the new unshipped verifier without blocking legitimate generated targets. Current source also pins root identity and validates a bounded opened target read against canonical scope and stable handle identity; multiple hard links are refused.
+
+The existing HooksDb list readers swallow malformed rows. Owner direction for changing those shipped list-reader semantics is pending. The new verifier needs only presence, so HooksDb now owns a single existential `has_enabled_hooks` query instead of decoding or trusting the incomplete list: any nonzero/unknown enabled value blocks replay. This avoids loading a whole catalog and is not a fix or a duplicate compensating read of the existing UI/list-reader path. Its malformed enabled-row regression must prove refusal. The original list-reader issue remains recorded and pending rather than silently treated as fixed.
+
+## Verification and current boundary
+
+Root first reconciliation run: 2/3 passed; valid completion refused after about 20 seconds. The new verifier reopened TasksDb while holding its IMMEDIATE transaction, and the existing migration opener also reserves that write lock. Reuse the already-guarded TasksDb connection for capture/comparison; do not change migration serialization. A second run exposed a fixture error: status transition with assigned_worker=None deliberately unassigns, unlike production interrupted-claim quarantine. Preserve the observed worker in the fixture, matching the real hold_interrupted_claims_for_worker_run body. The next registered-tool run passed 3/3 (0.82s), including actual lost acknowledgement, original workspace/content, live-run/wrong-root/changed-generated-target/Git/hook denials, strict snapshot decode and persisted decision readback.
+
+Fresh review then found a distinct replay-admission race: a stored retry_safe decision outlives the reconciliation lease. Actual retry needs an operation-bound one-use permit revalidated under executor admission's lease. Owner direction was requested; until that approved extension is built/proven, the production reconciliation API refuses RetrySafe and leaves the original hold. This is not safe-resume proof. Reconciled still authorizes only an effect actually observed complete, and never returns retry_permitted=true. Latest fail-closed source rerun pending. P4-53/TG4-27 remain open, including continuation, replay consumption, other effects and full restart/reassignment proof.
+
+The executor fixture agent used the real generated task/claim and separate workspace; its actual module filter passed20/20 (3.00s). Initial supplied filter matched0 and is explicitly not counted. Query inventory records exact changed owners/projections and hook-presence scope; focused AST registry and updated populated plans remain pending.
+
+## Final Windows receipt for the bounded unit
+
+- Registered reconciliation tools3/3, 1.17s on the final test binary: actual acknowledged write stores before/after snapshots; second actual write loses its outcome, retains before-only metadata; reopened public journal reader decodes both shapes. Host-verified completion persists once without repeating the write. Wrong workspace, live run, changed generated target, changed Git branch, malformed enabled hook, strict/oversized metadata and invalid cursor refuse. RetrySafe remains held even with unchanged target, pending one-use admission.
+- RunsDb29/29, 15.58s including additive schema upgrades, append-only guards, indexed populated snapshot projection and outcome-task binding plans. Two old-schema fixtures first failed because they retained v9's column while resetting version to6/7; restore the actual legacy column/trigger shape before upgrade, preserving rows and existing assertions.
+- Production executor20/20, 3.21s. Actual shipped worker two-mutation/lost-ack health/quarantine smoke1/1, 1.67s; no provider call or repeated mutation on the later scheduler kick.
+- Hook-presence1/1; workspace input fingerprint1/1; cross-process workspace lease3/3 plus1 explicitly ignored child fixture.
+- Exact production SQL registry9/9, 4.42s. The scanner initially treated the approved cfg(test) clock file as runtime SQL. Honor explicit file-level test attributes, mark the clock file test-only itself, and prove unresolved runtime SQL still fails. Fix the missing relocated private append owner evidence row. Both snapshot shapes now have actual producer/reader proof.
+- Normal core/CLI cargo check passes31.61s; cargo fmt --all -- --check passes. Existing unrelated warnings remain. No dependency addition, user DB, live credential, provider request, Calendar folder, server or listener was used. All selected processes ended.
+
+This unit is bounded verified completion plus containment, not P4-53 or TG4-27 closure. The full continuity gate still requires operation-bound one-use retry admission, durable continuation and replay-safe replacement execution, other mutation/interruption classes, task-scoped restore and complete platform proof. Owner direction for the new admission contract is pending (ADR0379).

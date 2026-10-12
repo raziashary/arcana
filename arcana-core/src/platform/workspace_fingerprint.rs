@@ -28,6 +28,58 @@ const GENERATED_DIRECTORIES: &[&str] = &[
 /// invalidate their own evidence; manifests and lockfiles remain included.
 /// Symlinks are fingerprinted by their target text and are never traversed.
 pub fn fingerprint(root: &Path) -> std::io::Result<String> {
+    fingerprint_inner(root, None, false)
+}
+
+/// Recovery comparison omits exactly the intended file and its parent directory
+/// entries, while still traversing those directories and hashing other inputs.
+pub(crate) fn fingerprint_without_file(root: &Path, relative: &Path) -> std::io::Result<String> {
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid relative recovery target",
+        ));
+    }
+    fingerprint_inner(root, Some(relative), true)
+}
+
+pub(crate) fn fingerprint_for_recovery(root: &Path) -> std::io::Result<String> {
+    fingerprint_inner(root, None, true)
+}
+
+pub(crate) fn has_single_link(file: &std::fs::File) -> std::io::Result<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(file.metadata()?.nlink() == 1)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+        };
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(info.nNumberOfLinks == 1)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(std::io::Error::other("file link identity unavailable"))
+    }
+}
+
+fn fingerprint_inner(
+    root: &Path,
+    omitted: Option<&Path>,
+    recovery: bool,
+) -> std::io::Result<String> {
     let root = root.canonicalize()?;
     if !root.is_dir() {
         return Err(std::io::Error::new(
@@ -36,6 +88,9 @@ pub fn fingerprint(root: &Path) -> std::io::Result<String> {
         ));
     }
 
+    let started = std::time::Instant::now();
+    let mut entries = 0usize;
+    let mut bytes = 0u64;
     let mut hasher = Sha256::new();
     hasher.update(b"arcana-workspace-fingerprint-v1\0");
     hasher.update(root.to_string_lossy().as_bytes());
@@ -48,6 +103,14 @@ pub fn fingerprint(root: &Path) -> std::io::Result<String> {
         .filter_entry(|entry| !is_excluded_generated_directory(entry))
     {
         let entry = entry?;
+        entries += 1;
+        if recovery && (entries > 50_000 || started.elapsed() > std::time::Duration::from_secs(10))
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "recovery fingerprint work limit reached",
+            ));
+        }
         if entry.path() == root {
             continue;
         }
@@ -57,6 +120,12 @@ pub fn fingerprint(root: &Path) -> std::io::Result<String> {
                 "workspace traversal escaped its canonical root",
             )
         })?;
+        if let Some(omitted) = omitted {
+            if relative == omitted || (entry.file_type().is_dir() && omitted.starts_with(relative))
+            {
+                continue;
+            }
+        }
         hash_path(&mut hasher, relative);
 
         let file_type = entry.file_type();
@@ -84,11 +153,27 @@ pub fn fingerprint(root: &Path) -> std::io::Result<String> {
                 ));
             }
             let before = file.metadata()?;
+            if recovery && !has_single_link(&file)? {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "recovery input has multiple links",
+                ));
+            }
             let mut buffer = [0u8; 64 * 1024];
             loop {
                 let read = file.read(&mut buffer)?;
                 if read == 0 {
                     break;
+                }
+                bytes = bytes.saturating_add(read as u64);
+                if recovery
+                    && (bytes > 256 * 1024 * 1024
+                        || started.elapsed() > std::time::Duration::from_secs(10))
+                {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "recovery fingerprint work limit reached",
+                    ));
                 }
                 hasher.update(&buffer[..read]);
             }
@@ -116,14 +201,20 @@ pub fn fingerprint(root: &Path) -> std::io::Result<String> {
 }
 
 #[cfg(windows)]
-fn path_still_names_open_file(file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
+pub(crate) fn path_still_names_open_file(
+    file: &std::fs::File,
+    path: &Path,
+) -> std::io::Result<bool> {
     let current_path_file = std::fs::File::open(path)?;
     Ok(crate::platform::file_identity::windows_file_identity(file)?
         == crate::platform::file_identity::windows_file_identity(&current_path_file)?)
 }
 
 #[cfg(unix)]
-fn path_still_names_open_file(file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
+pub(crate) fn path_still_names_open_file(
+    file: &std::fs::File,
+    path: &Path,
+) -> std::io::Result<bool> {
     use std::os::unix::fs::MetadataExt;
 
     let handle = file.metadata()?;
@@ -132,7 +223,10 @@ fn path_still_names_open_file(file: &std::fs::File, path: &Path) -> std::io::Res
 }
 
 #[cfg(not(any(unix, windows)))]
-fn path_still_names_open_file(file: &std::fs::File, path: &Path) -> std::io::Result<bool> {
+pub(crate) fn path_still_names_open_file(
+    file: &std::fs::File,
+    path: &Path,
+) -> std::io::Result<bool> {
     let handle = file.metadata()?;
     let current_path = std::fs::metadata(path)?;
     Ok(handle.len() == current_path.len() && handle.modified()? == current_path.modified()?)

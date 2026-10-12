@@ -673,6 +673,9 @@ fn scan_source_with(
 ) -> (Vec<ReaderQuery>, Vec<String>) {
     let file = syn::parse_file(source)
         .unwrap_or_else(|error| panic!("{module} Rust source did not parse: {error}"));
+    if is_test(&file.attrs) {
+        return (Vec::new(), Vec::new());
+    }
     let mut constants = inherited_constants.clone();
     const_bindings(&file.items, &mut constants);
     let mut queries = Vec::new();
@@ -1113,6 +1116,19 @@ fn ast_scanner_resolves_multiline_with_constants_and_variables_and_ignores_tests
             owner: "Db::new_reader".into(),
             sql: "WITH recent AS (\n SELECT id FROM tasks\n) SELECT id FROM recent".into(),
         }]
+    );
+}
+
+#[test]
+fn ast_scanner_ignores_explicit_test_only_files_but_checks_runtime_files() {
+    let body = "fn fixture() { conn.query_row(dynamic_sql, [], |_| Ok(())); }";
+    let (queries, errors) = scan_source(&format!("#![cfg(test)]\n{body}"), "test_fixture");
+    assert!(queries.is_empty() && errors.is_empty());
+    let (_, errors) = scan_source(body, "runtime");
+    assert_eq!(
+        errors.len(),
+        1,
+        "unknown runtime SQL must still fail the registry"
     );
 }
 

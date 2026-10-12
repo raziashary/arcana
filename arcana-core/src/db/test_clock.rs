@@ -1,5 +1,7 @@
 //! Unit-test-only clock scopes for real generated-now writers.
 
+#![cfg(test)]
+
 use chrono::{DateTime, Utc};
 use rusqlite::{functions::FunctionFlags, types::Value, Connection};
 use std::cell::Cell;

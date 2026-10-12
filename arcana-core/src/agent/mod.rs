@@ -10,6 +10,7 @@ pub mod context;
 pub mod engine;
 pub mod execution_registry;
 pub mod permission;
+pub mod recovery_snapshot;
 pub mod terminal_event;
 pub mod tool_effect;
 pub mod tool_executor;

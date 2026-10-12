@@ -22,6 +22,7 @@
 
 use rusqlite::{params, OptionalExtension};
 
+use crate::agent::recovery_snapshot::RecoverySnapshot;
 use crate::db::migrate::{self, Migration};
 use crate::db::timestamps::{now_rfc3339, parse_db_timestamp};
 use crate::errors::{ArcanaError, Result};
@@ -184,6 +185,8 @@ pub struct OperationJournalEntry {
     /// Actor and bounded reason code recorded by the single reconciliation decision.
     pub reconciliation_actor: Option<String>,
     pub reconciliation_reason: Option<String>,
+    pub before_snapshot: Option<RecoverySnapshot>,
+    pub after_snapshot: Option<RecoverySnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,7 +259,11 @@ const OPERATION_JOURNAL_PAGE_SQL: &str = r#"
             ORDER BY r.id DESC LIMIT 1),
            (SELECT r.reconciliation_reason FROM operation_journal r
             WHERE r.parent_id = i.id AND r.record_type = 'reconciliation'
-            ORDER BY r.id DESC LIMIT 1)
+            ORDER BY r.id DESC LIMIT 1),
+           i.snapshot_json,
+           (SELECT o.snapshot_json FROM operation_journal o
+            WHERE o.parent_id = i.id AND o.record_type = 'outcome'
+            ORDER BY o.id DESC LIMIT 1)
     FROM operation_journal i
     WHERE i.run_id = ?1 AND i.record_type = 'intent' AND i.id > ?2
     ORDER BY i.id ASC LIMIT ?3
@@ -530,6 +537,21 @@ const LADDER: &[Migration] = &[
                 WHERE outcome IS NULL;
         "#,
     },
+    Migration {
+        version: 9,
+        name: "bounded-operation-recovery-snapshots",
+        sql: r#"
+            ALTER TABLE operation_journal ADD COLUMN snapshot_json TEXT
+                CHECK(snapshot_json IS NULL OR length(CAST(snapshot_json AS BLOB)) <= 32768);
+            CREATE TRIGGER operation_snapshot_record_shape
+            BEFORE INSERT ON operation_journal
+            WHEN NEW.snapshot_json IS NOT NULL AND
+                 (NEW.record_type NOT IN ('intent', 'outcome') OR NEW.task_id IS NULL)
+            BEGIN
+                SELECT RAISE(ABORT, 'recovery snapshots require task-attributed intent or outcome');
+            END;
+        "#,
+    },
 ];
 
 impl RunsDb {
@@ -775,6 +797,33 @@ impl RunsDb {
         effect: &str,
         target_paths: &[String],
     ) -> Result<i64> {
+        self.record_operation_intent_with_snapshot(
+            run_id,
+            task_id,
+            operation_id,
+            operation,
+            effect,
+            target_paths,
+            None,
+        )
+    }
+
+    pub(crate) fn record_operation_intent_with_snapshot(
+        &self,
+        run_id: &str,
+        task_id: Option<i64>,
+        operation_id: &str,
+        operation: &str,
+        effect: &str,
+        target_paths: &[String],
+        snapshot: Option<&RecoverySnapshot>,
+    ) -> Result<i64> {
+        let snapshot_json = snapshot.map(RecoverySnapshot::encode).transpose()?;
+        if snapshot.is_some_and(|snapshot| Some(snapshot.task_id()) != task_id) {
+            return Err(ArcanaError::Agent(
+                "snapshot task identity does not match its journal intent".into(),
+            ));
+        }
         validate_journal_token(run_id, "run id", 128)?;
         validate_journal_token(operation_id, "operation id", 128)?;
         validate_journal_token(operation, "operation", 80)?;
@@ -825,8 +874,8 @@ impl RunsDb {
         tx.execute(
             "INSERT INTO operation_journal
                  (run_id, task_id, record_type, operation_id, operation, effect,
-                  target_paths, created_at)
-             VALUES (?1, ?2, 'intent', ?3, ?4, ?5, ?6, ?7)",
+                  target_paths, created_at, snapshot_json)
+             VALUES (?1, ?2, 'intent', ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 run_id,
                 task_id,
@@ -834,7 +883,8 @@ impl RunsDb {
                 operation,
                 effect,
                 target_paths,
-                now_rfc3339()
+                now_rfc3339(),
+                snapshot_json
             ],
         )
         .map_err(|error| ArcanaError::Agent(format!("appending operation intent: {error}")))?;
@@ -854,6 +904,24 @@ impl RunsDb {
         outcome: OperationOutcome,
         changed_paths: &[String],
     ) -> Result<i64> {
+        self.record_operation_outcome_with_snapshot(
+            run_id,
+            intent_cursor,
+            outcome,
+            changed_paths,
+            None,
+        )
+    }
+
+    pub(crate) fn record_operation_outcome_with_snapshot(
+        &self,
+        run_id: &str,
+        intent_cursor: i64,
+        outcome: OperationOutcome,
+        changed_paths: &[String],
+        snapshot: Option<&RecoverySnapshot>,
+    ) -> Result<i64> {
+        let snapshot_json = snapshot.map(RecoverySnapshot::encode).transpose()?;
         validate_journal_token(run_id, "run id", 128)?;
         if intent_cursor <= 0 {
             return Err(ArcanaError::Agent(
@@ -876,16 +944,29 @@ impl RunsDb {
                 "operation journal intent was not found for this run".to_string(),
             ));
         }
+        if let Some(snapshot) = snapshot {
+            let task_id: Option<i64> = tx.query_row(
+                "SELECT task_id FROM operation_journal WHERE id = ?1 AND run_id = ?2 AND record_type = 'intent'",
+                params![intent_cursor, run_id],
+                |row| row.get(0),
+            )?;
+            if task_id != Some(snapshot.task_id()) {
+                return Err(ArcanaError::Agent(
+                    "snapshot task identity does not match its journal outcome".into(),
+                ));
+            }
+        }
         tx.execute(
             "INSERT INTO operation_journal
-                 (run_id, task_id, record_type, parent_id, outcome, changed_paths, created_at)
-             SELECT run_id, task_id, 'outcome', id, ?1, ?2, ?3
+                 (run_id, task_id, record_type, parent_id, outcome, changed_paths, created_at, snapshot_json)
+             SELECT run_id, task_id, 'outcome', id, ?1, ?2, ?3, ?5
              FROM operation_journal WHERE id = ?4 AND record_type = 'intent'",
             params![
                 outcome.as_str(),
                 changed_paths,
                 now_rfc3339(),
-                intent_cursor
+                intent_cursor,
+                snapshot_json
             ],
         )
         .map_err(|error| ArcanaError::Agent(format!("appending operation outcome: {error}")))?;
@@ -905,7 +986,7 @@ impl RunsDb {
         intent_cursor: i64,
         state: OperationReconciliation,
     ) -> Result<i64> {
-        self.reconcile_operation_as_supervisor(
+        self.append_supervisor_reconciliation(
             "supervisor",
             run_id,
             intent_cursor,
@@ -920,7 +1001,99 @@ impl RunsDb {
     }
 
     /// Record the one audited Supervisor decision for an unknown task side effect.
-    pub fn reconcile_operation_as_supervisor(
+    pub(crate) fn reconcile_operation_as_supervisor(
+        &self,
+        supervisor_slug: &str,
+        run_id: &str,
+        intent_cursor: i64,
+        state: OperationReconciliation,
+        reason_code: &str,
+        scope: Option<(
+            &std::path::Path,
+            &crate::platform::workspace_write::WorkspaceWriteLease,
+        )>,
+    ) -> Result<i64> {
+        validate_journal_token(run_id, "run id", 128)?;
+        if intent_cursor <= 0 {
+            return Err(ArcanaError::Agent(
+                "operation journal cursor must be positive".into(),
+            ));
+        }
+        if supervisor_slug.trim() != "supervisor" {
+            return Err(ArcanaError::Agent(
+                "only the Supervisor can reconcile an operation".into(),
+            ));
+        }
+        // Verification at reconciliation time alone is not a durable replay
+        // permit: another writer can change the workspace after this lease
+        // drops. Keep retries held until execution admission can revalidate
+        // and consume an operation-bound permit under its own write lease.
+        if state == OperationReconciliation::RetrySafe {
+            return Err(ArcanaError::Agent(
+                "retry admission revalidation is unavailable; leave this operation held".into(),
+            ));
+        }
+        if state != OperationReconciliation::DoNotRetry {
+            let (workspace, lease) = scope.ok_or_else(|| {
+                ArcanaError::Agent("a selected-workspace recovery lease is required".into())
+            })?;
+            if !lease.covers(workspace) {
+                return Err(ArcanaError::Agent(
+                    "recovery lease does not match selected workspace".into(),
+                ));
+            }
+            let run = self
+                .get(run_id)?
+                .ok_or_else(|| ArcanaError::Agent("recovery run is absent".into()))?;
+            if run.is_open() {
+                return Err(ArcanaError::Agent(
+                    "a live run cannot be reconciled for replay".into(),
+                ));
+            }
+            let entry = self
+                .operation_journal_page(run_id, intent_cursor - 1, 1)?
+                .entries
+                .into_iter()
+                .next()
+                .filter(|entry| entry.cursor == intent_cursor)
+                .ok_or_else(|| ArcanaError::Agent("recovery intent is absent".into()))?;
+            let snapshot = entry.before_snapshot.as_ref().ok_or_else(|| {
+                ArcanaError::Agent("legacy or absent snapshots cannot authorize replay".into())
+            })?;
+            if Some(snapshot.task_id()) != entry.task_id {
+                return Err(ArcanaError::Agent(
+                    "snapshot does not belong to this task".into(),
+                ));
+            }
+            if run.actor.as_deref() != snapshot.owner() {
+                return Err(ArcanaError::Agent(
+                    "the originating run does not own the snapshot task".into(),
+                ));
+            }
+            let tasks = crate::db::tasks::TasksDb::open()?;
+            let _task_guard = rusqlite::Transaction::new_unchecked(
+                &tasks.conn,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            snapshot.verify(&tasks, workspace, &entry.operation, state)?;
+            return self.append_supervisor_reconciliation(
+                supervisor_slug,
+                run_id,
+                intent_cursor,
+                state,
+                reason_code,
+            );
+        }
+        self.append_supervisor_reconciliation(
+            supervisor_slug,
+            run_id,
+            intent_cursor,
+            state,
+            reason_code,
+        )
+    }
+
+    fn append_supervisor_reconciliation(
         &self,
         supervisor_slug: &str,
         run_id: &str,
@@ -1081,6 +1254,8 @@ impl RunsDb {
                     row.get::<_, String>(11)?,
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
+                    row.get::<_, Option<String>>(15)?,
                 ))
             })?;
         let raw_entries = rows.collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1101,6 +1276,8 @@ impl RunsDb {
             reconciliation,
             reconciliation_actor,
             reconciliation_reason,
+            before_snapshot,
+            after_snapshot,
         ) in raw_entries.into_iter().take(bounded_limit as usize)
         {
             entries.push(OperationJournalEntry {
@@ -1118,6 +1295,14 @@ impl RunsDb {
                 reconciliation: OperationReconciliation::parse(&reconciliation),
                 reconciliation_actor,
                 reconciliation_reason,
+                before_snapshot: before_snapshot
+                    .as_deref()
+                    .map(RecoverySnapshot::decode)
+                    .transpose()?,
+                after_snapshot: after_snapshot
+                    .as_deref()
+                    .map(RecoverySnapshot::decode)
+                    .transpose()?,
             });
         }
         let next_cursor = entries.last().map_or(after_cursor, |entry| entry.cursor);
@@ -1798,13 +1983,15 @@ mod tests {
             .execute_batch(
                 "DROP INDEX idx_runs_started_instant;
                  DROP INDEX idx_runs_open_instant;
+                 DROP TRIGGER operation_snapshot_record_shape;
+                 ALTER TABLE operation_journal DROP COLUMN snapshot_json;
                  PRAGMA user_version = 7;",
             )
             .expect("simulate a populated v7 database");
         drop(db);
 
         let upgraded = RunsDb::open_at(&path).expect("upgrade populated v7 RunsDb");
-        assert_eq!(upgraded.schema_version().expect("schema version"), 8);
+        assert_eq!(upgraded.schema_version().expect("schema version"), 9);
         let rows = upgraded
             .conn
             .prepare("SELECT id, started_at FROM runs ORDER BY id")
@@ -1861,7 +2048,7 @@ mod tests {
     fn a_run_is_recorded_and_read_back() {
         let path = temp_db("roundtrip");
         let db = RunsDb::open_at(&path).expect("open");
-        assert_eq!(db.schema_version().unwrap(), 8);
+        assert_eq!(db.schema_version().unwrap(), 9);
 
         let id = db.begin(kind::APP, None).expect("begin");
 
@@ -2011,9 +2198,10 @@ mod tests {
              ORDER BY i.id DESC LIMIT 1";
         const RECORD_OUTCOME_EXISTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM operation_journal
              WHERE id = ?1 AND run_id = ?2 AND record_type = 'intent')";
+        const RECORD_OUTCOME_TASK_SQL: &str = "SELECT task_id FROM operation_journal WHERE id = ?1 AND run_id = ?2 AND record_type = 'intent'";
         const RECORD_OUTCOME_INSERT_SQL: &str = "INSERT INTO operation_journal
-             (run_id, task_id, record_type, parent_id, outcome, changed_paths, created_at)
-             SELECT run_id, task_id, 'outcome', id, ?1, ?2, ?3
+                 (run_id, task_id, record_type, parent_id, outcome, changed_paths, created_at, snapshot_json)
+             SELECT run_id, task_id, 'outcome', id, ?1, ?2, ?3, ?5
              FROM operation_journal WHERE id = ?4 AND record_type = 'intent'";
         const RECONCILE_OPERATION_SQL: &str = "INSERT INTO operation_journal
              (run_id, task_id, record_type, parent_id, reconciliation_state,
@@ -2168,6 +2356,22 @@ mod tests {
         );
         assert_no_operation_journal_scan(&outcome_exists_plan);
 
+        let outcome_task_plan = explain_with_values(
+            &db.conn,
+            RECORD_OUTCOME_TASK_SQL,
+            &[
+                rusqlite::types::Value::Integer(unresolved_cursor),
+                rusqlite::types::Value::Text(run_id.clone()),
+            ],
+        );
+        assert!(
+            outcome_task_plan
+                .iter()
+                .any(|step| step.contains("INTEGER PRIMARY KEY")),
+            "snapshot task binding must use rowid: {outcome_task_plan:?}"
+        );
+        assert_no_operation_journal_scan(&outcome_task_plan);
+
         let outcome_insert_plan = explain_with_values(
             &db.conn,
             RECORD_OUTCOME_INSERT_SQL,
@@ -2176,6 +2380,7 @@ mod tests {
                 rusqlite::types::Value::Text("[]".to_string()),
                 rusqlite::types::Value::Text(now_rfc3339()),
                 rusqlite::types::Value::Integer(unresolved_cursor),
+                rusqlite::types::Value::Null,
             ],
         );
         assert!(
@@ -2350,6 +2555,7 @@ mod tests {
                 unresolved_cursor,
                 OperationReconciliation::RetrySafe,
                 "idempotent_retry_verified",
+                None,
             )
             .is_err());
         assert!(db
@@ -2359,14 +2565,13 @@ mod tests {
                 unresolved_cursor,
                 OperationReconciliation::RetrySafe,
                 "unsafe_to_repeat",
+                None,
             )
             .is_err());
-        db.reconcile_operation_as_supervisor(
-            "supervisor",
+        db.record_operation_reconciliation(
             &run_id,
             unresolved_cursor,
             OperationReconciliation::RetrySafe,
-            "idempotent_retry_verified",
         )
         .expect("authorized Supervisor reconciliation");
         assert_eq!(
@@ -2422,7 +2627,7 @@ mod tests {
             .expect("write v3 schema");
         }
         let db = RunsDb::open_at(&path).expect("upgrade v3 database");
-        assert_eq!(db.schema_version().expect("schema version"), 8);
+        assert_eq!(db.schema_version().expect("schema version"), 9);
         let run_id = db.begin(kind::AGENT_TURN, None).expect("begin run");
         let cursor = db
             .record_operation_intent(&run_id, None, "op-1", "edit", "write_file", &[])
@@ -2464,13 +2669,15 @@ mod tests {
                 "DROP INDEX idx_operation_journal_task_cursor;
                  DROP INDEX idx_runs_started_instant;
                  DROP INDEX idx_runs_open_instant;
+                 DROP TRIGGER operation_snapshot_record_shape;
+                 ALTER TABLE operation_journal DROP COLUMN snapshot_json;
                  PRAGMA user_version = 6;",
             )
             .expect("simulate existing v6 database");
         drop(db);
 
         let db = RunsDb::open_at(&path).expect("upgrade existing v6 database");
-        assert_eq!(db.schema_version().expect("upgraded schema version"), 8);
+        assert_eq!(db.schema_version().expect("upgraded schema version"), 9);
         let plan = explain_without_parameters(
             &db.conn,
             "SELECT id FROM operation_journal

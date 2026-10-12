@@ -20,7 +20,7 @@ impl Tool for ReconcileWorkerOperationTool {
     }
 
     fn description(&self) -> &str {
-        "Supervisor-only: after inspecting the exact task, workspace/checkpoint and Git state, persist one decision for an unknown worker side effect. Use reconciled when the effect is verified complete, retry_safe only when repeating it is proven safe, and do_not_retry when uncertainty remains unsafe. This records the decision; it does not independently inspect or verify the workspace."
+        "Supervisor-only: after inspecting the exact task, workspace/checkpoint and Git state, persist one decision for an unknown worker side effect. Use reconciled when the effect is verified complete, and do_not_retry when uncertainty remains unsafe. Arcana verifies sealed host snapshots and local file state before granting completion. Retry authorization remains held until operation-bound execution admission can revalidate it; a Supervisor assertion alone cannot permit replay. Legacy/unprovable effects remain held."
     }
 
     fn input_schema(&self) -> Value {
@@ -77,6 +77,33 @@ impl Tool for ReconcileWorkerOperationTool {
             Some(value) => value,
             None => return ToolResult::error("'reason_code' is required"),
         };
+        let workspace =
+            match crate::platform::workspace::resolve_workspace_dir(Some(&ctx.working_dir)) {
+                Ok(workspace) => workspace,
+                Err(_) => {
+                    return ToolResult::categorized_error(
+                        "recovery_workspace_unavailable",
+                        "recovery_conflict",
+                        "The selected workspace cannot be verified.",
+                        "Select the original workspace and leave the task held.",
+                    )
+                }
+            };
+        let lease = if decision != OperationReconciliation::DoNotRetry {
+            match crate::platform::workspace_write::WorkspaceWriteLease::acquire(&workspace).await {
+                Ok(lease) => Some(lease),
+                Err(_) => {
+                    return ToolResult::categorized_error(
+                        "recovery_workspace_busy",
+                        "recovery_conflict",
+                        "The host could not acquire the original workspace write lease.",
+                        "Wait for managed writers to finish and leave the task held.",
+                    )
+                }
+            }
+        } else {
+            None
+        };
         let db =
             match RunsDb::open() {
                 Ok(db) => db,
@@ -93,6 +120,7 @@ impl Tool for ReconcileWorkerOperationTool {
             intent_cursor,
             decision,
             reason_code,
+            lease.as_ref().map(|lease| (workspace.as_path(), lease)),
         ) {
             Ok(decision_cursor) => ToolResult::success(
                 json!({
@@ -101,10 +129,8 @@ impl Tool for ReconcileWorkerOperationTool {
                     "decision_cursor": decision_cursor,
                     "decision": decision.as_str(),
                     "reason_code": reason_code,
-                    "retry_permitted": matches!(
-                        decision,
-                        OperationReconciliation::Reconciled | OperationReconciliation::RetrySafe
-                    )
+                    "retry_permitted": decision == OperationReconciliation::RetrySafe,
+                    "operation_complete": decision == OperationReconciliation::Reconciled
                 })
                 .to_string(),
             ),
@@ -175,25 +201,15 @@ mod tests {
                 &context("supervisor"),
             )
             .await;
-        assert!(
-            !denied.is_error,
-            "Supervisor action should succeed: {}",
-            denied.output
-        );
-        assert_eq!(runs.unresolved_task_side_effect(77).unwrap(), None);
+        assert!(denied.is_error, "legacy intents cannot authorize replay");
+        assert!(runs.unresolved_task_side_effect(77).unwrap().is_some());
         let page = runs.operation_journal_page(&run_id, 0, 10).unwrap();
         assert_eq!(
             page.entries[0].reconciliation,
-            OperationReconciliation::RetrySafe
+            OperationReconciliation::Unresolved
         );
-        assert_eq!(
-            page.entries[0].reconciliation_actor.as_deref(),
-            Some("supervisor")
-        );
-        assert_eq!(
-            page.entries[0].reconciliation_reason.as_deref(),
-            Some("idempotent_retry_verified")
-        );
+        assert_eq!(page.entries[0].reconciliation_actor.as_deref(), None);
+        assert_eq!(page.entries[0].reconciliation_reason.as_deref(), None);
     }
 
     #[tokio::test]
@@ -218,8 +234,8 @@ mod tests {
                 json!({
                     "run_id": run_id,
                     "intent_cursor": cursor,
-                    "decision": "retry_safe",
-                    "reason_code": "idempotent_retry_verified"
+                    "decision": "do_not_retry",
+                    "reason_code": "unsafe_to_repeat"
                 }),
                 &context("supervisor"),
             )
@@ -256,6 +272,283 @@ mod tests {
             runs.unresolved_task_side_effect(78).unwrap().unwrap().2,
             cursor,
             "do_not_retry must keep the task quarantined"
+        );
+    }
+
+    #[tokio::test]
+    async fn host_verifies_registered_write_after_lost_acknowledgement() {
+        use crate::agent::tool_trait::AgentIdentity;
+        use crate::agent::{
+            builtin_tools, permission, tool_executor::ToolExecutor, tool_registry::ToolRegistry,
+        };
+        use crate::db::tasks::{CreateTaskInput, TasksDb};
+        let home = tempfile::tempdir().unwrap();
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(workspace.path()).unwrap();
+        let original_head = repo
+            .find_reference("HEAD")
+            .unwrap()
+            .symbolic_target()
+            .unwrap()
+            .to_owned();
+        let tasks = TasksDb::open().unwrap();
+        let task = tasks
+            .create(CreateTaskInput {
+                title: "snapshot recovery".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "recover without replay".into(),
+                created_by: None,
+            })
+            .unwrap();
+        tasks
+            .update_status(task.id, "assigned", Some("worker-backend"))
+            .unwrap();
+        tasks
+            .claim_task_with_pid(task.id, "worker-backend", std::process::id())
+            .unwrap();
+        let runs = RunsDb::open().unwrap();
+        let run = runs
+            .begin_worker_tick("worker-backend", "snapshot-session")
+            .unwrap();
+        let mut registry = ToolRegistry::new();
+        builtin_tools::register_all(&mut registry);
+        let mut executor = ToolExecutor::new(
+            permission::PermissionMode::Autonomous,
+            permission::new_pending_permissions(),
+            "snapshot-session".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker("worker-backend"),
+        )
+        .with_run_id(Some(run.clone()));
+        executor.set_task_id(Some(task.id));
+        let acknowledged = executor
+            .execute_batch(vec![(
+                registry.get("write_file").unwrap(),
+                json!({"path":"acknowledged.txt", "content":"acknowledged fixture"}),
+                "acknowledged-write".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(
+            !acknowledged[0].1.is_error,
+            "normal mutation must persist its outcome: {}",
+            acknowledged[0].1.output
+        );
+        let acknowledged_page = RunsDb::open()
+            .unwrap()
+            .operation_journal_page(&run, 0, 10)
+            .unwrap();
+        assert!(acknowledged_page.entries[0].before_snapshot.is_some());
+        assert!(acknowledged_page.entries[0].after_snapshot.is_some());
+        assert_eq!(
+            acknowledged_page.entries[0].changed_paths,
+            vec!["acknowledged.txt".to_owned()]
+        );
+        runs.conn.execute_batch("CREATE TRIGGER lose_write_ack BEFORE INSERT ON operation_journal WHEN NEW.record_type = 'outcome' BEGIN SELECT RAISE(ABORT, 'lost ack'); END;").unwrap();
+        let content = "private recovery content canary";
+        let result = executor
+            .execute_batch(vec![(
+                registry.get("write_file").unwrap(),
+                json!({"path":"target/generated.txt", "content":content}),
+                "write-recovery".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(result[0].1.is_error, "lost acknowledgement must surface");
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("target/generated.txt")).unwrap(),
+            content
+        );
+        let page = RunsDb::open()
+            .unwrap()
+            .operation_journal_page(&run, 0, 10)
+            .unwrap();
+        let entry = &page.entries[1];
+        assert!(entry.before_snapshot.is_some());
+        assert!(entry.after_snapshot.is_none());
+        let sealed = entry.before_snapshot.as_ref().unwrap().encode().unwrap();
+        assert!(!sealed.contains(content));
+        assert!(!sealed.contains(&workspace.path().to_string_lossy().to_string()));
+        let mut malformed: Value = serde_json::from_str(&sealed).unwrap();
+        malformed["version"] = json!(2);
+        assert!(
+            crate::agent::recovery_snapshot::RecoverySnapshot::decode(&malformed.to_string())
+                .is_err()
+        );
+        malformed["version"] = json!(1);
+        malformed["unknown_field"] = json!(true);
+        assert!(
+            crate::agent::recovery_snapshot::RecoverySnapshot::decode(&malformed.to_string())
+                .is_err()
+        );
+        assert!(
+            crate::agent::recovery_snapshot::RecoverySnapshot::decode(&" ".repeat(32769)).is_err()
+        );
+        let cursor = entry.cursor;
+        let mut supervisor = context("supervisor");
+        supervisor.working_dir = workspace.path().to_string_lossy().into_owned();
+        let request = json!({"run_id":run,"intent_cursor":cursor,"decision":"reconciled","reason_code":"effect_verified_complete"});
+        assert!(
+            ReconcileWorkerOperationTool
+                .execute(request.clone(), &supervisor)
+                .await
+                .is_error,
+            "live run remains held"
+        );
+        tasks
+            .update_status_for_worker_claim(
+                task.id,
+                "worker-backend",
+                "needs_info",
+                Some("worker-backend"),
+                Some("interrupted"),
+            )
+            .unwrap();
+        runs.finish_worker_tick(&run, "interrupted", "interrupted", None)
+            .unwrap();
+        supervisor.working_dir = other.path().to_string_lossy().into_owned();
+        assert!(
+            ReconcileWorkerOperationTool
+                .execute(request.clone(), &supervisor)
+                .await
+                .is_error,
+            "another workspace cannot resolve the effect"
+        );
+        supervisor.working_dir = workspace.path().to_string_lossy().into_owned();
+        std::fs::write(
+            workspace.path().join("target/generated.txt"),
+            "intervening host change",
+        )
+        .unwrap();
+        let retry = json!({"run_id":run,"intent_cursor":cursor,"decision":"retry_safe","reason_code":"idempotent_retry_verified"});
+        assert!(
+            ReconcileWorkerOperationTool
+                .execute(retry, &supervisor)
+                .await
+                .is_error,
+            "generated target changes must block retry"
+        );
+        assert!(
+            ReconcileWorkerOperationTool
+                .execute(request.clone(), &supervisor)
+                .await
+                .is_error
+        );
+        assert!(RunsDb::open()
+            .unwrap()
+            .unresolved_task_side_effect(task.id)
+            .unwrap()
+            .is_some());
+        std::fs::write(workspace.path().join("target/generated.txt"), content).unwrap();
+        repo.set_head("refs/heads/intervening").unwrap();
+        assert!(
+            ReconcileWorkerOperationTool
+                .execute(request.clone(), &supervisor)
+                .await
+                .is_error,
+            "Git branch changes block reconciliation"
+        );
+        repo.set_head(&original_head).unwrap();
+        let config = crate::db::config_db::open().unwrap();
+        config.execute("INSERT INTO hooks (id,name,hook_type,enabled,priority,conditions,action) VALUES ('malformed-recovery-hook','guard','PreToolUse',1,'bad','{}','{}')", []).unwrap();
+        assert!(
+            ReconcileWorkerOperationTool
+                .execute(request.clone(), &supervisor)
+                .await
+                .is_error,
+            "malformed enabled hooks cannot be treated as absent"
+        );
+        config
+            .execute("DELETE FROM hooks WHERE id='malformed-recovery-hook'", [])
+            .unwrap();
+        let accepted = ReconcileWorkerOperationTool
+            .execute(request.clone(), &supervisor)
+            .await;
+        assert!(
+            !accepted.is_error,
+            "verified actual file should reconcile: {}",
+            accepted.output
+        );
+        let response: Value = serde_json::from_str(&accepted.output).unwrap();
+        assert_eq!(response["operation_complete"], true);
+        assert_eq!(response["retry_permitted"], false);
+        assert!(
+            ReconcileWorkerOperationTool
+                .execute(request, &supervisor)
+                .await
+                .is_error,
+            "one durable decision only"
+        );
+        let reopened = RunsDb::open().unwrap();
+        assert!(reopened
+            .unresolved_task_side_effect(task.id)
+            .unwrap()
+            .is_none());
+        let resolved = reopened.operation_journal_page(&run, 0, 10).unwrap();
+        assert_eq!(
+            resolved.entries[1].reconciliation,
+            OperationReconciliation::Reconciled
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("target/generated.txt")).unwrap(),
+            content
+        );
+
+        // An unchanged target is necessary but insufficient: after the
+        // Supervisor lease drops, another writer could change it before retry.
+        let retry_run = runs
+            .begin_worker_tick("worker-backend", "snapshot-retry-session")
+            .unwrap();
+        let expected =
+            crate::agent::recovery_snapshot::RecoverySnapshot::file_expectation("new content");
+        let snapshot = crate::agent::recovery_snapshot::RecoverySnapshot::capture(
+            task.id,
+            "snapshot-retry-session",
+            workspace.path(),
+            Some(("target/retry.txt", &expected)),
+        )
+        .unwrap();
+        let retry_cursor = runs
+            .record_operation_intent_with_snapshot(
+                &retry_run,
+                Some(task.id),
+                "retry-write",
+                "write_file",
+                "Write",
+                &["target/retry.txt".into()],
+                Some(&snapshot),
+            )
+            .unwrap();
+        runs.finish_worker_tick(&retry_run, "interrupted", "interrupted", None)
+            .unwrap();
+        assert!(
+            runs.reconcile_operation_as_supervisor(
+                "supervisor",
+                &retry_run,
+                i64::MIN,
+                OperationReconciliation::RetrySafe,
+                "idempotent_retry_verified",
+                None
+            )
+            .is_err(),
+            "invalid cursor must fail without arithmetic overflow"
+        );
+        let retry = json!({"run_id":retry_run,"intent_cursor":retry_cursor,"decision":"retry_safe","reason_code":"idempotent_retry_verified"});
+        let accepted = ReconcileWorkerOperationTool
+            .execute(retry, &supervisor)
+            .await;
+        assert!(
+            accepted.is_error,
+            "retry must stay held until one-use admission revalidation exists"
+        );
+        assert!(runs.unresolved_task_side_effect(task.id).unwrap().is_some());
+        assert!(
+            !workspace.path().join("target/retry.txt").exists(),
+            "authorization itself must not replay the write"
         );
     }
 }

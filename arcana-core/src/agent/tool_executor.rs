@@ -53,6 +53,7 @@ struct JournalIntent {
     cursor: i64,
     target_paths: Vec<String>,
     operation: String,
+    snapshot: Option<super::recovery_snapshot::RecoverySnapshot>,
 }
 
 async fn wait_for_session_cancel(
@@ -139,20 +140,46 @@ fn begin_operation_journal(
     let target_paths = journal_target_paths(tool_name, input, ctx);
     let task_id = journal_task_id(tool_name, input, ctx);
     let operation_id = uuid::Uuid::new_v4().to_string();
+    let snapshot = if *effect != crate::agent::tool_effect::ToolEffect::Board {
+        task_id
+            .map(|task_id| {
+                let content_digest = if tool_name == "write_file" && target_paths.len() == 1 {
+                    input
+                        .get("content")
+                        .and_then(serde_json::Value::as_str)
+                        .map(super::recovery_snapshot::RecoverySnapshot::file_expectation)
+                } else {
+                    None
+                };
+                super::recovery_snapshot::RecoverySnapshot::capture(
+                    task_id,
+                    &ctx.session_id,
+                    Path::new(&ctx.working_dir),
+                    content_digest
+                        .as_deref()
+                        .map(|digest| (target_paths[0].as_str(), digest)),
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
     let runs = crate::db::runs::RunsDb::open()?;
-    let cursor = runs.record_operation_intent(
+    let cursor = runs.record_operation_intent_with_snapshot(
         run_id,
         task_id,
         &operation_id,
         &operation,
         &format!("{effect:?}"),
         &target_paths,
+        snapshot.as_ref(),
     )?;
     Ok(Some(JournalIntent {
         run_id: run_id.to_owned(),
         cursor,
         target_paths,
         operation,
+        snapshot,
     }))
 }
 
@@ -219,7 +246,11 @@ fn journal_target_paths(
     vec![parts.join("/")]
 }
 
-fn finish_operation_journal(intent: JournalIntent, result: ToolResult) -> ToolResult {
+fn finish_operation_journal(
+    intent: JournalIntent,
+    result: ToolResult,
+    ctx: &ToolContext,
+) -> ToolResult {
     let changed_paths = if !result.is_error
         && matches!(
             intent.operation.as_str(),
@@ -247,8 +278,26 @@ fn finish_operation_journal(intent: JournalIntent, result: ToolResult) -> ToolRe
         crate::db::runs::OperationOutcome::Ok
     };
     let recorded = crate::db::runs::RunsDb::open().and_then(|runs| {
-        runs.record_operation_outcome(&intent.run_id, intent.cursor, outcome, &changed_paths)
-            .map(|_| ())
+        let snapshot = intent
+            .snapshot
+            .as_ref()
+            .map(|snapshot| {
+                super::recovery_snapshot::RecoverySnapshot::capture(
+                    snapshot.task_id(),
+                    &ctx.session_id,
+                    Path::new(&ctx.working_dir),
+                    None,
+                )
+            })
+            .transpose()?;
+        runs.record_operation_outcome_with_snapshot(
+            &intent.run_id,
+            intent.cursor,
+            outcome,
+            &changed_paths,
+            snapshot.as_ref(),
+        )
+        .map(|_| ())
     });
     if recorded.is_ok() {
         return result;
@@ -259,7 +308,7 @@ fn finish_operation_journal(intent: JournalIntent, result: ToolResult) -> ToolRe
         event_type = "operation_journal_outcome_failed",
         operation = %intent.operation,
         outcome = "unknown",
-        error_class = "runs_db",
+        error_class = "durable_evidence",
         "A side effect returned but its durable outcome could not be recorded"
     );
     let mut unknown = ToolResult::categorized_error(
@@ -1159,14 +1208,14 @@ impl ToolExecutor {
                                 target: "arcana::telemetry",
                                 event_type = "operation_journal_intent_failed",
                                 operation = "agent_tool_call",
-                                error_class = "runs_db",
-                                "Refusing a run-scoped side effect because its intent could not be persisted"
+                                error_class = "durable_evidence",
+                                "Refusing a run-scoped side effect because its recovery evidence could not be verified and persisted"
                             );
                             ToolResult::categorized_error(
                                 "operation_intent_unavailable",
                                 "durability",
-                                "Arcana could not persist this operation's recovery intent, so it was not run.",
-                                "Check the local run database and retry only after it is writable.",
+                                "Arcana could not verify and persist this operation's recovery intent, so it was not run.",
+                                "Check the selected workspace, task identity and local recovery stores; retry only after recovery evidence is available.",
                             )
                         }
                         Ok(intent) => {
@@ -1189,7 +1238,7 @@ impl ToolExecutor {
                             };
                             match intent {
                                 Some(_intent) if interrupted => result,
-                                Some(intent) => finish_operation_journal(intent, result),
+                                Some(intent) => finish_operation_journal(intent, result, &ctx),
                                 None => result,
                             }
                         }
@@ -1858,6 +1907,24 @@ mod p8_execution_registry_tests {
     async fn unresolved_prior_task_effect_blocks_executor_handler_until_reconciled() {
         let home = tempfile::tempdir().expect("isolated Arcana home");
         let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("selected task workspace outside Arcana home");
+        let tasks = crate::db::tasks::TasksDb::open().expect("open isolated task DB");
+        let task = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "executor recovery fixture".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "task-backed recovery admission".into(),
+                created_by: Some("test".into()),
+            })
+            .expect("create recovery fixture task");
+        tasks
+            .update_status(task.id, "assigned", Some("worker-backend"))
+            .expect("assign recovery fixture task");
+        tasks
+            .claim_task_with_pid(task.id, "worker-backend", std::process::id())
+            .expect("claim recovery fixture task");
         let runs = crate::db::runs::RunsDb::open().expect("open isolated run DB");
         let interrupted_run = runs
             .begin_worker_tick("worker-backend", "interrupted-effect-session")
@@ -1865,7 +1932,7 @@ mod p8_execution_registry_tests {
         let uncertain = runs
             .record_operation_intent(
                 &interrupted_run,
-                Some(42),
+                Some(task.id),
                 "interrupted-write",
                 "write_file",
                 "Write",
@@ -1887,11 +1954,11 @@ mod p8_execution_registry_tests {
             PermissionMode::Autonomous,
             crate::agent::permission::new_pending_permissions(),
             "replacement-effect-session".into(),
-            home.path().to_string_lossy().into_owned(),
+            workspace.path().to_string_lossy().into_owned(),
             AgentIdentity::worker("worker-backend"),
         )
         .with_run_id(Some(replacement_run.clone()));
-        executor.set_task_id(Some(42));
+        executor.set_task_id(Some(task.id));
 
         let blocked = executor
             .execute_batch(vec![(
@@ -1935,7 +2002,7 @@ mod p8_execution_registry_tests {
             .operation_journal_page(&replacement_run, 0, 10)
             .expect("read resumed journal");
         assert_eq!(resumed_page.entries.len(), 1);
-        assert_eq!(resumed_page.entries[0].task_id, Some(42));
+        assert_eq!(resumed_page.entries[0].task_id, Some(task.id));
     }
 
     #[tokio::test]
