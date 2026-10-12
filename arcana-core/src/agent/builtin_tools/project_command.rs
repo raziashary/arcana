@@ -3227,6 +3227,91 @@ fn main() {
         );
     }
 
+    fn assert_task_build_timing_sample(
+        db: &crate::db::tasks::TasksDb,
+        task_id: i64,
+        workspace: &Path,
+        call_id: &str,
+        events: &[serde_json::Value],
+        wall_ns: u128,
+    ) -> std::collections::BTreeMap<&'static str, u64> {
+        let batch = db
+            .latest_project_build_batch_status(task_id)
+            .expect("read persisted ProjectCommand build batch")
+            .expect("ProjectCommand must persist a build batch");
+        assert_eq!(batch.0, "passed");
+        assert_eq!((batch.1, batch.2, batch.3), (1, 1, 1));
+        assert_eq!(batch.6, 1, "one successful build evidence row must persist");
+        assert_eq!(batch.7, 0, "persisted build evidence must be valid");
+        let workspace_identity = crate::platform::workspace::workspace_identity(workspace)
+            .expect("resolve the measured workspace identity");
+        assert_eq!(
+            crate::platform::workspace::workspace_identity(Path::new(&batch.4))
+                .expect("resolve the persisted batch workspace identity"),
+            workspace_identity
+        );
+        let evidence = db
+            .latest_build_evidence(task_id)
+            .expect("read persisted ProjectCommand build evidence")
+            .expect("passing batch must retain its build evidence");
+        assert_eq!(evidence.exit_code, 0);
+        assert!(evidence.exit_code_attributable);
+        assert_eq!(
+            crate::platform::workspace::workspace_identity(Path::new(
+                evidence
+                    .workspace_path
+                    .as_deref()
+                    .expect("persisted evidence workspace path"),
+            ))
+            .expect("resolve the persisted evidence workspace identity"),
+            workspace_identity
+        );
+        assert_eq!(
+            evidence.workspace_fingerprint.as_deref(),
+            batch.5.as_deref()
+        );
+
+        let mut stages = std::collections::BTreeMap::new();
+        for stage in [
+            "runtime_prepare",
+            "sandbox_prepare",
+            "process_wait",
+            "output_drain",
+            "evidence_persistence",
+        ] {
+            let matching = events
+                .iter()
+                .filter(|event| {
+                    event["fields"]["event_type"] == "project_command_stage"
+                        && event["fields"]["call_id"] == call_id
+                        && event["fields"]["stage"] == stage
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matching.len(),
+                1,
+                "one {stage} event per selected command batch"
+            );
+            assert_eq!(matching[0]["fields"]["task_id"], task_id.to_string());
+            assert_eq!(matching[0]["fields"]["outcome"], "success");
+            stages.insert(
+                stage,
+                matching[0]["fields"]["duration_ns"]
+                    .as_u64()
+                    .expect("stage duration in nanoseconds"),
+            );
+        }
+        assert!(
+            stages
+                .values()
+                .map(|duration| u128::from(*duration))
+                .sum::<u128>()
+                <= wall_ns,
+            "stage durations must not exceed ProjectCommandTool wall time"
+        );
+        stages
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "measurement-only P4-62 task-attributed cold/warm timing and evidence"]
@@ -3289,47 +3374,13 @@ fn main() {
                 });
                 assert!(!result.is_error, "build failed: {}", result.output);
                 let wall_ns = started.elapsed().as_nanos();
-                let batch = db
-                    .latest_project_build_batch_status(task.id)
-                    .unwrap()
-                    .unwrap();
-                assert_eq!(batch.0, "passed");
-                assert_eq!((batch.1, batch.2, batch.3), (1, 1, 1));
-                let mut stages = std::collections::BTreeMap::new();
-                for stage in [
-                    "runtime_prepare",
-                    "sandbox_prepare",
-                    "process_wait",
-                    "output_drain",
-                    "evidence_persistence",
-                ] {
-                    let matching = events
-                        .iter()
-                        .filter(|event| {
-                            event["fields"]["event_type"] == "project_command_stage"
-                                && event["fields"]["call_id"] == context.call_id
-                                && event["fields"]["stage"] == stage
-                        })
-                        .collect::<Vec<_>>();
-                    assert_eq!(
-                        matching.len(),
-                        1,
-                        "one {stage} event per selected command batch"
-                    );
-                    assert_eq!(matching[0]["fields"]["task_id"], task.id.to_string());
-                    assert_eq!(matching[0]["fields"]["outcome"], "success");
-                    stages.insert(
-                        stage,
-                        matching[0]["fields"]["duration_ns"].as_u64().unwrap(),
-                    );
-                }
-                assert!(
-                    stages
-                        .values()
-                        .map(|duration| u128::from(*duration))
-                        .sum::<u128>()
-                        <= wall_ns,
-                    "sequential stage durations must not count process time twice"
+                let stages = assert_task_build_timing_sample(
+                    &db,
+                    task.id,
+                    workspace.path(),
+                    &context.call_id,
+                    &events,
+                    wall_ns,
                 );
                 let row = json!({"profile": profile, "sample": sample, "cold": sample == 0,
                     "wall_ns": wall_ns, "stages_ns": stages});
@@ -3345,7 +3396,153 @@ fn main() {
     }
 
     #[cfg(windows)]
-    #[ignore = "measurement-only P4-62 matched cold/warm production launcher timing"]
+    #[test]
+    #[ignore = "measurement-only P4-62 Windows task-attributed cold/warm stage timing and evidence"]
+    fn p4_62_measure_windows_task_build_stages_with_evidence() {
+        const PROFILES: usize = 3;
+        const WARM_RUNS: usize = 5;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("measurement runtime");
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture_parent = manifest_dir.join("target").join("p4-acl-tests");
+        std::fs::create_dir_all(&fixture_parent)
+            .expect("create repository-local ACL measurement parent");
+        let mut samples = Vec::with_capacity(PROFILES * (WARM_RUNS + 1));
+
+        for profile_index in 0..PROFILES {
+            let profile = tempfile::tempdir().expect("owned isolated Arcana profile");
+            let _profile_guard = crate::db::test_support::with_home(profile.path());
+            let db = crate::db::tasks::TasksDb::open().expect("measurement TasksDb");
+            let workspace = tempfile::Builder::new()
+                .prefix("p4-62-windows-task-build-")
+                .tempdir_in(&fixture_parent)
+                .expect("create fresh repository-local Windows workspace/cache");
+            std::fs::write(
+                workspace.path().join("pyproject.toml"),
+                "[project]\nname = \"arcana-timing-fixture\"\nversion = \"0.1.0\"\n",
+            )
+            .expect("write identical Python project manifest");
+            std::fs::write(
+                workspace.path().join("valid.py"),
+                "def valid():\n    return True\n",
+            )
+            .expect("write identical Python source");
+            let _workspace_lease = process_sandbox::retain_workspace(workspace.path());
+            let task = db
+                .create(crate::db::tasks::CreateTaskInput {
+                    title: format!("P4-62 Windows matched build profile {profile_index}"),
+                    description: None,
+                    priority: "p2".into(),
+                    task_type: "feature".into(),
+                    acceptance_criteria:
+                        "successful Python Build with correlated stage timings and persisted evidence"
+                            .into(),
+                    created_by: Some("p4-62-measurement".into()),
+                })
+                .expect("create measurement task");
+            db.update_status(task.id, "assigned", Some("worker-backend"))
+                .expect("assign measurement task");
+            db.claim_task_with_pid(task.id, "worker-backend", std::process::id())
+                .expect("atomically claim measurement task with current PID");
+
+            // Each profile gets fresh home/workspace/application caches. Cold is
+            // relative to those Arcana-owned caches only; the OS cache is intact.
+            crate::platform::python_runtime::reset_process_stage_cache_for_test();
+            for sample_index in 0..=WARM_RUNS {
+                let context = ToolContext {
+                    session_id: format!("p4-62-windows-profile-{profile_index}"),
+                    working_dir: workspace.path().display().to_string(),
+                    call_id: format!("p4-62-windows-profile-{profile_index}-sample-{sample_index}"),
+                    run_id: None,
+                    task_id: Some(task.id),
+                    permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+                    depth: 0,
+                    agent_role: "worker-backend".into(),
+                    run_token_budget: None,
+                };
+                let started = std::time::Instant::now();
+                let (result, events) = crate::observability::timing::capture_json_events(|| {
+                    runtime.block_on(
+                        ProjectCommandTool
+                            .execute(json!({"intent": "build", "toolchain": "python"}), &context),
+                    )
+                });
+                assert!(
+                    !result.is_error,
+                    "Windows Python Build profile {profile_index} sample {sample_index} failed: {}",
+                    result.output
+                );
+                let wall_ns = started.elapsed().as_nanos();
+                let stages = assert_task_build_timing_sample(
+                    &db,
+                    task.id,
+                    workspace.path(),
+                    &context.call_id,
+                    &events,
+                    wall_ns,
+                );
+                let row = json!({
+                    "profile": profile_index,
+                    "sample": sample_index,
+                    "cold": sample_index == 0,
+                    "wall_ns": wall_ns,
+                    "stages_ns": stages,
+                });
+                eprintln!("P4-62 Windows observed sample {row}");
+                samples.push((profile_index, sample_index, wall_ns, stages));
+            }
+            db.update_status_for_worker_claim(task.id, "worker-backend", "done", None, None)
+                .expect("complete task and release its real worker claim");
+        }
+
+        fn median_and_range(values: impl Iterator<Item = u128>) -> (u128, u128, u128) {
+            let mut values = values.collect::<Vec<_>>();
+            assert!(!values.is_empty());
+            values.sort_unstable();
+            (
+                values[values.len() / 2],
+                values[0],
+                values[values.len() - 1],
+            )
+        }
+
+        assert_eq!(samples.len(), PROFILES * (WARM_RUNS + 1));
+        for stage in [
+            "wall",
+            "runtime_prepare",
+            "sandbox_prepare",
+            "process_wait",
+            "output_drain",
+            "evidence_persistence",
+        ] {
+            let value = |sample: &(
+                usize,
+                usize,
+                u128,
+                std::collections::BTreeMap<&'static str, u64>,
+            )| {
+                if stage == "wall" {
+                    sample.2
+                } else {
+                    u128::from(*sample.3.get(stage).expect("all five stage samples"))
+                }
+            };
+            let (cold_median, cold_min, cold_max) =
+                median_and_range(samples.iter().filter(|sample| sample.1 == 0).map(value));
+            let (warm_median, warm_min, warm_max) =
+                median_and_range(samples.iter().filter(|sample| sample.1 > 0).map(value));
+            eprintln!(
+                "P4-62 Windows {stage} ns: cold_median={cold_median} cold_range={cold_min}..{cold_max}; warm_median={warm_median} warm_range={warm_min}..{warm_max}"
+            );
+        }
+        // These are observed command-stage timings, not compiler time or a
+        // general speedup claim. OS caches are intentionally left untouched.
+    }
+
+    #[cfg(windows)]
+    #[ignore = "legacy launcher-only cold/warm comparison; use task-attributed stage fixture"]
     #[tokio::test]
     async fn p4_62_measure_matching_python_build_cold_and_warm() {
         use command::{CommandIntent, Toolchain};
