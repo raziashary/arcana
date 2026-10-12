@@ -33,6 +33,18 @@ use crate::state::AppState;
 
 const MAX_TOOL_TURNS: usize = 20;
 
+const PROVIDER_CANCELLATION_POLL_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(100);
+
+async fn wait_for_provider_cancellation(state: Arc<Mutex<AppState>>, session_id: String) {
+    loop {
+        if state.lock_tolerant().is_cancelled(&session_id) {
+            return;
+        }
+        tokio::time::sleep(PROVIDER_CANCELLATION_POLL_INTERVAL).await;
+    }
+}
+
 struct ProviderCallTelemetry {
     provider: String,
     model: String,
@@ -1466,7 +1478,7 @@ impl AgentEngine {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(class);
             class
         };
-        let stream_result = crate::provider::retry::with_retry(
+        let retry_future = crate::provider::retry::with_retry(
             || {
                 stream_attempts = stream_attempts.saturating_add(1);
                 provider_call.attempts = stream_attempts;
@@ -1490,8 +1502,19 @@ impl AgentEngine {
                 }
             },
             &classify_failure,
-        )
-        .await;
+        );
+        let stream_result = tokio::select! {
+            biased;
+            _ = wait_for_provider_cancellation(
+                Arc::clone(&self.state),
+                session_id.to_owned(),
+            ) => {
+                stream_timer.set_outcome("cancelled");
+                provider_call.outcome = "cancelled";
+                return Err(ArcanaError::Cancelled);
+            },
+            result = retry_future => result,
+        };
 
         // `api_failures` already has a dashboard reader but had no production
         // writer. Persist one bounded aggregate per provider call that saw a
@@ -1578,7 +1601,22 @@ impl AgentEngine {
         > = std::collections::BTreeMap::new();
         let mut content_blocks: Vec<MessageContent> = Vec::new();
 
-        while let Some(chunk) = stream.next().await {
+        loop {
+            let next_chunk = tokio::select! {
+                biased;
+                _ = wait_for_provider_cancellation(
+                    Arc::clone(&self.state),
+                    session_id.to_owned(),
+                ) => {
+                    stream_timer.set_outcome("cancelled");
+                    provider_call.outcome = "cancelled";
+                    return Err(ArcanaError::Cancelled);
+                },
+                chunk = stream.next() => chunk,
+            };
+            let Some(chunk) = next_chunk else {
+                break;
+            };
             let chunk = match chunk {
                 Ok(chunk) => chunk,
                 Err(error) => {
@@ -2603,7 +2641,7 @@ mod procedural_memory_tests {
     use crate::provider::types::{CompletionRequest, ModelInfo, ProviderStatus, StreamChunk};
     use crate::provider::usage::Usage;
     use async_trait::async_trait;
-    use futures::stream;
+    use futures::{stream, Stream, StreamExt};
     use std::collections::VecDeque;
 
     async fn ensure_isolated_test_analytics() {
@@ -2660,12 +2698,7 @@ mod procedural_memory_tests {
         }
 
         async fn stream(&self, request: CompletionRequest) -> Result<StreamResult> {
-            if let Some((state, session_id)) = &self.cancel_on_stream {
-                state
-                    .lock()
-                    .expect("cancel fixture state lock")
-                    .cancel_agent(session_id);
-            }
+            let cancel_on_first_chunk = self.cancel_on_stream.clone();
             self.requests
                 .lock()
                 .expect("request capture lock")
@@ -2684,7 +2717,19 @@ mod procedural_memory_tests {
                 .expect("script response lock")
                 .pop_front()
                 .expect("one scripted response per provider request");
-            Ok(Box::pin(stream::iter(response.into_iter().map(Ok))))
+            Ok(Box::pin(
+                stream::iter(response.into_iter().map(Ok)).inspect(move |item| {
+                    if matches!(item, Ok(StreamChunk::MessageDelta { usage, .. }) if usage.total() > 0)
+                    {
+                        if let Some((state, session_id)) = &cancel_on_first_chunk {
+                        state
+                            .lock()
+                            .expect("cancel fixture state lock")
+                            .cancel_agent(session_id);
+                        }
+                    }
+                }),
+            ))
         }
 
         async fn test_connection(&self) -> Result<ProviderStatus> {
@@ -4151,6 +4196,441 @@ mod procedural_memory_tests {
             .expect("cancelled run token usage is persisted");
         assert_eq!(persisted.prompt_tokens, 120);
         assert_eq!(persisted.completion_tokens, 18);
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum CancellationWaitPoint {
+        Preflight,
+        Establishment,
+        RetryDelay,
+        Body,
+        AlwaysReadyBody,
+    }
+
+    struct DropProbe(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct BlockingCancellationProvider {
+        wait_at: CancellationWaitPoint,
+        entered: Arc<tokio::sync::Notify>,
+        input_calls: std::sync::atomic::AtomicUsize,
+        stream_calls: std::sync::atomic::AtomicUsize,
+        dropped: Arc<std::sync::atomic::AtomicUsize>,
+        body_polls: Arc<std::sync::atomic::AtomicUsize>,
+        state: Arc<Mutex<crate::state::AppState>>,
+        session_id: String,
+        cancel_signaled_at: Arc<Mutex<Option<std::time::Instant>>>,
+    }
+
+    #[async_trait]
+    impl Provider for BlockingCancellationProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "Local cancellation fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            crate::provider::catalogue::models_for("google")
+        }
+
+        async fn input_token_upper_bound(&self, _request: &CompletionRequest) -> Result<u64> {
+            self.input_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.wait_at == CancellationWaitPoint::Preflight {
+                self.entered.notify_one();
+                let _drop_probe = DropProbe(Arc::clone(&self.dropped));
+                std::future::pending::<()>().await;
+            }
+            Ok(25)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<crate::provider::types::CompletionResponse> {
+            unreachable!("the agent loop uses the provider stream")
+        }
+
+        async fn stream(&self, _request: CompletionRequest) -> Result<StreamResult> {
+            let attempt = self
+                .stream_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            match self.wait_at {
+                CancellationWaitPoint::Establishment => {
+                    self.entered.notify_one();
+                    let _drop_probe = DropProbe(Arc::clone(&self.dropped));
+                    std::future::pending::<()>().await;
+                    unreachable!("cancelled establishment must be dropped")
+                }
+                CancellationWaitPoint::RetryDelay if attempt == 0 => {
+                    self.entered.notify_one();
+                    Err(ArcanaError::Provider(
+                        "local fixture 503 [Retryable]".into(),
+                    ))
+                }
+                CancellationWaitPoint::Body => Ok(Box::pin(PendingCancellationBody {
+                    chunks: VecDeque::from([
+                        Ok(StreamChunk::ToolUseStart {
+                            id: "cancelled-tool".into(),
+                            name: "side_effect".into(),
+                            block_index: 0,
+                            opaque: None,
+                        }),
+                        Ok(StreamChunk::ToolInputDelta {
+                            block_index: 0,
+                            partial_json: "{}".into(),
+                        }),
+                    ]),
+                    entered: Arc::clone(&self.entered),
+                    dropped: Arc::clone(&self.dropped),
+                })),
+                CancellationWaitPoint::AlwaysReadyBody => {
+                    self.entered.notify_one();
+                    Ok(Box::pin(CancellingReadyBody {
+                        remaining: 1_000,
+                        polls: Arc::clone(&self.body_polls),
+                        dropped: Arc::clone(&self.dropped),
+                        state: Arc::clone(&self.state),
+                        session_id: self.session_id.clone(),
+                        cancel_signaled_at: Arc::clone(&self.cancel_signaled_at),
+                    }))
+                }
+                _ => Ok(Box::pin(stream::iter([
+                    Ok(StreamChunk::MessageDelta {
+                        stop_reason: "stop".into(),
+                        usage: Usage::default(),
+                    }),
+                    Ok(StreamChunk::Done),
+                ]))),
+            }
+        }
+
+        async fn test_connection(&self) -> Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    struct PendingCancellationBody {
+        chunks: VecDeque<Result<StreamChunk>>,
+        entered: Arc<tokio::sync::Notify>,
+        dropped: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Stream for PendingCancellationBody {
+        type Item = Result<StreamChunk>;
+
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            if let Some(chunk) = self.chunks.pop_front() {
+                return std::task::Poll::Ready(Some(chunk));
+            }
+            self.entered.notify_one();
+            std::task::Poll::Pending
+        }
+    }
+
+    impl Drop for PendingCancellationBody {
+        fn drop(&mut self) {
+            self.dropped
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct CancellingReadyBody {
+        remaining: u32,
+        polls: Arc<std::sync::atomic::AtomicUsize>,
+        dropped: Arc<std::sync::atomic::AtomicUsize>,
+        state: Arc<Mutex<crate::state::AppState>>,
+        session_id: String,
+        cancel_signaled_at: Arc<Mutex<Option<std::time::Instant>>>,
+    }
+
+    impl Stream for CancellingReadyBody {
+        type Item = Result<StreamChunk>;
+
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            let poll = self.polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if poll == 0 {
+                *self
+                    .cancel_signaled_at
+                    .lock()
+                    .expect("cancel timestamp lock") = Some(std::time::Instant::now());
+                self.state
+                    .lock()
+                    .expect("state lock")
+                    .cancel_agent(&self.session_id);
+            }
+            if self.remaining == 0 {
+                return std::task::Poll::Ready(None);
+            }
+            self.remaining -= 1;
+            std::task::Poll::Ready(Some(Ok(StreamChunk::TextDelta {
+                text: "ready".into(),
+                block_index: 0,
+            })))
+        }
+    }
+
+    impl Drop for CancellingReadyBody {
+        fn drop(&mut self) {
+            self.dropped
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    async fn cancel_blocked_provider_wait(
+        wait_at: CancellationWaitPoint,
+        enable_daily_cap: bool,
+    ) -> (
+        Result<Vec<RequestMessage>>,
+        Arc<BlockingCancellationProvider>,
+        Arc<Mutex<crate::state::AppState>>,
+        Arc<crate::budget::run_tokens::RunTokenLedger>,
+        tempfile::TempDir,
+        crate::db::test_support::HomeGuard,
+        Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let home_guard = crate::db::test_support::with_home(home.path());
+        if enable_daily_cap {
+            crate::budget::daily::DailyCap {
+                enabled: true,
+                limit_usd: 100.0,
+            }
+            .save()
+            .expect("enable isolated daily cap");
+        }
+
+        let state = Arc::new(Mutex::new(crate::state::AppState::default()));
+        let session_id = "provider-cancellation-session";
+        state.lock().expect("state lock").agents.insert(
+            session_id.to_owned(),
+            crate::state::app_state::ActiveAgent {
+                session_id: session_id.to_owned(),
+                is_running: true,
+                cancel_flag: false,
+            },
+        );
+        let provider = Arc::new(BlockingCancellationProvider {
+            wait_at,
+            entered: Arc::new(tokio::sync::Notify::new()),
+            input_calls: std::sync::atomic::AtomicUsize::new(0),
+            stream_calls: std::sync::atomic::AtomicUsize::new(0),
+            dropped: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            body_polls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            state: state.clone(),
+            session_id: session_id.to_owned(),
+            cancel_signaled_at: Arc::new(Mutex::new(None)),
+        });
+        let provider_for_engine: Arc<dyn Provider> = if enable_daily_cap {
+            crate::provider::capped::CappedProvider::wrap(provider.clone(), state.clone())
+        } else {
+            provider.clone()
+        };
+        let ledger = crate::budget::run_tokens::RunTokenLedger::new(Some(10_000));
+        let engine = AgentEngine::new(
+            provider_for_engine.clone(),
+            super::super::permission::PermissionMode::Autonomous,
+            super::super::PAMode::FastDevelopment,
+            state.clone(),
+            super::super::permission::new_pending_permissions(),
+            super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+        )
+        .with_optional_run_token_budget(Some(Arc::clone(&ledger)))
+        .with_output_token_limit(32);
+        let side_effects = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut engine = engine;
+        engine.registry.register(Arc::new(SideEffectTool {
+            calls: Arc::clone(&side_effects),
+        }));
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        let entered = Arc::clone(&provider.entered);
+        let mut run = tokio::spawn(async move {
+            engine
+                .run(
+                    session_id,
+                    workspace.path().to_str().expect("workspace path"),
+                    "gemini-3.8-flash",
+                    Vec::new(),
+                    "Wait for provider cancellation.",
+                    Some("Worker instructions."),
+                )
+                .await
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), entered.notified())
+            .await
+            .expect("provider reached the selected blocking point");
+        if wait_at != CancellationWaitPoint::AlwaysReadyBody {
+            *provider
+                .cancel_signaled_at
+                .lock()
+                .expect("cancel timestamp lock") = Some(std::time::Instant::now());
+            state.lock().expect("state lock").cancel_agent(session_id);
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), &mut run)
+            .await
+            .expect("engine returns promptly after cancellation")
+            .expect("engine task joins");
+        let cancellation_latency = provider
+            .cancel_signaled_at
+            .lock()
+            .expect("cancel timestamp lock")
+            .expect("cancellation signal timestamp")
+            .elapsed();
+        assert!(
+            cancellation_latency < std::time::Duration::from_millis(250),
+            "provider cancellation exceeded the 100 ms polling bound: {cancellation_latency:?}"
+        );
+        println!("provider cancellation observed in {cancellation_latency:?} at {wait_at:?}");
+
+        (
+            result,
+            provider,
+            state,
+            ledger,
+            home,
+            home_guard,
+            side_effects,
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancellation_during_provider_preflight_prevents_generation_dispatch() {
+        let (result, provider, _state, ledger, _home, _home_guard, _side_effects) =
+            cancel_blocked_provider_wait(CancellationWaitPoint::Preflight, false).await;
+
+        assert!(matches!(result, Err(ArcanaError::Cancelled)));
+        assert_eq!(
+            provider
+                .input_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            provider
+                .stream_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        assert_eq!(ledger.snapshot().used, 0);
+        assert_eq!(ledger.snapshot().reserved, 0);
+        assert_eq!(
+            provider.dropped.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancellation_during_provider_establishment_drops_future_and_charges_unknown_usage() {
+        let (result, provider, _state, ledger, _home, _home_guard, _side_effects) =
+            cancel_blocked_provider_wait(CancellationWaitPoint::Establishment, false).await;
+
+        assert!(matches!(result, Err(ArcanaError::Cancelled)));
+        assert_eq!(
+            provider
+                .stream_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            provider.dropped.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(ledger.snapshot().used, 57);
+        assert_eq!(ledger.snapshot().reserved, 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancellation_during_provider_retry_delay_prevents_another_attempt() {
+        let (result, provider, _state, ledger, _home, _home_guard, _side_effects) =
+            cancel_blocked_provider_wait(CancellationWaitPoint::RetryDelay, false).await;
+
+        assert!(matches!(result, Err(ArcanaError::Cancelled)));
+        assert_eq!(
+            provider
+                .stream_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(ledger.snapshot().used, 57);
+        assert_eq!(ledger.snapshot().reserved, 0);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancellation_during_provider_body_drops_stream_and_keeps_conservative_reservations() {
+        let (result, provider, _state, ledger, _home, _home_guard, side_effects) =
+            cancel_blocked_provider_wait(CancellationWaitPoint::Body, true).await;
+
+        assert!(matches!(result, Err(ArcanaError::Cancelled)));
+        assert_eq!(
+            provider
+                .stream_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            provider.dropped.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(ledger.snapshot().used, 57);
+        assert_eq!(ledger.snapshot().reserved, 0);
+        assert_eq!(side_effects.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let config = crate::db::config_db::open().expect("isolated config database");
+        let reservations: i64 = config
+            .query_row(
+                "SELECT count(*) FROM daily_budget_reservations",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read daily holds");
+        let spent: i64 = config
+            .query_row(
+                "SELECT coalesce(sum(spent_micros), 0) FROM daily_budget_totals",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read conservative daily spend");
+        assert_eq!(reservations, 0, "dropped active stream settles its hold");
+        assert!(
+            spent > 0,
+            "unknown usage is charged at the reserved maximum"
+        );
+        drop(config);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancellation_preempts_a_continuously_ready_provider_body() {
+        let (result, provider, _state, ledger, _home, _home_guard, _side_effects) =
+            cancel_blocked_provider_wait(CancellationWaitPoint::AlwaysReadyBody, false).await;
+
+        assert!(matches!(result, Err(ArcanaError::Cancelled)));
+        assert_eq!(
+            provider
+                .body_polls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "cancellation must be observed before polling the next ready chunk"
+        );
+        assert_eq!(
+            provider.dropped.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(ledger.snapshot().used, 57);
+        assert_eq!(ledger.snapshot().reserved, 0);
     }
 
     struct SideEffectTool {
