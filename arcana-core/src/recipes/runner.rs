@@ -1479,6 +1479,374 @@ mod production_git_commit_recipe_tests {
         run_commit_recipe(true).await;
     }
 
+    struct MultiMutationInterruptionProvider {
+        task_id: i64,
+        turn: Mutex<usize>,
+        requests: Mutex<Vec<CompletionRequest>>,
+    }
+
+    impl MultiMutationInterruptionProvider {
+        fn tool_call(id: &str, name: &str, input: Value) -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::ToolUseStart {
+                    id: id.into(),
+                    name: name.into(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: input.to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+    }
+
+    #[async_trait]
+    impl Provider for MultiMutationInterruptionProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "Multi-mutation interruption fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            crate::provider::catalogue::models_for("google")
+        }
+
+        async fn input_token_upper_bound(
+            &self,
+            _request: &CompletionRequest,
+        ) -> crate::errors::Result<u64> {
+            Ok(10)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<CompletionResponse> {
+            unreachable!("RecipeRunner must use AgentEngine streaming")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
+            assert!(request.tools.iter().any(|tool| tool.name == "claim_task"));
+            assert!(request.tools.iter().any(|tool| tool.name == "write_file"));
+            self.requests
+                .lock()
+                .expect("provider request capture")
+                .push(request.clone());
+            let turn = {
+                let mut turn = self.turn.lock().expect("provider turn lock");
+                let current = *turn;
+                *turn += 1;
+                current
+            };
+            let chunks = match turn {
+                0 => Self::tool_call(
+                    "claim-task",
+                    "claim_task",
+                    json!({ "task_id": self.task_id }),
+                ),
+                1 => {
+                    let claim = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult { name, is_error, .. }
+                                if name == "claim_task" =>
+                            {
+                                Some(*is_error)
+                            }
+                            _ => None,
+                        })
+                        .expect("worker must receive the real task claim result");
+                    assert!(!claim, "assigned worker must claim its task");
+                    Self::tool_call(
+                        "write-acknowledged",
+                        "write_file",
+                        json!({
+                            "path": "acknowledged.txt",
+                            "content": "first real mutation\n"
+                        }),
+                    )
+                }
+                2 => {
+                    let first_write = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult { name, is_error, .. }
+                                if name == "write_file" =>
+                            {
+                                Some(*is_error)
+                            }
+                            _ => None,
+                        })
+                        .expect("worker must receive the first write result");
+                    assert!(
+                        !first_write,
+                        "first host file mutation must be acknowledged"
+                    );
+                    Self::tool_call(
+                        "write-lost-ack",
+                        "write_file",
+                        json!({
+                            "path": "lost-ack.txt",
+                            "content": "second real mutation\n"
+                        }),
+                    )
+                }
+                3 => {
+                    let second_write = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult {
+                                tool_use_id,
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if tool_use_id == "write-lost-ack" && name == "write_file" => {
+                                Some((content.clone(), *is_error))
+                            }
+                            _ => None,
+                        })
+                        .expect("worker must receive the second write result");
+                    assert!(
+                        second_write.1,
+                        "lost durable acknowledgement must be an error"
+                    );
+                    let result: Value =
+                        serde_json::from_str(&second_write.0).expect("unknown result envelope");
+                    assert_eq!(result["error"]["code"], "side_effect_outcome_unknown");
+                    assert_eq!(result["error"]["retry_safe"], false);
+                    return Err(ArcanaError::Agent(
+                        "scripted provider interruption after lost mutation acknowledgement".into(),
+                    ));
+                }
+                _ => panic!("unexpected provider request after interruption"),
+            };
+            Ok(Box::pin(stream::iter(chunks.into_iter().map(Ok))))
+        }
+
+        async fn test_connection(&self) -> crate::errors::Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    #[tokio::test]
+    async fn shipped_worker_preserves_multiple_mutations_and_quarantines_lost_acknowledgement() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let analytics = Arc::new(
+            crate::analytics::AnalyticsManager::new()
+                .await
+                .expect("initialize isolated analytics DB"),
+        );
+        crate::analytics::install_global(analytics);
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated workspace consent store")
+            .grant(workspace.path(), "provider:google")
+            .expect("grant scripted provider for isolated workspace");
+
+        let tasks = TasksDb::open().expect("open isolated task database");
+        let task_id = tasks
+            .create(CreateTaskInput {
+                title: "Preserve mutations across lost acknowledgement".into(),
+                description: Some(
+                    "Run two production write_file calls before provider interruption.".into(),
+                ),
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "An unknown file mutation must remain quarantined.".into(),
+                created_by: Some("tg4-27-test".into()),
+            })
+            .expect("create task")
+            .id;
+        tasks
+            .update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign task to backend worker");
+        let workers = crate::db::workers::WorkersDb::open().expect("seed worker roster");
+        let backend = workers
+            .get_by_slug("worker-backend")
+            .expect("read backend worker")
+            .expect("backend worker exists");
+        workers
+            .update_status(backend.id, WorkerStatus::Active)
+            .expect("make worker runnable");
+
+        // This isolated test-only trigger rejects only the second write_file
+        // outcome row. The real ToolExecutor first inserts its intent,
+        // then runs the registered builtin, then encounters this failed append.
+        crate::db::runs::RunsDb::open().expect("initialize isolated run ledger");
+        let runs_path = home.path().join(".arcana").join("runs.db");
+        let trigger_db = rusqlite::Connection::open(&runs_path)
+            .expect("open isolated runs.db for the test trigger");
+        trigger_db
+            .execute_batch(
+                "CREATE TRIGGER test_fail_lost_ack_outcome
+                 BEFORE INSERT ON operation_journal
+                 WHEN NEW.record_type = 'outcome'
+                   AND (
+                     SELECT COUNT(*) FROM operation_journal
+                     WHERE record_type = 'intent' AND operation = 'write_file'
+                   ) = 2
+                 BEGIN
+                   SELECT RAISE(ABORT, 'test injected second mutation outcome failure');
+                 END;",
+            )
+            .expect("install isolated outcome failure trigger");
+        drop(trigger_db);
+
+        let provider = Arc::new(MultiMutationInterruptionProvider {
+            task_id,
+            turn: Mutex::new(0),
+            requests: Mutex::new(Vec::new()),
+        });
+        let make_runner = || {
+            RecipeRunner::new_with_workspace_override(
+                Arc::new(Mutex::new(AppState {
+                    active_provider: Some("google".into()),
+                    active_model: Some("gemini-3.8-flash".into()),
+                    ..AppState::default()
+                })),
+                Arc::new(SessionManager::new().expect("open isolated session manager")),
+                crate::agent::permission::new_pending_permissions(),
+                Some(workspace.path().to_string_lossy().into_owned()),
+            )
+            .with_provider_for_test(provider.clone())
+            .with_startup_failures_for_test(1)
+        };
+        let recipes_dir = home.path().join(".arcana").join("recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes_dir)
+            .expect("persist the shipped worker recipes");
+        let recipe: Recipe = serde_yaml::from_str(
+            &std::fs::read_to_string(recipes_dir.join("worker-backend-poll.yaml"))
+                .expect("read shipped backend recipe"),
+        )
+        .expect("parse shipped backend recipe");
+        assert_eq!(recipe.id, "worker-backend-poll");
+
+        let scheduler = crate::recipes::scheduler::RecipeScheduler::new(Arc::new(make_runner()));
+        scheduler.kick_worker("worker-backend");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if crate::db::runs::RunsDb::open()
+                    .expect("open worker run ledger")
+                    .latest_worker_tick("worker-backend")
+                    .expect("read worker tick")
+                    .is_some_and(|run| run.phase == "failed")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("provider interruption must finish the worker tick");
+        scheduler.shutdown().await;
+
+        let task = TasksDb::open()
+            .expect("reopen isolated task database")
+            .get_by_id(task_id)
+            .expect("read interrupted task")
+            .expect("task remains persisted");
+        assert_eq!(task.status, crate::db::tasks::TaskStatus::NeedsInfo);
+        assert_eq!(task.assigned_worker.as_deref(), Some("worker-backend"));
+        assert!(task.claimed_by_pid.is_none() && task.claim_host.is_none());
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("acknowledged.txt"))
+                .expect("reopen first file mutation"),
+            "first real mutation\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("lost-ack.txt"))
+                .expect("reopen second file mutation"),
+            "second real mutation\n"
+        );
+
+        let checkpoints = crate::git::checkpoint::list(None, None, Some(task_id))
+            .expect("read checkpoints through the public reader");
+        assert_eq!(checkpoints.len(), 2, "each real write has a checkpoint");
+        assert!(checkpoints
+            .iter()
+            .all(|checkpoint| checkpoint.task_id == Some(task_id)));
+        assert!(checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.file_path.ends_with("acknowledged.txt")));
+        assert!(checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.file_path.ends_with("lost-ack.txt")));
+        let runs = crate::db::runs::RunsDb::open().expect("reopen isolated run ledger");
+        let run = runs
+            .latest_worker_tick("worker-backend")
+            .expect("read persisted worker tick")
+            .expect("worker run remains persisted");
+        assert_eq!(run.task_id, Some(task_id));
+        assert_eq!(run.phase, "failed");
+        let journal = runs
+            .operation_journal_page(&run.run_id, 0, 20)
+            .expect("read task-attributed mutation journal");
+        let writes = journal
+            .entries
+            .iter()
+            .filter(|entry| entry.operation == "write_file")
+            .collect::<Vec<_>>();
+        assert_eq!(writes.len(), 2);
+        assert!(writes[0].cursor < writes[1].cursor);
+        assert!(writes.iter().all(|entry| {
+            entry.task_id == Some(task_id) && entry.run_id == run.run_id && entry.effect == "Write"
+        }));
+        let acknowledged = writes[0];
+        assert_eq!(acknowledged.target_paths, ["acknowledged.txt"]);
+        assert_eq!(acknowledged.outcome, crate::db::runs::OperationOutcome::Ok);
+        assert_eq!(acknowledged.changed_paths, ["acknowledged.txt"]);
+        let unknown = writes[1];
+        assert_eq!(unknown.target_paths, ["lost-ack.txt"]);
+        assert_eq!(unknown.outcome, crate::db::runs::OperationOutcome::Unknown);
+        assert_eq!(
+            unknown.reconciliation,
+            crate::db::runs::OperationReconciliation::Unresolved
+        );
+        assert!(unknown.changed_paths.is_empty());
+        assert!(runs
+            .unresolved_task_side_effect(task_id)
+            .expect("read unresolved mutation barrier")
+            .is_some());
+        assert!(provider.requests.lock().expect("provider requests").len() == 4);
+
+        // Recreate the scheduler and runner to ensure the later kick consults
+        // persisted task/journal state rather than an in-memory run latch.
+        let requests_before_kick = provider.requests.lock().unwrap().len();
+        let restarted_scheduler =
+            crate::recipes::scheduler::RecipeScheduler::new(Arc::new(make_runner()));
+        restarted_scheduler.kick_worker("worker-backend");
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        restarted_scheduler.shutdown().await;
+        assert_eq!(
+            provider.requests.lock().unwrap().len(),
+            requests_before_kick,
+            "unresolved mutation must prevent blind worker redispatch"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("lost-ack.txt")).unwrap(),
+            "second real mutation\n",
+            "the later scheduler kick must not repeat the second write"
+        );
+    }
+
     #[tokio::test]
     async fn exhausted_startup_preserves_assigned_task_budget_and_daily_reservation() {
         use crate::budget::daily::{DailyCap, ReservationDecision};

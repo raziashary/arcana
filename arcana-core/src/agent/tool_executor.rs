@@ -197,6 +197,9 @@ fn journal_target_paths(
     else {
         return Vec::new();
     };
+    // The jail returns a de-verbatim canonical target on Windows. Compare
+    // it with the same spelling of the canonical workspace, including UNC.
+    let root = super::builtin_tools::path_jail::strip_verbatim_prefix(&root);
     let Ok(relative) = target.strip_prefix(&root) else {
         return Vec::new();
     };

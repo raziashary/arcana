@@ -134,7 +134,7 @@ fn canonicalize_target(target: &Path) -> Result<PathBuf, String> {
 /// returns on Windows. Without this, a workspace canonicalized to
 /// `\\?\C:\AIRS Foundry\...` would fail to match a target without the
 /// prefix even though they refer to the same location.
-fn strip_verbatim_prefix(p: &Path) -> PathBuf {
+pub(crate) fn strip_verbatim_prefix(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
 
     // ⚠ P3-15, second corruption. `\\?\UNC\server\share\…` is a UNC path in
