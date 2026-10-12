@@ -503,6 +503,41 @@ impl ToolExecutor {
         }
     }
 
+    async fn acquire_write_lease(
+        tool: &dyn Tool,
+        input: &serde_json::Value,
+        ctx: &ToolContext,
+    ) -> std::result::Result<
+        Option<crate::platform::workspace_write::WorkspaceWriteLease>,
+        ToolResult,
+    > {
+        // Coordinate actual workspace mutations across fleet/CLI/desktop
+        // executors. Board, network and child-agent operations do not acquire
+        // this lease; holding it across a nested agent would deadlock its writes.
+        let write_lease = if tool.effect_for_input(input)
+            == crate::agent::tool_effect::ToolEffect::Write
+        {
+            match crate::platform::workspace_write::WorkspaceWriteLease::acquire(
+                std::path::Path::new(&ctx.working_dir),
+            )
+            .await
+            {
+                Ok(lease) => Some(lease),
+                Err(_) => {
+                    return Err(ToolResult::categorized_error(
+                        "workspace_write_lease_unavailable",
+                        "workspace_busy",
+                        "Arcana could not acquire the selected workspace's write lease; the handler was not run.",
+                        "Wait for the other managed writer to finish and verify the workspace before retrying.",
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+        Ok(write_lease)
+    }
+
     /// The form of a tool's arguments that is safe to report.
     ///
     /// The tool itself is given the raw input — it needs the real value to do
@@ -1073,7 +1108,23 @@ impl ToolExecutor {
                         "Review the hook policy or choose a permitted operation.",
                     )
                 } else {
-                    match begin_operation_journal(
+                    // Admission has no workspace side effect. Acquire before
+                    // journaling so cancellation while waiting cannot leave a
+                    // false unknown mutation that blocks task recovery.
+                    let admission = tokio::select! {
+                        biased;
+                        _ = wait_for_session_cancel(self.state.clone(), self.session_id.clone()) => {
+                            Err(ToolResult::categorized_error(
+                                "operation_cancelled", "cancellation",
+                                "Arcana cancelled this operation before workspace write admission; the handler was not run.",
+                                "Resume the task when ready; this admission created no mutation intent.",
+                            ))
+                        },
+                        result = Self::acquire_write_lease(tool.as_ref(), &input, &ctx) => result,
+                    };
+                    match admission {
+                    Err(result) => result,
+                    Ok(_write_lease) => match begin_operation_journal(
                         tool.name(),
                         &tool.effect_for_input(&input),
                         &input,
@@ -1139,6 +1190,7 @@ impl ToolExecutor {
                                 None => result,
                             }
                         }
+                    }
                     }
                 }
                 .with_execution_context_and_input(
@@ -1605,7 +1657,7 @@ mod p8_execution_registry_tests {
             PermissionMode::Autonomous,
             crate::agent::permission::new_pending_permissions(),
             format!("p4-run-context-{}", Uuid::new_v4()),
-            ".".into(),
+            home.path().to_string_lossy().into_owned(),
             AgentIdentity::supervisor(),
         )
         .with_run_id(Some(run_id.clone()));
@@ -2014,6 +2066,8 @@ mod p8_execution_registry_tests {
 
     #[tokio::test]
     async fn handler_panics_become_structured_results_for_read_and_write_partitions() {
+        let home = tempfile::tempdir().expect("isolated workspace and home");
+        let _home = crate::db::test_support::with_home(home.path());
         for effect in [ToolEffect::Read, ToolEffect::Write] {
             let panic_tool: Arc<dyn Tool> = Arc::new(PanickingTool {
                 effect: effect.clone(),
@@ -2023,7 +2077,7 @@ mod p8_execution_registry_tests {
                 PermissionMode::Autonomous,
                 crate::agent::permission::new_pending_permissions(),
                 format!("p4-tool-panic-{}", Uuid::new_v4()),
-                ".".into(),
+                home.path().to_string_lossy().into_owned(),
                 AgentIdentity::supervisor(),
             );
 
@@ -2050,6 +2104,113 @@ mod p8_execution_registry_tests {
             assert_eq!(results[1].1.output, "continued");
             assert!(!results[1].1.is_error);
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn managed_write_waits_for_workspace_lease_before_the_real_file_handler() {
+        let home = tempfile::tempdir().expect("isolated home and workspace");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = home.path().join("project");
+        std::fs::create_dir(&workspace).unwrap();
+        let lease = crate::platform::workspace_write::WorkspaceWriteLease::acquire(&workspace)
+            .await
+            .expect("hold another host writer's lease");
+        let tool: Arc<dyn Tool> = Arc::new(crate::agent::builtin_tools::write_file::WriteFileTool);
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            format!("write-lease-{}", Uuid::new_v4()),
+            workspace.to_string_lossy().into_owned(),
+            AgentIdentity::supervisor(),
+        );
+        let execution = executor.execute_batch(vec![(
+            tool,
+            serde_json::json!({"path":"result.txt", "content":"observed managed write"}),
+            "lease-write".into(),
+        )]);
+        tokio::pin!(execution);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut execution)
+                .await
+                .is_err()
+        );
+        assert!(
+            !workspace.join("result.txt").exists(),
+            "handler cannot write during contention"
+        );
+        drop(lease);
+        let results = tokio::time::timeout(Duration::from_secs(5), execution)
+            .await
+            .expect("writer resumes")
+            .expect("executor returns results");
+        assert!(!results[0].1.is_error, "{}", results[0].1.output);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("result.txt")).unwrap(),
+            "observed managed write"
+        );
+        let _released = crate::platform::workspace_write::WorkspaceWriteLease::acquire(&workspace)
+            .await
+            .expect("executor released its lease");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn cancelling_write_lease_admission_creates_no_unknown_mutation_intent() {
+        let home = tempfile::tempdir().expect("isolated home and workspace");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = home.path().join("project");
+        std::fs::create_dir(&workspace).unwrap();
+        let _lease = crate::platform::workspace_write::WorkspaceWriteLease::acquire(&workspace)
+            .await
+            .expect("hold another writer's lease");
+        let runs = crate::db::runs::RunsDb::open().unwrap();
+        let session_id = format!("lease-cancel-{}", Uuid::new_v4());
+        let run_id = runs.begin_worker_tick("supervisor", &session_id).unwrap();
+        let state = Arc::new(std::sync::Mutex::new(crate::state::AppState::new()));
+        state.lock().unwrap().agents.insert(
+            session_id.clone(),
+            ActiveAgent {
+                session_id: session_id.clone(),
+                is_running: true,
+                cancel_flag: false,
+            },
+        );
+        let tool: Arc<dyn Tool> = Arc::new(ReturningTool {
+            effect: ToolEffect::Write,
+        });
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            session_id.clone(),
+            workspace.to_string_lossy().into_owned(),
+            AgentIdentity::supervisor(),
+        )
+        .with_run_id(Some(run_id.clone()))
+        .with_state(Arc::clone(&state));
+        executor.set_task_id(Some(42));
+        let execution =
+            executor.execute_batch(vec![(tool, serde_json::json!({}), "waiting-write".into())]);
+        tokio::pin!(execution);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut execution)
+                .await
+                .is_err()
+        );
+        state.lock().unwrap().cancel_agent(&session_id);
+        let results = tokio::time::timeout(Duration::from_secs(2), execution)
+            .await
+            .expect("waiting admission cancels")
+            .expect("executor result");
+        assert!(results[0].1.is_error);
+        let failure: Value = serde_json::from_str(&results[0].1.output).unwrap();
+        assert_eq!(failure["error"]["code"], "operation_cancelled");
+        drop(runs);
+        let reopened = crate::db::runs::RunsDb::open().unwrap();
+        assert!(reopened
+            .operation_journal_page(&run_id, 0, 10)
+            .unwrap()
+            .entries
+            .is_empty());
+        assert!(reopened.unresolved_task_side_effect(42).unwrap().is_none());
     }
 
     struct BlockedReadTool {
