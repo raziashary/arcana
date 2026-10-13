@@ -67,6 +67,10 @@ fn task_auxiliary_timestamp_readers_preserve_legacy_rows_after_reopen() {
         .expect("assign task and insert automatic routing row");
     db.insert_build_evidence(task.id, "legacy-session", "cargo test", 0, true, "cargo")
         .expect("insert real build evidence");
+    db.claim_task_with_pid(task.id, "worker-legacy", 781)
+        .expect("claim task before completion");
+    db.update_status(task.id, "done", Some("worker-legacy"))
+        .expect("complete task through the public lifecycle API");
 
     let budget_task = db
         .create(CreateTaskInput {
@@ -130,6 +134,12 @@ fn task_auxiliary_timestamp_readers_preserve_legacy_rows_after_reopen() {
         "UPDATE task_budget_resolutions SET resolved_at='2024-11-03T01:30:00-04:00' WHERE task_id=?1",
         [budget_task.id],
     ).expect("seed legacy budget timestamp");
+    db.conn
+        .execute(
+            "UPDATE tasks SET completed_at='2024-11-03T01:30:00-04:00' WHERE id=?1",
+            [task.id],
+        )
+        .expect("seed legacy task completion timestamp");
     drop(db);
 
     let reopened = TasksDb::open_at(&path).expect("reopen task store");
@@ -152,6 +162,13 @@ fn task_auxiliary_timestamp_readers_preserve_legacy_rows_after_reopen() {
             .unwrap()
             .created_at,
     );
+    let completed = reopened
+        .list(Some("done"))
+        .unwrap()
+        .into_iter()
+        .find(|candidate| candidate.id == task.id)
+        .expect("public task reader returns the completed row");
+    legacy_resolved(completed.completed_at.as_deref().unwrap());
     let history = reopened
         .get_task_budget_resolution_history(budget_task.id, 10)
         .unwrap();
@@ -192,6 +209,13 @@ fn run_health_and_journal_timestamp_readers_preserve_legacy_rows_after_reopen() 
         rusqlite::params![run_id, journal_id],
     ).unwrap();
     assert!(intent_id > 0);
+    db.finish(&run_id, "success").unwrap();
+    db.conn
+        .execute(
+            "UPDATE runs SET ended_at='2024-11-03T01:30:00-04:00' WHERE id=?1",
+            [&run_id],
+        )
+        .unwrap();
     drop(db);
 
     let reopened = RunsDb::open_at(&path).expect("reopen runs store");
@@ -199,6 +223,8 @@ fn run_health_and_journal_timestamp_readers_preserve_legacy_rows_after_reopen() 
         .latest_worker_tick("legacy-worker")
         .unwrap()
         .unwrap();
+    let run = reopened.get(&run_id).unwrap().unwrap();
+    legacy_resolved(run.ended_at.as_deref().unwrap());
     legacy_resolved(&tick.heartbeat_at);
     legacy_created(tick.last_progress_at.as_deref().unwrap());
     let progress = reopened.recent_worker_progress(&run_id, 10).unwrap();

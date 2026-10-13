@@ -1,9 +1,10 @@
 # Arcana goal (updated 2026-10-13)
 
 **Current scope and proof (ADR0391, 2026-10-13):** Core P4 is Windows-first and
-remains open at **44/59 tasks and 22/33 TG4 gates** after the named P4-14/TG4-07
-QC and P4-15/TG4-08 diagnosis closeouts. Finish the Windows PA → Fleet engineering path, complete the full
-built-in failure, timestamp-pair, graph/MCP and observability requirements,
+remains open at **45/59 tasks and 23/33 TG4 gates** after the named P4-14/TG4-07
+QC, P4-15/TG4-08 diagnosis and P4-57/TG4-19 timestamp closeouts. Finish the
+Windows PA → Fleet engineering path and complete the full built-in failure,
+graph/MCP and observability requirements,
 then leave P4-49's Calendar acceptance to the owner. Safe quarantine,
 host-verified reconciliation and explicit Supervisor manual handoff stay in
 P4. Automatic process-loss replay/reassignment belongs to P7-19/TG7-06;

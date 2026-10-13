@@ -5,6 +5,10 @@ including safe manual Supervisor recovery and full Windows observability
 breadth. P7-19 owns automatic process-loss replay/reassignment; P9-16 owns
 Linux/macOS Fleet toolchain, sandbox, dependency, timestamp and worker parity.
 Unsupported platform execution stays fail-closed (ADR-LOG-RESTRUCT-0391).
+The Windows P4-57/TG4-19 timestamp writer/reader corpus and legacy public
+reader checks are recorded in
+`_verify/P4-57-WINDOWS-CLOSEOUT-2026-10-13.md`; Linux/macOS execution remains
+in P9-16/TG9-06.
 
 ```mermaid
 flowchart LR

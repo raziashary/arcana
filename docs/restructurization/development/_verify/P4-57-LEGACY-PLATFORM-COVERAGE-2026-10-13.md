@@ -33,4 +33,11 @@ The existing `analytics_timestamp_pairs_` selector remains. A finite Bash loop i
 
 ## 2026-10-13 root verification addendum
 
+Final Windows extension: `tasks.completed_at` and `runs.ended_at` now seed
+legacy offset values after the real task/run lifecycle writers. Reopened
+`TasksDb::list(Some("done"))` and `RunsDb::get` return the represented instant.
+The exact `preserve_legacy_rows_after_reopen` filter passed 3/3 after this
+extension. See `P4-57-WINDOWS-CLOSEOUT-2026-10-13.md`; this dated receipt's
+earlier platform caveat is owned by P9-16/TG9-06 under ADR0391.
+
 Every legacy field assertion was strengthened from parseability to equality with an independently seeded instant. The creation value is `2024-02-29 12:34:56` UTC; the resolution value is `2024-11-03T01:30:00-04:00`, which must resolve to the same instant after parsing. The freshly compiled Windows test binary passed all three public-reader fixtures after this strengthening (3/3, 0.54s). The CI job now invokes the nonempty `timestamp_readers_preserve_legacy_rows_after_reopen` selector on all three operating systems. Platform CI execution remains to be observed; this is not TG4-19 closure.

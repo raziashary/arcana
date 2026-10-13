@@ -1,10 +1,11 @@
 # Arcana working memory (updated 2026-10-13)
 
-**Current navigation (ADR0391):** P4 is Windows-first, **44/59 tasks checked and
-22/33 TG4 gates passing** after P4-14/TG4-07 named QC closeout. Windows PA →
-Fleet engineering, full built-in failure/timestamp/graph/MCP/observability
-proof and the owner's final Calendar P4-49 remain. P4-14/TG4-07 and
-P4-15/TG4-08 close on their named Windows QC/diagnosis contracts; the isolated
+**Current navigation (ADR0391):** P4 is Windows-first, **45/59 tasks checked and
+23/33 TG4 gates passing** after the named QC, diagnosis and timestamp
+closeouts. Windows PA → Fleet engineering, full built-in failure,
+graph/MCP/observability proof and the owner's final Calendar P4-49 remain.
+P4-14/TG4-07, P4-15/TG4-08 and P4-57/TG4-19 close on their named Windows
+contracts; the isolated
 P4-15 test requires an explicit selected Rustup toolchain after profile
 redirection. P4
 retains quarantine, host reconciliation and explicit manual Supervisor
