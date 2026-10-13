@@ -7494,3 +7494,7 @@ On2026-10-13 owner chooses the isolated renderer/IPC receipt alternative propose
 ## ADR-LOG-RESTRUCT-0387 — Serialize managed process writes with shell hooks
 
 On2026-10-13 apply the approved workspace write-lease/copy-back and shell-hook boundary at the owning ToolExecutor admission. Execute, FreeformShell and host-approved install effects acquire the same selected-workspace lease as file mutations before journaling; Board/Network child-agent effects remain outside it to avoid nested-agent deadlock. Existing permission decisions still run first and are unchanged. This closes the concrete cross-tool serialization gap identified in the lease review; actual registered project-command contention/readback and hook cleanup checks are required. Direct untrusted child confinement/staged copy-back remain separate P4-61 proof.
+
+## ADR-LOG-RESTRUCT-0388 — Owner clarifies timestamp representations
+
+On2026-10-13 owner approves retaining canonical UTC text for textual timestamps, unchanged epoch milliseconds for checkpoints, and equivalent canonical SQLite default expressions, each with exact production writer/reader proof. Reconcile TG4-19 wording to these already approved contracts; this does not waive year/DST, legacy readability or platform execution evidence.

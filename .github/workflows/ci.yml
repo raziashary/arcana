@@ -293,7 +293,22 @@ jobs:
       # Selected TG4-19 producer/reader pairs. This does not substitute for
       # the remaining per-database inventory required to close the gate.
       - name: Annual analytics, session and hook timestamp pairs (TG4-19)
-        run: cargo test -p arcana-core --lib analytics_timestamp_pairs_ --locked -- --test-threads=1
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p arcana-core --lib analytics_timestamp_pairs_ --locked -- --test-threads=1
+          cargo test -p arcana-core --lib timestamp_readers_preserve_legacy_rows_after_reopen --locked -- --test-threads=1
+          for filter in \
+            generated_task_and_run_writers_round_trip_a_leap_year_and_dst_after_reopen \
+            generated_worker_and_plan_writers_round_trip_a_leap_year_and_dst_after_reopen \
+            generated_task_auxiliary_writers_round_trip_a_leap_year_and_dst \
+            generated_run_journal_writers_round_trip_a_leap_year_and_dst \
+            generated_memory_writers_round_trip_a_leap_year_and_dst_after_reopen \
+            generated_checkpoint_writes_round_trip_a_leap_year_and_dst \
+            generated_graph_writes_round_trip_a_leap_year_and_dst \
+            generated_hook_config_writes_round_trip_a_leap_year_and_dst; do
+            cargo test -p arcana-core --lib "$filter" --locked -- --test-threads=1
+          done
 
       - name: Explicit task budget resolution and persisted Fleet completion (P4-39)
         run: |
