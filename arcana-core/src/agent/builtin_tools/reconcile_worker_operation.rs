@@ -374,7 +374,7 @@ mod tests {
         assert!(!sealed.contains(content));
         assert!(!sealed.contains(&workspace.path().to_string_lossy().to_string()));
         let mut malformed: Value = serde_json::from_str(&sealed).unwrap();
-        malformed["version"] = json!(2);
+        malformed["version"] = json!(99);
         assert!(
             crate::agent::recovery_snapshot::RecoverySnapshot::decode(&malformed.to_string())
                 .is_err()
@@ -498,8 +498,8 @@ mod tests {
             content
         );
 
-        // An unchanged target is necessary but insufficient: after the
-        // Supervisor lease drops, another writer could change it before retry.
+        // A grant does not execute anything. The replacement executor must
+        // revalidate unchanged state and consume the exact grant under its lease.
         let retry_run = runs
             .begin_worker_tick("worker-backend", "snapshot-retry-session")
             .unwrap();
@@ -509,7 +509,7 @@ mod tests {
             task.id,
             "snapshot-retry-session",
             workspace.path(),
-            Some(("target/retry.txt", &expected)),
+            Some(("target/retry.txt", &expected, true)),
         )
         .unwrap();
         let retry_cursor = runs
@@ -521,6 +521,7 @@ mod tests {
                 "Write",
                 &["target/retry.txt".into()],
                 Some(&snapshot),
+                None,
             )
             .unwrap();
         runs.finish_worker_tick(&retry_run, "interrupted", "interrupted", None)
@@ -542,13 +543,316 @@ mod tests {
             .execute(retry, &supervisor)
             .await;
         assert!(
-            accepted.is_error,
-            "retry must stay held until one-use admission revalidation exists"
+            !accepted.is_error,
+            "unchanged state permits one explicit host-verified retry: {}",
+            accepted.output
         );
         assert!(runs.unresolved_task_side_effect(task.id).unwrap().is_some());
         assert!(
             !workspace.path().join("target/retry.txt").exists(),
             "authorization itself must not replay the write"
         );
+        let mut supervisor_executor = ToolExecutor::new(
+            permission::PermissionMode::Autonomous,
+            permission::new_pending_permissions(),
+            "supervisor-retry-health".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::supervisor(),
+        );
+        let health = supervisor_executor
+            .execute_batch(vec![(
+                registry.get("list_worker_health").unwrap(),
+                json!({}),
+                "pending-grant-health".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(!health[0].1.is_error);
+        let health: Value = serde_json::from_str(&health[0].1.output).unwrap();
+        let worker = health["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|worker| worker["slug"] == "worker-backend")
+            .unwrap();
+        let pending = &worker["run"]["operation_journal"]["entries"][0];
+        assert_eq!(pending["cursor"], retry_cursor);
+        assert_eq!(pending["retry_worker"], "worker-backend");
+        assert_eq!(pending["recovery_required"], true);
+        assert!(pending["retry_consumed_by_cursor"].is_null());
+        assert!(runs
+            .unresolved_task_side_effect_for_claim(task.id, "worker-frontend")
+            .unwrap()
+            .is_some());
+        assert!(runs
+            .unresolved_task_side_effect_for_claim(task.id, "worker-backend")
+            .unwrap()
+            .is_none());
+        tasks.update_status(task.id, "ready", None).unwrap();
+        tasks
+            .update_status(task.id, "assigned", Some("worker-backend"))
+            .unwrap();
+        tasks
+            .claim_task_with_pid(task.id, "worker-backend", std::process::id())
+            .unwrap();
+        let completion_error = tasks
+            .conn
+            .execute("UPDATE tasks SET status = 'done' WHERE id = ?1", [task.id])
+            .unwrap_err();
+        assert!(completion_error
+            .to_string()
+            .contains("resolved operation outcomes"));
+        let replacement_run = runs
+            .begin_worker_tick("worker-backend", "replacement-retry-session")
+            .unwrap();
+        let make_executor = || {
+            let mut executor = ToolExecutor::new(
+                permission::PermissionMode::Autonomous,
+                permission::new_pending_permissions(),
+                "replacement-retry-session".into(),
+                workspace.path().to_string_lossy().into_owned(),
+                AgentIdentity::worker("worker-backend"),
+            )
+            .with_run_id(Some(replacement_run.clone()));
+            executor.set_task_id(Some(task.id));
+            executor
+        };
+        let input = json!({"path":"target/retry.txt", "content":"new content", "overwrite":true, "recovery_intent_cursor":retry_cursor});
+        use rusqlite::types::Value as SqlValue;
+        for (update, invalid, restored) in [
+            (
+                "UPDATE runs SET kind = ?1 WHERE id = ?2",
+                SqlValue::Text("cli".into()),
+                SqlValue::Text(crate::db::runs::kind::FLEET_TICK.into()),
+            ),
+            (
+                "UPDATE runs SET host = ?1 WHERE id = ?2",
+                SqlValue::Text("foreign-host".into()),
+                SqlValue::Text(crate::db::runs::hostname()),
+            ),
+            (
+                "UPDATE runs SET pid = ?1 WHERE id = ?2",
+                SqlValue::Integer(i64::from(std::process::id()) + 1),
+                SqlValue::Integer(i64::from(std::process::id())),
+            ),
+        ] {
+            runs.conn
+                .execute(update, rusqlite::params![invalid, replacement_run])
+                .unwrap();
+            let denied = make_executor()
+                .execute_batch(vec![(
+                    registry.get("write_file").unwrap(),
+                    input.clone(),
+                    "foreign-run-metadata".into(),
+                )])
+                .await
+                .unwrap();
+            assert!(
+                denied[0].1.is_error,
+                "only a current-process worker tick can consume a grant"
+            );
+            assert!(!workspace.path().join("target/retry.txt").exists());
+            runs.conn
+                .execute(update, rusqlite::params![restored, replacement_run])
+                .unwrap();
+        }
+        let mut wrong_worker = ToolExecutor::new(
+            permission::PermissionMode::Autonomous,
+            permission::new_pending_permissions(),
+            "foreign-retry-session".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker("worker-frontend"),
+        )
+        .with_run_id(Some(replacement_run.clone()));
+        wrong_worker.set_task_id(Some(task.id));
+        let foreign = wrong_worker
+            .execute_batch(vec![(
+                registry.get("write_file").unwrap(),
+                input.clone(),
+                "foreign-retry".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(
+            foreign[0].1.is_error,
+            "a foreign executor cannot borrow the bound run"
+        );
+        for (field, value) in [
+            ("content", json!("different content")),
+            ("overwrite", json!(false)),
+            ("path", json!("target/another.txt")),
+        ] {
+            let mut changed = input.clone();
+            changed[field] = value;
+            let result = make_executor()
+                .execute_batch(vec![(
+                    registry.get("write_file").unwrap(),
+                    changed,
+                    format!("changed-{field}"),
+                )])
+                .await
+                .unwrap();
+            assert!(result[0].1.is_error, "changed retry intent must not run");
+            assert!(!workspace.path().join("target/retry.txt").exists());
+        }
+        std::fs::write(workspace.path().join("target/retry.txt"), "external edit").unwrap();
+        let stale = make_executor()
+            .execute_batch(vec![(
+                registry.get("write_file").unwrap(),
+                input.clone(),
+                "stale-retry".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(stale[0].1.is_error);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("target/retry.txt")).unwrap(),
+            "external edit"
+        );
+        std::fs::remove_file(workspace.path().join("target/retry.txt")).unwrap();
+        runs.conn
+            .execute_batch("DROP TRIGGER lose_write_ack")
+            .unwrap();
+        let mut first_executor = make_executor();
+        let mut second_executor = make_executor();
+        let first = first_executor.execute_batch(vec![(
+            registry.get("write_file").unwrap(),
+            input.clone(),
+            "admitted-retry-a".into(),
+        )]);
+        let second = second_executor.execute_batch(vec![(
+            registry.get("write_file").unwrap(),
+            input.clone(),
+            "admitted-retry-b".into(),
+        )]);
+        let (first, second) = tokio::join!(first, second);
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_ne!(
+            first[0].1.is_error, second[0].1.is_error,
+            "exactly one racing retry consumes the grant"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("target/retry.txt")).unwrap(),
+            "new content"
+        );
+        let reopened = RunsDb::open().unwrap();
+        let replacement_page = reopened
+            .operation_journal_page(&replacement_run, 0, 10)
+            .unwrap();
+        assert_eq!(
+            replacement_page.entries.len(),
+            1,
+            "denied retries append no mutation intent"
+        );
+        assert_eq!(
+            replacement_page.entries[0].outcome,
+            crate::db::runs::OperationOutcome::Ok
+        );
+        let original_page = reopened.operation_journal_page(&retry_run, 0, 10).unwrap();
+        assert_eq!(
+            original_page.entries[0].retry_worker.as_deref(),
+            Some("worker-backend")
+        );
+        assert_eq!(
+            original_page.entries[0].retry_consumed_by_cursor,
+            Some(replacement_page.entries[0].cursor)
+        );
+        assert!(replacement_page.entries[0].retry_grant_cursor.is_some());
+        let health = supervisor_executor
+            .execute_batch(vec![(
+                registry.get("list_worker_health").unwrap(),
+                json!({}),
+                "consumed-grant-health".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(!health[0].1.is_error);
+        let health: Value = serde_json::from_str(&health[0].1.output).unwrap();
+        let worker = health["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|worker| worker["slug"] == "worker-backend")
+            .unwrap();
+        let consumed = &worker["run"]["operation_journal"]["entries"][0];
+        assert_eq!(consumed["cursor"], replacement_page.entries[0].cursor);
+        assert_eq!(
+            consumed["retry_grant_cursor"],
+            replacement_page.entries[0].retry_grant_cursor.unwrap()
+        );
+        assert_eq!(consumed["recovery_required"], false);
+        assert!(RunsDb::task_recovery_allows_completion(
+            &crate::db::arcana_dir().unwrap().join("runs.db"),
+            task.id
+        )
+        .unwrap());
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("acknowledged.txt")).unwrap(),
+            "acknowledged fixture"
+        );
+        assert!(reopened
+            .unresolved_task_side_effect(task.id)
+            .unwrap()
+            .is_none());
+        let duplicate = make_executor()
+            .execute_batch(vec![(
+                registry.get("write_file").unwrap(),
+                input,
+                "duplicate-retry".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(
+            duplicate[0].1.is_error,
+            "reopened consumed grant cannot authorize a second execution"
+        );
+        assert_eq!(
+            reopened
+                .operation_journal_page(&replacement_run, 0, 10)
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+        // Consuming the first grant is not blanket permission to complete:
+        // another lost acknowledgement in the replacement run creates a new hold.
+        runs.conn.execute_batch("CREATE TRIGGER lose_retry_ack BEFORE INSERT ON operation_journal WHEN NEW.record_type = 'outcome' BEGIN SELECT RAISE(ABORT, 'lost retry ack'); END;").unwrap();
+        let unknown = make_executor()
+            .execute_batch(vec![(
+                registry.get("write_file").unwrap(),
+                json!({"path":"post-retry.txt","content":"uncertain replacement fixture"}),
+                "replacement-lost-ack".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(unknown[0].1.is_error);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("post-retry.txt")).unwrap(),
+            "uncertain replacement fixture"
+        );
+        let replacement_unknown = reopened
+            .operation_journal_page(&replacement_run, 0, 10)
+            .unwrap();
+        assert_eq!(replacement_unknown.entries.len(), 2);
+        assert_eq!(
+            replacement_unknown.entries[1].outcome,
+            crate::db::runs::OperationOutcome::Unknown
+        );
+        assert!(!RunsDb::task_recovery_allows_completion(
+            &crate::db::arcana_dir().unwrap().join("runs.db"),
+            task.id
+        )
+        .unwrap());
+        let error = tasks
+            .conn
+            .execute("UPDATE tasks SET status = 'done' WHERE id = ?1", [task.id])
+            .unwrap_err();
+        assert!(error.to_string().contains("resolved operation outcomes"));
+        tasks
+            .update_status(task.id, "needs_info", Some("worker-backend"))
+            .unwrap();
+        runs.finish_worker_tick(&replacement_run, "interrupted", "interrupted", None)
+            .unwrap();
     }
 }

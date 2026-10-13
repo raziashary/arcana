@@ -41,6 +41,8 @@ struct ExpectedFile {
     other_inputs_digest: String,
     hooks_absent: bool,
     before: Option<FileState>,
+    #[serde(default)]
+    overwrite: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -210,7 +212,7 @@ impl RecoverySnapshot {
         task_id: i64,
         session_id: &str,
         root: &Path,
-        expected: Option<(&str, &str)>,
+        expected: Option<(&str, &str, bool)>,
     ) -> Result<Self> {
         let tasks = crate::db::tasks::TasksDb::open()?;
         Self::capture_with_tasks(&tasks, task_id, session_id, root, expected)
@@ -221,7 +223,7 @@ impl RecoverySnapshot {
         task_id: i64,
         session_id: &str,
         root: &Path,
-        expected: Option<(&str, &str)>,
+        expected: Option<(&str, &str, bool)>,
     ) -> Result<Self> {
         let mut timer =
             crate::observability::timing::OperationTimer::start("recovery_snapshot_capture")
@@ -259,7 +261,7 @@ impl RecoverySnapshot {
             return Err(refused());
         }
         let expected_file = expected
-            .map(|(path, content_digest)| {
+            .map(|(path, content_digest, overwrite)| {
                 Ok::<_, ArcanaError>(ExpectedFile {
                     path: path.into(),
                     content_digest: content_digest.into(),
@@ -270,6 +272,7 @@ impl RecoverySnapshot {
                         )?,
                     hooks_absent: no_effect_hooks()?,
                     before: file_state(root, Path::new(path))?,
+                    overwrite: Some(overwrite),
                 })
             })
             .transpose()?;
@@ -277,7 +280,7 @@ impl RecoverySnapshot {
             return Err(refused());
         }
         let snapshot = Self {
-            version: 1,
+            version: 2,
             task_id,
             task_identity: task.task_identity,
             assigned_worker: task.assigned_worker,
@@ -304,7 +307,7 @@ impl RecoverySnapshot {
 
     pub(crate) fn encode(&self) -> Result<String> {
         let encoded = serde_json::to_string(self).map_err(|_| refused())?;
-        if self.version != 1 || encoded.len() > MAX_SNAPSHOT_BYTES {
+        if !matches!(self.version, 1 | 2) || encoded.len() > MAX_SNAPSHOT_BYTES {
             return Err(refused());
         }
         Ok(encoded)
@@ -326,10 +329,59 @@ impl RecoverySnapshot {
         operation: &str,
         decision: OperationReconciliation,
     ) -> Result<()> {
+        self.verify_state(tasks, root, operation, decision, None)
+    }
+
+    pub(crate) fn verify_retry_admission(
+        &self,
+        tasks: &crate::db::tasks::TasksDb,
+        root: &Path,
+        operation: &str,
+        current: &RecoverySnapshot,
+        worker: &str,
+    ) -> Result<()> {
+        let expected = self.expected_file.as_ref().ok_or_else(refused)?;
+        let requested = current.expected_file.as_ref().ok_or_else(refused)?;
+        if self.version != 2
+            || expected.overwrite.is_none()
+            || expected.path != requested.path
+            || expected.content_digest != requested.content_digest
+            || expected.overwrite != requested.overwrite
+        {
+            return Err(refused());
+        }
+        self.verify_state(
+            tasks,
+            root,
+            operation,
+            OperationReconciliation::RetrySafe,
+            Some(worker),
+        )
+    }
+
+    fn verify_state(
+        &self,
+        tasks: &crate::db::tasks::TasksDb,
+        root: &Path,
+        operation: &str,
+        decision: OperationReconciliation,
+        retry_worker: Option<&str>,
+    ) -> Result<()> {
         let current = Self::capture_with_tasks(tasks, self.task_id, &self.session_id, root, None)?;
         let task = tasks.get_by_id(self.task_id)?.ok_or_else(refused)?;
-        if task.status != crate::db::tasks::TaskStatus::NeedsInfo
-            || task.claimed_by_pid.is_some()
+        let lifecycle_valid = match retry_worker {
+            None => {
+                task.status == crate::db::tasks::TaskStatus::NeedsInfo
+                    && task.claimed_by_pid.is_none()
+            }
+            Some(worker) => {
+                task.status == crate::db::tasks::TaskStatus::InProgress
+                    && task.assigned_worker.as_deref() == Some(worker)
+                    && task.claimed_by_pid == Some(std::process::id() as i64)
+                    && task.claim_host.as_deref() == Some(crate::db::runs::hostname().as_str())
+            }
+        };
+        if !lifecycle_valid
             || current.task_identity != self.task_identity
             || current.assigned_worker != self.assigned_worker
             || current.dependencies != self.dependencies
@@ -349,7 +401,9 @@ impl RecoverySnapshot {
         }
         match decision {
             OperationReconciliation::RetrySafe
-                if current.workspace_fingerprint == self.workspace_fingerprint
+                if self.version == 2
+                    && expected.overwrite.is_some()
+                    && current.workspace_fingerprint == self.workspace_fingerprint
                     && file_state(root, Path::new(&expected.path))? == expected.before =>
             {
                 Ok(())

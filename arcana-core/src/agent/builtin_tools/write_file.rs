@@ -31,6 +31,10 @@ impl Tool for WriteFileTool {
         json!({
             "type": "object",
             "properties": {
+                "recovery_intent_cursor": {
+                    "type": "integer", "minimum": 1,
+                    "description": "Only for an explicitly Supervisor-authorized retry: original journal intent cursor. Arcana revalidates and consumes its task/operation-bound grant once before running."
+                },
                 "path": {
                     "type":        "string",
                     "description": "Absolute or working-directory-relative path to write."

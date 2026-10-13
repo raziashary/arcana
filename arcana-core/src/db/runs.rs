@@ -187,6 +187,9 @@ pub struct OperationJournalEntry {
     pub reconciliation_reason: Option<String>,
     pub before_snapshot: Option<RecoverySnapshot>,
     pub after_snapshot: Option<RecoverySnapshot>,
+    pub retry_worker: Option<String>,
+    pub retry_grant_cursor: Option<i64>,
+    pub retry_consumed_by_cursor: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,7 +266,13 @@ const OPERATION_JOURNAL_PAGE_SQL: &str = r#"
            i.snapshot_json,
            (SELECT o.snapshot_json FROM operation_journal o
             WHERE o.parent_id = i.id AND o.record_type = 'outcome'
-            ORDER BY o.id DESC LIMIT 1)
+            ORDER BY o.id DESC LIMIT 1),
+           (SELECT r.retry_worker FROM operation_journal r
+            WHERE r.parent_id = i.id AND r.record_type = 'reconciliation'),
+           i.retry_grant_id,
+           (SELECT consumed.id FROM operation_journal consumed
+            JOIN operation_journal grant_row ON grant_row.id = consumed.retry_grant_id
+            WHERE grant_row.parent_id = i.id AND grant_row.record_type = 'reconciliation')
     FROM operation_journal i
     WHERE i.run_id = ?1 AND i.record_type = 'intent' AND i.id > ?2
     ORDER BY i.id ASC LIMIT ?3
@@ -300,9 +309,101 @@ const INTERRUPT_WORKER_TICKS_SQL: &str = "SELECT s.run_id FROM worker_run_state 
                        AND r.host = ?2 AND r.pid = ?3
                        AND s.phase IN ('starting', 'retrying', 'running')";
 
+const RECORD_INTENT_UNRESOLVED_SQL: &str = "SELECT i.id, i.operation
+                     FROM operation_journal i
+                     WHERE i.task_id = ?1
+                       AND i.id IS NOT ?2
+                       AND i.record_type = 'intent'
+                       AND i.effect <> 'Board'
+                       AND COALESCE((
+                           SELECT o.outcome FROM operation_journal o
+                           WHERE o.parent_id = i.id AND o.record_type = 'outcome'
+                           ORDER BY o.id DESC LIMIT 1
+                       ), 'unknown') = 'unknown'
+                       AND COALESCE((
+                           SELECT r.reconciliation_state FROM operation_journal r
+                           WHERE r.parent_id = i.id AND r.record_type = 'reconciliation'
+                           ORDER BY r.id DESC LIMIT 1
+                       ), 'unresolved') != 'reconciled'
+                       AND NOT EXISTS (
+                           SELECT 1 FROM operation_journal consumed
+                           JOIN operation_journal grant_row ON grant_row.id = consumed.retry_grant_id
+                           WHERE grant_row.parent_id = i.id AND grant_row.record_type = 'reconciliation'
+                       )
+                     ORDER BY i.id DESC LIMIT 1";
+const RETRY_ADMISSION_GRANT_SQL: &str = "SELECT grant_row.id, grant_row.retry_worker, original.snapshot_json,
+                        original.operation, replacement.actor
+                 FROM operation_journal original
+                 JOIN operation_journal grant_row ON grant_row.parent_id = original.id
+                 JOIN runs replacement ON replacement.id = ?2
+                 JOIN worker_run_state replacement_state ON replacement_state.run_id = replacement.id
+                 WHERE original.id = ?1 AND original.task_id IS ?3
+                   AND original.record_type = 'intent'
+                   AND grant_row.record_type = 'reconciliation'
+                   AND grant_row.reconciliation_state = 'retry_safe'
+                   AND grant_row.retry_worker IS NOT NULL
+                   AND replacement.outcome IS NULL
+                   AND replacement.kind = 'fleet-tick' AND replacement.host = ?4 AND replacement.pid = ?5
+                   AND replacement_state.worker_slug = grant_row.retry_worker
+                   AND replacement_state.phase IN ('starting', 'retrying', 'running')
+                   AND (replacement_state.task_id IS NULL OR replacement_state.task_id = original.task_id)
+                   AND NOT EXISTS (SELECT 1 FROM operation_journal consumed WHERE consumed.retry_grant_id = grant_row.id)";
+const APPEND_SUPERVISOR_RECONCILIATION_SQL: &str = "INSERT INTO operation_journal
+                 (run_id, task_id, record_type, parent_id, reconciliation_state,
+                  reconciliation_actor, reconciliation_reason, created_at, retry_worker)
+             SELECT run_id, task_id, 'reconciliation', id, ?1, ?2, ?3, ?4, ?7
+             FROM operation_journal
+             WHERE id = ?5 AND run_id = ?6 AND record_type = 'intent'
+               AND effect != 'Board'
+               AND COALESCE((SELECT outcome FROM operation_journal outcome
+                             WHERE outcome.parent_id = operation_journal.id
+                               AND outcome.record_type = 'outcome'
+                             ORDER BY outcome.id DESC LIMIT 1), 'unknown') = 'unknown'
+               AND NOT EXISTS (SELECT 1 FROM operation_journal prior
+                               WHERE prior.parent_id = operation_journal.id
+                                 AND prior.record_type = 'reconciliation')";
+const UNRESOLVED_TASK_SIDE_EFFECT_SQL: &str = "SELECT i.run_id, i.operation, i.id
+                 FROM operation_journal i
+                 WHERE i.task_id = ?1
+                   AND i.id IS NOT ?2
+                   AND i.record_type = 'intent'
+                   AND i.effect <> 'Board'
+                   AND COALESCE((
+                       SELECT o.outcome FROM operation_journal o
+                       WHERE o.parent_id = i.id AND o.record_type = 'outcome'
+                       ORDER BY o.id DESC LIMIT 1
+                   ), 'unknown') = 'unknown'
+                   AND COALESCE((
+                       SELECT r.reconciliation_state FROM operation_journal r
+                       WHERE r.parent_id = i.id AND r.record_type = 'reconciliation'
+                       ORDER BY r.id DESC LIMIT 1
+                   ), 'unresolved') != 'reconciled'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM operation_journal consumed
+                       JOIN operation_journal grant_row ON grant_row.id = consumed.retry_grant_id
+                       WHERE grant_row.parent_id = i.id AND grant_row.record_type = 'reconciliation'
+                   )
+                 ORDER BY i.id DESC LIMIT 1";
+const RETRY_CLAIM_GRANT_SQL: &str = "SELECT EXISTS(SELECT 1 FROM operation_journal grant_row
+             WHERE grant_row.parent_id = ?1 AND grant_row.record_type = 'reconciliation'
+               AND grant_row.reconciliation_state = 'retry_safe' AND grant_row.retry_worker = ?2
+               AND NOT EXISTS (SELECT 1 FROM operation_journal consumed WHERE consumed.retry_grant_id = grant_row.id))";
+const TASK_RECOVERY_COMPLETION_SQL: &str = "SELECT EXISTS(SELECT 1 FROM operation_journal i
+             WHERE i.task_id = ?1 AND i.record_type = 'intent' AND i.effect <> 'Board'
+               AND COALESCE((SELECT o.outcome FROM operation_journal o
+                             WHERE o.parent_id = i.id AND o.record_type = 'outcome'
+                             ORDER BY o.id DESC LIMIT 1), 'unknown') = 'unknown'
+               AND COALESCE((SELECT r.reconciliation_state FROM operation_journal r
+                             WHERE r.parent_id = i.id AND r.record_type = 'reconciliation'
+                             ORDER BY r.id DESC LIMIT 1), 'unresolved') != 'reconciled'
+               AND NOT EXISTS (SELECT 1 FROM operation_journal consumed
+                               JOIN operation_journal grant_row ON grant_row.id = consumed.retry_grant_id
+                               WHERE grant_row.parent_id = i.id AND grant_row.record_type = 'reconciliation'))";
+
 pub struct RunsDb {
     pub(crate) conn: rusqlite::Connection,
     supervisor_reconciliation_context: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    retry_admission_context: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct SupervisorReconciliationGuard {
@@ -552,6 +653,51 @@ const LADDER: &[Migration] = &[
             END;
         "#,
     },
+    Migration {
+        version: 10,
+        name: "one-use-operation-retry-admission",
+        sql: r#"
+            ALTER TABLE operation_journal ADD COLUMN retry_worker TEXT;
+            ALTER TABLE operation_journal ADD COLUMN retry_grant_id INTEGER
+                REFERENCES operation_journal(id) ON DELETE RESTRICT;
+            CREATE UNIQUE INDEX idx_operation_retry_single_use
+                ON operation_journal(retry_grant_id) WHERE retry_grant_id IS NOT NULL;
+            CREATE TRIGGER operation_retry_grant_shape
+            BEFORE INSERT ON operation_journal
+            WHEN NEW.retry_worker IS NOT NULL AND (
+                NEW.record_type != 'reconciliation' OR NEW.reconciliation_state != 'retry_safe'
+                OR length(NEW.retry_worker) NOT BETWEEN 1 AND 128
+                OR arcana_supervisor_reconciliation_authorized() != 1
+            )
+            BEGIN SELECT RAISE(ABORT, 'retry grant requires authorized Supervisor reconciliation'); END;
+            CREATE TRIGGER operation_retry_consume_guard
+            BEFORE INSERT ON operation_journal
+            WHEN NEW.retry_grant_id IS NOT NULL AND (
+                NEW.record_type != 'intent' OR NEW.snapshot_json IS NULL
+                OR NOT EXISTS (
+                    SELECT 1 FROM operation_journal grant_row
+                    JOIN operation_journal original ON original.id = grant_row.parent_id
+                    JOIN runs replacement ON replacement.id = NEW.run_id
+                    JOIN worker_run_state replacement_state ON replacement_state.run_id = replacement.id
+                    WHERE grant_row.id = NEW.retry_grant_id
+                      AND grant_row.record_type = 'reconciliation'
+                      AND grant_row.reconciliation_state = 'retry_safe'
+                      AND grant_row.retry_worker = replacement.actor
+                      AND replacement.outcome IS NULL
+                      AND replacement.kind = 'fleet-tick'
+                      AND arcana_operation_retry_admitted(replacement.pid, replacement.host) = 1
+                      AND replacement_state.worker_slug = grant_row.retry_worker
+                      AND replacement_state.phase IN ('starting', 'retrying', 'running')
+                      AND (replacement_state.task_id IS NULL OR replacement_state.task_id = original.task_id)
+                      AND original.task_id IS NEW.task_id
+                      AND original.operation = NEW.operation
+                      AND original.effect = NEW.effect
+                      AND original.target_paths = NEW.target_paths
+                )
+            )
+            BEGIN SELECT RAISE(ABORT, 'retry requires a matching host-verified one-use grant'); END;
+        "#,
+    },
 ];
 
 impl RunsDb {
@@ -565,6 +711,21 @@ impl RunsDb {
         let conn = crate::db::open_tuned(path)?;
         let supervisor_reconciliation_context =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let retry_admission_context =
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let admitted = std::sync::Arc::clone(&retry_admission_context);
+        conn.create_scalar_function(
+            "arcana_operation_retry_admitted",
+            2,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+            move |context| {
+                Ok(i64::from(
+                    admitted.load(std::sync::atomic::Ordering::SeqCst)
+                        && context.get::<i64>(0)? == i64::from(std::process::id())
+                        && context.get::<String>(1)? == hostname(),
+                ))
+            },
+        )?;
         let authorized = std::sync::Arc::clone(&supervisor_reconciliation_context);
         conn.create_scalar_function(
             "arcana_supervisor_reconciliation_authorized",
@@ -579,6 +740,7 @@ impl RunsDb {
         let db = Self {
             conn,
             supervisor_reconciliation_context,
+            retry_admission_context,
         };
         migrate::run_ladder(&db.conn, "runs.db", LADDER)?;
         Ok(db)
@@ -805,6 +967,7 @@ impl RunsDb {
             effect,
             target_paths,
             None,
+            None,
         )
     }
 
@@ -817,6 +980,11 @@ impl RunsDb {
         effect: &str,
         target_paths: &[String],
         snapshot: Option<&RecoverySnapshot>,
+        retry: Option<(
+            i64,
+            &std::path::Path,
+            &crate::platform::workspace_write::WorkspaceWriteLease,
+        )>,
     ) -> Result<i64> {
         let snapshot_json = snapshot.map(RecoverySnapshot::encode).transpose()?;
         if snapshot.is_some_and(|snapshot| Some(snapshot.task_id()) != task_id) {
@@ -837,30 +1005,84 @@ impl RunsDb {
         let target_paths = serde_json::to_string(&target_paths).map_err(|error| {
             ArcanaError::Agent(format!("encoding operation target paths: {error}"))
         })?;
+        let retry_tasks = retry
+            .map(|_| crate::db::tasks::TasksDb::open())
+            .transpose()?;
+        let _task_guard = retry_tasks
+            .as_ref()
+            .map(|tasks| {
+                rusqlite::Transaction::new_unchecked(
+                    &tasks.conn,
+                    rusqlite::TransactionBehavior::Immediate,
+                )
+            })
+            .transpose()?;
         let tx = rusqlite::Transaction::new_unchecked(
             &self.conn,
             rusqlite::TransactionBehavior::Immediate,
         )?;
+        let mut retry_grant_id = None;
+        let mut admission_authorization = None;
+        if let Some((intent_cursor, workspace, lease)) = retry {
+            if intent_cursor <= 0 || !lease.covers(workspace) {
+                return Err(ArcanaError::Agent(
+                    "retry admission requires its original cursor and workspace lease".into(),
+                ));
+            }
+            let grant: Option<(i64, String, String, String, String)> = tx
+                .query_row(
+                    RETRY_ADMISSION_GRANT_SQL,
+                    params![
+                        intent_cursor,
+                        run_id,
+                        task_id,
+                        hostname(),
+                        i64::from(std::process::id())
+                    ],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let (grant_id, worker, sealed, original_operation, actor) = grant.ok_or_else(|| {
+                ArcanaError::Agent(
+                    "retry grant is absent, consumed, or not bound to this task".into(),
+                )
+            })?;
+            if worker != actor || operation != original_operation {
+                return Err(ArcanaError::Agent(
+                    "retry grant does not belong to this executor or operation".into(),
+                ));
+            }
+            let original = RecoverySnapshot::decode(&sealed)?;
+            let current = snapshot.ok_or_else(|| {
+                ArcanaError::Agent("retry admission requires a current host snapshot".into())
+            })?;
+            // Keep task ownership stable through verification and the atomic
+            // intent insertion. The caller retains the workspace lease through
+            // execution and its durable outcome.
+            let tasks = retry_tasks
+                .as_ref()
+                .ok_or_else(|| ArcanaError::Agent("retry task guard is absent".into()))?;
+            original.verify_retry_admission(tasks, workspace, operation, current, &worker)?;
+            retry_grant_id = Some(grant_id);
+            self.retry_admission_context
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            admission_authorization = Some(SupervisorReconciliationGuard {
+                context: std::sync::Arc::clone(&self.retry_admission_context),
+            });
+        }
         if let Some(task_id) = task_id.filter(|_| effect != "Board") {
             let unresolved: Option<(i64, String)> = tx
                 .query_row(
-                    "SELECT i.id, i.operation
-                     FROM operation_journal i
-                     WHERE i.task_id = ?1
-                       AND i.record_type = 'intent'
-                       AND i.effect <> 'Board'
-                       AND COALESCE((
-                           SELECT o.outcome FROM operation_journal o
-                           WHERE o.parent_id = i.id AND o.record_type = 'outcome'
-                           ORDER BY o.id DESC LIMIT 1
-                       ), 'unknown') = 'unknown'
-                       AND COALESCE((
-                           SELECT r.reconciliation_state FROM operation_journal r
-                           WHERE r.parent_id = i.id AND r.record_type = 'reconciliation'
-                           ORDER BY r.id DESC LIMIT 1
-                       ), 'unresolved') IN ('unresolved', 'do_not_retry')
-                     ORDER BY i.id DESC LIMIT 1",
-                    params![task_id],
+                    RECORD_INTENT_UNRESOLVED_SQL,
+                    params![task_id, retry.map(|admission| admission.0)],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
@@ -874,8 +1096,8 @@ impl RunsDb {
         tx.execute(
             "INSERT INTO operation_journal
                  (run_id, task_id, record_type, operation_id, operation, effect,
-                  target_paths, created_at, snapshot_json)
-             VALUES (?1, ?2, 'intent', ?3, ?4, ?5, ?6, ?7, ?8)",
+                  target_paths, created_at, snapshot_json, retry_grant_id)
+             VALUES (?1, ?2, 'intent', ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 run_id,
                 task_id,
@@ -884,13 +1106,15 @@ impl RunsDb {
                 effect,
                 target_paths,
                 now_rfc3339(),
-                snapshot_json
+                snapshot_json,
+                retry_grant_id
             ],
         )
         .map_err(|error| ArcanaError::Agent(format!("appending operation intent: {error}")))?;
         let cursor = tx.last_insert_rowid();
         tx.commit()
             .map_err(|error| ArcanaError::Agent(format!("committing operation intent: {error}")))?;
+        drop(admission_authorization);
         Ok(cursor)
     }
 
@@ -997,6 +1221,7 @@ impl RunsDb {
                 OperationReconciliation::DoNotRetry => "unsafe_to_repeat",
                 OperationReconciliation::Unresolved => "",
             },
+            None,
         )
     }
 
@@ -1024,15 +1249,6 @@ impl RunsDb {
                 "only the Supervisor can reconcile an operation".into(),
             ));
         }
-        // Verification at reconciliation time alone is not a durable replay
-        // permit: another writer can change the workspace after this lease
-        // drops. Keep retries held until execution admission can revalidate
-        // and consume an operation-bound permit under its own write lease.
-        if state == OperationReconciliation::RetrySafe {
-            return Err(ArcanaError::Agent(
-                "retry admission revalidation is unavailable; leave this operation held".into(),
-            ));
-        }
         if state != OperationReconciliation::DoNotRetry {
             let (workspace, lease) = scope.ok_or_else(|| {
                 ArcanaError::Agent("a selected-workspace recovery lease is required".into())
@@ -1048,6 +1264,11 @@ impl RunsDb {
             if run.is_open() {
                 return Err(ArcanaError::Agent(
                     "a live run cannot be reconciled for replay".into(),
+                ));
+            }
+            if state == OperationReconciliation::RetrySafe && run.kind != kind::FLEET_TICK {
+                return Err(ArcanaError::Agent(
+                    "retry grants require an originating worker tick".into(),
                 ));
             }
             let entry = self
@@ -1070,6 +1291,11 @@ impl RunsDb {
                     "the originating run does not own the snapshot task".into(),
                 ));
             }
+            if state == OperationReconciliation::RetrySafe && snapshot.owner().is_none() {
+                return Err(ArcanaError::Agent(
+                    "retry grants require an explicit owning worker".into(),
+                ));
+            }
             let tasks = crate::db::tasks::TasksDb::open()?;
             let _task_guard = rusqlite::Transaction::new_unchecked(
                 &tasks.conn,
@@ -1082,6 +1308,11 @@ impl RunsDb {
                 intent_cursor,
                 state,
                 reason_code,
+                if state == OperationReconciliation::RetrySafe {
+                    snapshot.owner()
+                } else {
+                    None
+                },
             );
         }
         self.append_supervisor_reconciliation(
@@ -1090,6 +1321,7 @@ impl RunsDb {
             intent_cursor,
             state,
             reason_code,
+            None,
         )
     }
 
@@ -1100,6 +1332,7 @@ impl RunsDb {
         intent_cursor: i64,
         state: OperationReconciliation,
         reason_code: &str,
+        retry_worker: Option<&str>,
     ) -> Result<i64> {
         validate_journal_token(run_id, "run id", 128)?;
         if supervisor_slug.trim() != "supervisor" {
@@ -1131,27 +1364,15 @@ impl RunsDb {
         };
         let rows = tx
             .execute(
-                "INSERT INTO operation_journal
-                 (run_id, task_id, record_type, parent_id, reconciliation_state,
-                  reconciliation_actor, reconciliation_reason, created_at)
-             SELECT run_id, task_id, 'reconciliation', id, ?1, ?2, ?3, ?4
-             FROM operation_journal
-             WHERE id = ?5 AND run_id = ?6 AND record_type = 'intent'
-               AND effect != 'Board'
-               AND COALESCE((SELECT outcome FROM operation_journal outcome
-                             WHERE outcome.parent_id = operation_journal.id
-                               AND outcome.record_type = 'outcome'
-                             ORDER BY outcome.id DESC LIMIT 1), 'unknown') = 'unknown'
-               AND NOT EXISTS (SELECT 1 FROM operation_journal prior
-                               WHERE prior.parent_id = operation_journal.id
-                                 AND prior.record_type = 'reconciliation')",
+                APPEND_SUPERVISOR_RECONCILIATION_SQL,
                 params![
                     state.as_str(),
                     supervisor_slug,
                     reason_code,
                     now_rfc3339(),
                     intent_cursor,
-                    run_id
+                    run_id,
+                    retry_worker
                 ],
             )
             .map_err(|error| {
@@ -1178,6 +1399,14 @@ impl RunsDb {
         &self,
         task_id: i64,
     ) -> Result<Option<(String, String, i64)>> {
+        self.unresolved_task_side_effect_except(task_id, None)
+    }
+
+    fn unresolved_task_side_effect_except(
+        &self,
+        task_id: i64,
+        excluded_cursor: Option<i64>,
+    ) -> Result<Option<(String, String, i64)>> {
         if task_id <= 0 {
             return Err(ArcanaError::Agent(
                 "task id must be positive when checking operation recovery".to_string(),
@@ -1189,23 +1418,8 @@ impl RunsDb {
         let unresolved = self
             .conn
             .query_row(
-                "SELECT i.run_id, i.operation, i.id
-                 FROM operation_journal i
-                 WHERE i.task_id = ?1
-                   AND i.record_type = 'intent'
-                   AND i.effect <> 'Board'
-                   AND COALESCE((
-                       SELECT o.outcome FROM operation_journal o
-                       WHERE o.parent_id = i.id AND o.record_type = 'outcome'
-                       ORDER BY o.id DESC LIMIT 1
-                   ), 'unknown') = 'unknown'
-                   AND COALESCE((
-                       SELECT r.reconciliation_state FROM operation_journal r
-                       WHERE r.parent_id = i.id AND r.record_type = 'reconciliation'
-                       ORDER BY r.id DESC LIMIT 1
-                   ), 'unresolved') IN ('unresolved', 'do_not_retry')
-                 ORDER BY i.id DESC LIMIT 1",
-                params![task_id],
+                UNRESOLVED_TASK_SIDE_EFFECT_SQL,
+                params![task_id, excluded_cursor],
                 |row| {
                     Ok((
                         row.get::<_, String>(0)?,
@@ -1219,6 +1433,66 @@ impl RunsDb {
             .with_result_count(usize::from(unresolved.is_some()))
             .succeed();
         Ok(unresolved)
+    }
+
+    /// A grant permits its bound worker to acquire the task, but never permits
+    /// an arbitrary mutation. The actual retry requires explicit cursor-based
+    /// admission and snapshot revalidation under the executor's write lease.
+    pub(crate) fn unresolved_task_side_effect_for_claim(
+        &self,
+        task_id: i64,
+        worker: &str,
+    ) -> Result<Option<(String, String, i64)>> {
+        let timing = OperationTimer::start("database_retry_claim_read")
+            .with_database("runs")
+            .with_task_id(Some(task_id));
+        let blocked = self.unresolved_task_side_effect(task_id)?;
+        let Some((_, _, cursor)) = blocked.as_ref() else {
+            timing.with_result_count(0).succeed();
+            return Ok(None);
+        };
+        let grant_matches: bool =
+            self.conn
+                .query_row(RETRY_CLAIM_GRANT_SQL, params![cursor, worker], |row| {
+                    row.get(0)
+                })?;
+        let result = if grant_matches {
+            self.unresolved_task_side_effect_except(task_id, Some(*cursor))
+        } else {
+            Ok(blocked)
+        }?;
+        timing
+            .with_result_count(usize::from(result.is_some()))
+            .succeed();
+        Ok(result)
+    }
+
+    /// Read the colocated recovery store without migrations or writes while a
+    /// TasksDb transition owns its lock. Missing stores have no recorded effects;
+    /// unreadable/incompatible stores fail closed at the caller.
+    pub(crate) fn task_recovery_allows_completion(
+        path: &std::path::Path,
+        task_id: i64,
+    ) -> Result<bool> {
+        let timing = OperationTimer::start("database_recovery_gate_read")
+            .with_database("runs")
+            .with_task_id(Some(task_id));
+        if !path.try_exists()? {
+            timing.with_result_count(0).set_outcome("not_applicable");
+            return Ok(true);
+        }
+        let mut conn = rusqlite::Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        crate::observability::sqlite::install_profile(&mut conn, path);
+        conn.busy_timeout(std::time::Duration::from_millis(crate::db::BUSY_TIMEOUT_MS))?;
+        let unresolved: bool =
+            conn.query_row(TASK_RECOVERY_COMPLETION_SQL, [task_id], |row| row.get(0))?;
+        timing
+            .with_result_count(usize::from(unresolved))
+            .set_outcome(if unresolved { "blocked" } else { "success" });
+        Ok(!unresolved)
     }
 
     /// Read a bounded, ascending page of intent records. An intent lacking an
@@ -1256,6 +1530,9 @@ impl RunsDb {
                     row.get::<_, Option<String>>(13)?,
                     row.get::<_, Option<String>>(14)?,
                     row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<i64>>(17)?,
+                    row.get::<_, Option<i64>>(18)?,
                 ))
             })?;
         let raw_entries = rows.collect::<std::result::Result<Vec<_>, _>>()?;
@@ -1278,6 +1555,9 @@ impl RunsDb {
             reconciliation_reason,
             before_snapshot,
             after_snapshot,
+            retry_worker,
+            retry_grant_cursor,
+            retry_consumed_by_cursor,
         ) in raw_entries.into_iter().take(bounded_limit as usize)
         {
             entries.push(OperationJournalEntry {
@@ -1303,6 +1583,9 @@ impl RunsDb {
                     .as_deref()
                     .map(RecoverySnapshot::decode)
                     .transpose()?,
+                retry_worker,
+                retry_grant_cursor,
+                retry_consumed_by_cursor,
             });
         }
         let next_cursor = entries.last().map_or(after_cursor, |entry| entry.cursor);
@@ -1756,7 +2039,7 @@ fn decode_journal_paths(value: &str, kind: &str) -> Result<Vec<String>> {
 ///
 /// Falls back to `"unknown"` rather than failing: a ledger entry with an
 /// unknown host is far better than no ledger entry.
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "unknown".to_string())
@@ -1983,6 +2266,11 @@ mod tests {
             .execute_batch(
                 "DROP INDEX idx_runs_started_instant;
                  DROP INDEX idx_runs_open_instant;
+                 DROP TRIGGER operation_retry_consume_guard;
+                 DROP TRIGGER operation_retry_grant_shape;
+                 DROP INDEX idx_operation_retry_single_use;
+                 ALTER TABLE operation_journal DROP COLUMN retry_grant_id;
+                 ALTER TABLE operation_journal DROP COLUMN retry_worker;
                  DROP TRIGGER operation_snapshot_record_shape;
                  ALTER TABLE operation_journal DROP COLUMN snapshot_json;
                  PRAGMA user_version = 7;",
@@ -1991,7 +2279,7 @@ mod tests {
         drop(db);
 
         let upgraded = RunsDb::open_at(&path).expect("upgrade populated v7 RunsDb");
-        assert_eq!(upgraded.schema_version().expect("schema version"), 9);
+        assert_eq!(upgraded.schema_version().expect("schema version"), 10);
         let rows = upgraded
             .conn
             .prepare("SELECT id, started_at FROM runs ORDER BY id")
@@ -2048,7 +2336,7 @@ mod tests {
     fn a_run_is_recorded_and_read_back() {
         let path = temp_db("roundtrip");
         let db = RunsDb::open_at(&path).expect("open");
-        assert_eq!(db.schema_version().unwrap(), 9);
+        assert_eq!(db.schema_version().unwrap(), 10);
 
         let id = db.begin(kind::APP, None).expect("begin");
 
@@ -2180,22 +2468,6 @@ mod tests {
 
     #[test]
     fn operation_journal_query_plans_use_populated_indexes_and_preserve_guards() {
-        const RECORD_INTENT_UNRESOLVED_SQL: &str = "SELECT i.id, i.operation
-             FROM operation_journal i
-             WHERE i.task_id = ?1
-               AND i.record_type = 'intent'
-               AND i.effect <> 'Board'
-               AND COALESCE((
-                   SELECT o.outcome FROM operation_journal o
-                   WHERE o.parent_id = i.id AND o.record_type = 'outcome'
-                   ORDER BY o.id DESC LIMIT 1
-               ), 'unknown') = 'unknown'
-               AND COALESCE((
-                   SELECT r.reconciliation_state FROM operation_journal r
-                   WHERE r.parent_id = i.id AND r.record_type = 'reconciliation'
-                   ORDER BY r.id DESC LIMIT 1
-               ), 'unresolved') IN ('unresolved', 'do_not_retry')
-             ORDER BY i.id DESC LIMIT 1";
         const RECORD_OUTCOME_EXISTS_SQL: &str = "SELECT EXISTS(SELECT 1 FROM operation_journal
              WHERE id = ?1 AND run_id = ?2 AND record_type = 'intent')";
         const RECORD_OUTCOME_TASK_SQL: &str = "SELECT task_id FROM operation_journal WHERE id = ?1 AND run_id = ?2 AND record_type = 'intent'";
@@ -2203,36 +2475,6 @@ mod tests {
                  (run_id, task_id, record_type, parent_id, outcome, changed_paths, created_at, snapshot_json)
              SELECT run_id, task_id, 'outcome', id, ?1, ?2, ?3, ?5
              FROM operation_journal WHERE id = ?4 AND record_type = 'intent'";
-        const RECONCILE_OPERATION_SQL: &str = "INSERT INTO operation_journal
-             (run_id, task_id, record_type, parent_id, reconciliation_state,
-              reconciliation_actor, reconciliation_reason, created_at)
-             SELECT run_id, task_id, 'reconciliation', id, ?1, ?2, ?3, ?4
-             FROM operation_journal
-             WHERE id = ?5 AND run_id = ?6 AND record_type = 'intent'
-               AND effect != 'Board'
-               AND COALESCE((SELECT outcome FROM operation_journal outcome
-                             WHERE outcome.parent_id = operation_journal.id
-                               AND outcome.record_type = 'outcome'
-                             ORDER BY outcome.id DESC LIMIT 1), 'unknown') = 'unknown'
-               AND NOT EXISTS (SELECT 1 FROM operation_journal prior
-                               WHERE prior.parent_id = operation_journal.id
-                                 AND prior.record_type = 'reconciliation')";
-        const UNRESOLVED_TASK_SIDE_EFFECT_SQL: &str = "SELECT i.run_id, i.operation, i.id
-             FROM operation_journal i
-             WHERE i.task_id = ?1
-               AND i.record_type = 'intent'
-               AND i.effect <> 'Board'
-               AND COALESCE((
-                   SELECT o.outcome FROM operation_journal o
-                   WHERE o.parent_id = i.id AND o.record_type = 'outcome'
-                   ORDER BY o.id DESC LIMIT 1
-               ), 'unknown') = 'unknown'
-               AND COALESCE((
-                   SELECT r.reconciliation_state FROM operation_journal r
-                   WHERE r.parent_id = i.id AND r.record_type = 'reconciliation'
-                   ORDER BY r.id DESC LIMIT 1
-               ), 'unresolved') IN ('unresolved', 'do_not_retry')
-             ORDER BY i.id DESC LIMIT 1";
         const JOURNAL_LINK_GUARD_SQL: &str = "SELECT 1 FROM operation_journal intent
              WHERE intent.id = ?1
                AND intent.record_type = 'intent'
@@ -2330,7 +2572,7 @@ mod tests {
         let intent_guard_plan = explain_with_values(
             &db.conn,
             RECORD_INTENT_UNRESOLVED_SQL,
-            std::slice::from_ref(&task_value),
+            &[task_value.clone(), rusqlite::types::Value::Null],
         );
         assert_plan_uses(&intent_guard_plan, "idx_operation_journal_task_cursor");
         assert_plan_uses(&intent_guard_plan, "idx_operation_journal_one_outcome");
@@ -2400,9 +2642,13 @@ mod tests {
             rusqlite::types::Value::Text(now_rfc3339()),
             rusqlite::types::Value::Integer(unresolved_cursor),
             rusqlite::types::Value::Text(run_id.clone()),
+            rusqlite::types::Value::Null,
         ];
-        let reconcile_plan =
-            explain_with_values(&db.conn, RECONCILE_OPERATION_SQL, &reconcile_values);
+        let reconcile_plan = explain_with_values(
+            &db.conn,
+            APPEND_SUPERVISOR_RECONCILIATION_SQL,
+            &reconcile_values,
+        );
         assert!(
             reconcile_plan
                 .iter()
@@ -2417,12 +2663,55 @@ mod tests {
         let unresolved_plan = explain_with_values(
             &db.conn,
             UNRESOLVED_TASK_SIDE_EFFECT_SQL,
-            std::slice::from_ref(&task_value),
+            &[task_value.clone(), rusqlite::types::Value::Null],
         );
         assert_plan_uses(&unresolved_plan, "idx_operation_journal_task_cursor");
         assert_plan_uses(&unresolved_plan, "idx_operation_journal_one_outcome");
         assert_plan_uses(&unresolved_plan, "idx_operation_journal_one_reconciliation");
         assert_no_operation_journal_scan(&unresolved_plan);
+        assert_plan_uses(&unresolved_plan, "idx_operation_retry_single_use");
+
+        let retry_grant_plan = explain_with_values(
+            &db.conn,
+            RETRY_ADMISSION_GRANT_SQL,
+            &[
+                rusqlite::types::Value::Integer(unresolved_cursor),
+                rusqlite::types::Value::Text(run_id.clone()),
+                task_value.clone(),
+                rusqlite::types::Value::Text(hostname()),
+                rusqlite::types::Value::Integer(i64::from(std::process::id())),
+            ],
+        );
+        assert_plan_uses(
+            &retry_grant_plan,
+            "idx_operation_journal_one_reconciliation",
+        );
+        assert_plan_uses(&retry_grant_plan, "idx_operation_retry_single_use");
+        assert_no_operation_journal_scan(&retry_grant_plan);
+        let retry_claim_plan = explain_with_values(
+            &db.conn,
+            RETRY_CLAIM_GRANT_SQL,
+            &[
+                rusqlite::types::Value::Integer(unresolved_cursor),
+                rusqlite::types::Value::Text("plan-worker".into()),
+            ],
+        );
+        assert_plan_uses(
+            &retry_claim_plan,
+            "idx_operation_journal_one_reconciliation",
+        );
+        assert_plan_uses(&retry_claim_plan, "idx_operation_retry_single_use");
+        assert_no_operation_journal_scan(&retry_claim_plan);
+        let completion_plan = explain_with_values(
+            &db.conn,
+            TASK_RECOVERY_COMPLETION_SQL,
+            &[task_value.clone()],
+        );
+        assert_plan_uses(&completion_plan, "idx_operation_journal_task_cursor");
+        assert_plan_uses(&completion_plan, "idx_operation_journal_one_outcome");
+        assert_plan_uses(&completion_plan, "idx_operation_journal_one_reconciliation");
+        assert_plan_uses(&completion_plan, "idx_operation_retry_single_use");
+        assert_no_operation_journal_scan(&completion_plan);
 
         let link_guard_plan = explain_with_values(
             &db.conn,
@@ -2576,8 +2865,10 @@ mod tests {
         .expect("authorized Supervisor reconciliation");
         assert_eq!(
             db.unresolved_task_side_effect(unresolved_task_id)
-                .expect("read reconciled task effect"),
-            None
+                .expect("read legacy decision hold")
+                .unwrap()
+                .2,
+            unresolved_cursor
         );
         db.record_operation_intent(
             &run_id,
@@ -2587,7 +2878,7 @@ mod tests {
             "Write",
             &[],
         )
-        .expect("retry-safe reconciliation permits another intent");
+        .expect_err("legacy retry-safe metadata is not an execution grant");
 
         let page = db
             .operation_journal_page(&run_id, unresolved_cursor - 1, 1)
@@ -2627,7 +2918,7 @@ mod tests {
             .expect("write v3 schema");
         }
         let db = RunsDb::open_at(&path).expect("upgrade v3 database");
-        assert_eq!(db.schema_version().expect("schema version"), 9);
+        assert_eq!(db.schema_version().expect("schema version"), 10);
         let run_id = db.begin(kind::AGENT_TURN, None).expect("begin run");
         let cursor = db
             .record_operation_intent(&run_id, None, "op-1", "edit", "write_file", &[])
@@ -2669,6 +2960,11 @@ mod tests {
                 "DROP INDEX idx_operation_journal_task_cursor;
                  DROP INDEX idx_runs_started_instant;
                  DROP INDEX idx_runs_open_instant;
+                 DROP TRIGGER operation_retry_consume_guard;
+                 DROP TRIGGER operation_retry_grant_shape;
+                 DROP INDEX idx_operation_retry_single_use;
+                 ALTER TABLE operation_journal DROP COLUMN retry_grant_id;
+                 ALTER TABLE operation_journal DROP COLUMN retry_worker;
                  DROP TRIGGER operation_snapshot_record_shape;
                  ALTER TABLE operation_journal DROP COLUMN snapshot_json;
                  PRAGMA user_version = 6;",
@@ -2677,7 +2973,7 @@ mod tests {
         drop(db);
 
         let db = RunsDb::open_at(&path).expect("upgrade existing v6 database");
-        assert_eq!(db.schema_version().expect("upgraded schema version"), 9);
+        assert_eq!(db.schema_version().expect("upgraded schema version"), 10);
         let plan = explain_without_parameters(
             &db.conn,
             "SELECT id FROM operation_journal
@@ -2739,8 +3035,8 @@ mod tests {
             } if operation == "write_file" && intent_cursor == first
         ));
 
-        db.record_operation_reconciliation(&first_run, first, OperationReconciliation::RetrySafe)
-            .expect("append explicit retry-safe decision");
+        db.record_operation_reconciliation(&first_run, first, OperationReconciliation::Reconciled)
+            .expect("append explicit verified-complete decision");
         db.record_operation_intent(
             &next_run,
             Some(23),

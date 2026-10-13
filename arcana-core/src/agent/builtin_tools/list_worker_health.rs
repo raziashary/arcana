@@ -51,8 +51,12 @@ fn read_operation_journal(
                         "reconciliation": reconciliation,
                         "reconciliation_actor": entry.reconciliation_actor,
                         "reconciliation_reason": entry.reconciliation_reason,
+                        "retry_worker": entry.retry_worker,
+                        "retry_grant_cursor": entry.retry_grant_cursor,
+                        "retry_consumed_by_cursor": entry.retry_consumed_by_cursor,
                         "recovery_required": outcome == "unknown"
-                            && matches!(reconciliation, "unresolved" | "do_not_retry"),
+                            && reconciliation != "reconciled"
+                            && entry.retry_consumed_by_cursor.is_none(),
                     })
                 })
                 .collect::<Vec<_>>();

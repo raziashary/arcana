@@ -1,0 +1,9 @@
+# P4-60 isolated desktop IPC receipt proposal — 2026-10-13
+
+Status: owner approved the isolated renderer/IPC receipt harness on2026-10-13 (ADR0386); implementation and actual runtime proof remain pending.
+
+The current Windows WebDriver harness starts Arcana/WebView2 but gets no debugging endpoint after the approved matched-attach, fixed-runtime and isolated-host work. Do not repeat identical port/time-out probes. Tauri already owns its WebviewWindow and supports JavaScript evaluation; a fixed, source-controlled probe can execute in the actual renderer and invoke actual exported IPC without a DevTools endpoint.
+
+Proposed boundary: compile only into an explicit isolated e2e feature, use fixed checked-in probe code (no arbitrary eval file/remote listener), fresh application data and an owned workspace, no user Vault/profile or live provider. After frontend readiness, run the fixed probe, exercise consent and logs UI/IPC, return bounded privacy-safe structured receipts through a test-only command to the owned fixture directory. The driver owns a finite deadline and kills/cleans its app tree and fixture resources. Normal application builds have no probe or receipt command. Any provider/diff transport fixture is local and fake; no new paid run is included.
+
+Acceptance: prove the real renderer is ready, exported IPC denies missing/revoked consent and honors granted exact destination, consent state is reflected in the real UI, each logs section reads real producer data and export returns it, private canaries remain absent from exported receipts/logs, and all owned processes/listeners finish. This alternative replaces transport into the renderer, not the production consent/observability paths. It is not a pass until run and read back. Existing e2e artifacts remain for diagnosis.

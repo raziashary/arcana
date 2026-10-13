@@ -684,6 +684,22 @@ impl TasksDb {
     }
 
     fn from_connection(conn: Connection) -> Result<Self> {
+        let recovery_path = conn
+            .path()
+            .and_then(|path| std::path::Path::new(path).parent())
+            .map(|parent| parent.join("runs.db"));
+        conn.create_scalar_function(
+            "arcana_task_recovery_allows_completion",
+            1,
+            rusqlite::functions::FunctionFlags::SQLITE_UTF8,
+            move |context| {
+                let task_id = context.get::<i64>(0)?;
+                Ok(i64::from(recovery_path.as_ref().is_some_and(|path| {
+                    crate::db::runs::RunsDb::task_recovery_allows_completion(path, task_id)
+                        .unwrap_or(false)
+                })))
+            },
+        )?;
         let qc_workspace_context = std::sync::Arc::new(std::sync::Mutex::new(None));
         let supervisor_approval_context =
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1573,6 +1589,17 @@ impl TasksDb {
                 SELECT RAISE(ABORT, 'task budget resolution identity must match the active task');
             END;
         "#,
+        },
+        Migration {
+            version: 23,
+            name: "task-completion-recovery-admission-guard",
+            sql: r#"
+                CREATE TRIGGER tasks_completion_recovery_guard
+                BEFORE UPDATE OF status ON tasks
+                WHEN NEW.status IN ('qc_review', 'done') AND OLD.status != NEW.status
+                     AND arcana_task_recovery_allows_completion(NEW.id) != 1
+                BEGIN SELECT RAISE(ABORT, 'task completion requires resolved operation outcomes'); END;
+            "#,
         },
     ];
 
@@ -5527,8 +5554,10 @@ mod tests {
 
     #[test]
     fn shared_task_status_api_rejects_qc_review_without_latest_attributable_passing_build() {
+        let directory = tempfile::tempdir().expect("isolated file-backed recovery profile");
         let db = TasksDb::from_connection(
-            Connection::open_in_memory().expect("open isolated task database"),
+            Connection::open(directory.path().join("tasks.db"))
+                .expect("open isolated task database"),
         )
         .expect("register fingerprint function");
         db.migrate().expect("apply all task migrations");
@@ -5818,6 +5847,7 @@ mod tests {
                  ALTER TABLE worker_requests DROP COLUMN diagnostic_batch_id;
                  ALTER TABLE build_evidence DROP COLUMN workspace_fingerprint;
                  ALTER TABLE build_evidence DROP COLUMN workspace_path;
+                 DROP TRIGGER tasks_completion_recovery_guard;
                  PRAGMA user_version = 17;",
             )
             .expect("prepare a schema-v17 database with an existing pass");
@@ -6263,8 +6293,10 @@ mod tests {
             }
         }
 
+        let directory = tempfile::tempdir().expect("isolated file-backed recovery profile");
         let db = TasksDb::from_connection(
-            Connection::open_in_memory().expect("open isolated task database"),
+            Connection::open(directory.path().join("tasks.db"))
+                .expect("open isolated task database"),
         )
         .expect("register fingerprint function");
         db.migrate().expect("apply task migrations");
@@ -6699,8 +6731,10 @@ mod tests {
 
     #[test]
     fn task_budget_and_unblock_readers_use_existing_indexes_with_populated_tasks() {
+        let directory = tempfile::tempdir().expect("isolated file-backed recovery profile");
         let db = TasksDb::from_connection(
-            Connection::open_in_memory().expect("open isolated task database"),
+            Connection::open(directory.path().join("tasks.db"))
+                .expect("open isolated task database"),
         )
         .expect("register fingerprint function");
         db.migrate().expect("apply task migrations");
@@ -9418,7 +9452,7 @@ mod tests {
 
         drop(db);
         let reopened = TasksDb::open_at(&path).expect("reopen isolated task database");
-        assert_eq!(reopened.schema_version().unwrap(), 22);
+        assert_eq!(reopened.schema_version().unwrap(), 23);
         let history = reopened
             .get_task_budget_resolution_history(task.id, usize::MAX)
             .expect("read bounded persisted audit history");
@@ -9836,6 +9870,7 @@ mod tests {
                  DROP INDEX idx_tasks_task_identity;
                  ALTER TABLE task_budget_resolutions DROP COLUMN task_identity;
                  ALTER TABLE tasks DROP COLUMN task_identity;
+                 DROP TRIGGER tasks_completion_recovery_guard;
                  PRAGMA user_version = 21;",
             )
             .expect("restore populated pre-identity schema version 21 fixture");
@@ -10352,6 +10387,7 @@ mod tests {
                  ALTER TABLE worker_requests DROP COLUMN diagnostic_batch_id;
                  ALTER TABLE build_evidence DROP COLUMN workspace_fingerprint;
                  ALTER TABLE build_evidence DROP COLUMN workspace_path;
+                 DROP TRIGGER tasks_completion_recovery_guard;
                  PRAGMA user_version = 8;",
             )
             .expect("prepare legacy-format row");
@@ -10376,8 +10412,8 @@ mod tests {
         drop(_home);
         let _upgrade_home = crate::db::test_support::with_home(&upgrade_dir);
         let upgraded =
-            TasksDb::open_at(&upgrade_path).expect("run additive migrations through v22");
-        assert_eq!(upgraded.schema_version().unwrap(), 22);
+            TasksDb::open_at(&upgrade_path).expect("run additive migrations through v23");
+        assert_eq!(upgraded.schema_version().unwrap(), 23);
         let blocked_index_exists: bool = upgraded
             .conn
             .query_row(

@@ -109,8 +109,29 @@ fn begin_operation_journal(
     effect: &crate::agent::tool_effect::ToolEffect,
     input: &serde_json::Value,
     ctx: &ToolContext,
+    lease: Option<&crate::platform::workspace_write::WorkspaceWriteLease>,
 ) -> Result<Option<JournalIntent>> {
+    let retry_cursor = match input.get("recovery_intent_cursor") {
+        None => None,
+        Some(value) if tool_name == "write_file" => {
+            Some(value.as_i64().filter(|cursor| *cursor > 0).ok_or_else(|| {
+                crate::errors::ArcanaError::Agent(
+                    "recovery cursor must be a positive original intent".into(),
+                )
+            })?)
+        }
+        Some(_) => {
+            return Err(crate::errors::ArcanaError::Agent(
+                "this operation has no verifiable retry contract".into(),
+            ))
+        }
+    };
     let Some(run_id) = ctx.run_id.as_deref() else {
+        if retry_cursor.is_some() {
+            return Err(crate::errors::ArcanaError::Agent(
+                "recovery admission requires an attributable worker run".into(),
+            ));
+        }
         return Ok(None);
     };
     if *effect == crate::agent::tool_effect::ToolEffect::Read {
@@ -155,9 +176,13 @@ fn begin_operation_journal(
                     task_id,
                     &ctx.session_id,
                     Path::new(&ctx.working_dir),
-                    content_digest
-                        .as_deref()
-                        .map(|digest| (target_paths[0].as_str(), digest)),
+                    content_digest.as_deref().map(|digest| {
+                        (
+                            target_paths[0].as_str(),
+                            digest,
+                            input["overwrite"].as_bool().unwrap_or(false),
+                        )
+                    }),
                 )
             })
             .transpose()?
@@ -165,6 +190,13 @@ fn begin_operation_journal(
         None
     };
     let runs = crate::db::runs::RunsDb::open()?;
+    if retry_cursor.is_some()
+        && runs.get(run_id)?.and_then(|run| run.actor).as_deref() != Some(ctx.agent_role.as_str())
+    {
+        return Err(crate::errors::ArcanaError::Agent(
+            "retry executor identity does not own its run".into(),
+        ));
+    }
     let cursor = runs.record_operation_intent_with_snapshot(
         run_id,
         task_id,
@@ -173,6 +205,17 @@ fn begin_operation_journal(
         &format!("{effect:?}"),
         &target_paths,
         snapshot.as_ref(),
+        retry_cursor
+            .map(|cursor| {
+                lease
+                    .map(|lease| (cursor, Path::new(&ctx.working_dir), lease))
+                    .ok_or_else(|| {
+                        crate::errors::ArcanaError::Agent(
+                            "recovery admission requires a workspace lease".into(),
+                        )
+                    })
+            })
+            .transpose()?,
     )?;
     Ok(Some(JournalIntent {
         run_id: run_id.to_owned(),
@@ -1181,6 +1224,7 @@ impl ToolExecutor {
                         &tool.effect_for_input(&input),
                         &input,
                         &ctx,
+                        _write_lease.as_ref(),
                     ) {
                         Err(crate::errors::ArcanaError::OperationReconciliationRequired {
                             operation,
@@ -1515,7 +1559,7 @@ mod p8_execution_registry_tests {
             journal_task_id("claim_task", &serde_json::json!({"task_id": -1}), &context),
             None
         );
-        begin_operation_journal("claim_task", &ToolEffect::Board, &requested, &context)
+        begin_operation_journal("claim_task", &ToolEffect::Board, &requested, &context, None)
             .expect("persist claim intent before handler");
         let journal = runs
             .operation_journal_page(&run_id, 0, 10)
@@ -1985,7 +2029,7 @@ mod p8_execution_registry_tests {
         runs.record_operation_reconciliation(
             &interrupted_run,
             uncertain,
-            crate::db::runs::OperationReconciliation::RetrySafe,
+            crate::db::runs::OperationReconciliation::Reconciled,
         )
         .expect("record explicit recovery decision");
         let resumed = executor

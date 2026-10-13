@@ -93,7 +93,7 @@ impl ClaimTaskTool {
         // explicit reconciliation decision. Board mutations are excluded by
         // RunsDb because their task state is authoritative in TasksDb.
         match crate::db::runs::RunsDb::open()
-            .and_then(|runs| runs.unresolved_task_side_effect(task_id))
+            .and_then(|runs| runs.unresolved_task_side_effect_for_claim(task_id, worker_slug))
         {
             Ok(Some((run_id, operation, cursor))) => {
                 return ToolResult::categorized_error(
@@ -296,9 +296,9 @@ mod tests {
         runs.record_operation_reconciliation(
             &run_id,
             cursor,
-            crate::db::runs::OperationReconciliation::RetrySafe,
+            crate::db::runs::OperationReconciliation::Reconciled,
         )
-        .expect("persist explicit safe-to-continue decision");
+        .expect("persist explicit verified-complete decision");
         let allowed = ClaimTaskTool::claim_from_db(task.id, &context("worker-backend"), &db);
         assert!(
             !allowed.is_error,
