@@ -243,6 +243,7 @@ impl Tool for EditFileTool {
             worker_id: None,
             extra: json!({
                 "bytes_written": new_content.len(),
+                "working_dir": ctx.working_dir,
                 "occurrences_replaced": if params.replace_all { match_count } else { 1 },
             }),
         };

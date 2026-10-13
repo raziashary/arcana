@@ -164,6 +164,7 @@ impl Tool for WriteFileTool {
                     worker_id: None,
                     extra: serde_json::json!({
                         "bytes_written": content.len(),
+                        "working_dir": ctx.working_dir,
                     }),
                 };
                 tokio::spawn(async move {

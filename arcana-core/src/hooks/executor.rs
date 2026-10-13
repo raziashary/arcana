@@ -74,48 +74,25 @@ impl HookExecutor {
                         Some(format!("Expanded hook command refused: {error}")),
                     );
                 }
-                let timeout = timeout_secs.unwrap_or(30);
-
-                let mut builder =
-                    tokio::process::Command::new(if cfg!(windows) { "cmd" } else { "sh" });
-                if cfg!(windows) {
-                    builder.args(["/C", &cmd]);
-                } else {
-                    builder.args(["-c", &cmd]);
-                }
-                if let Some(wd) = expanded_working_dir {
-                    builder.current_dir(wd);
-                }
-
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(timeout as u64),
-                    builder.output(),
-                )
-                .await
+                let timeout = u64::from(timeout_secs.unwrap_or(30).clamp(1, 1800));
+                match run_sandboxed_shell_hook(&cmd, expanded_working_dir.as_deref(), ctx, timeout)
+                    .await
                 {
-                    Ok(Ok(out)) => {
-                        let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                        if out.status.success() {
-                            (
-                                HookOutcome::Executed,
-                                Some(stdout),
-                                if stderr.is_empty() {
-                                    None
-                                } else {
-                                    Some(stderr)
-                                },
-                            )
+                    Ok((0, stdout, stderr)) => (
+                        HookOutcome::Executed,
+                        Some(stdout),
+                        if stderr.is_empty() {
+                            None
                         } else {
-                            (HookOutcome::Failed, Some(stdout), Some(stderr))
-                        }
-                    }
-                    Ok(Err(e)) => (HookOutcome::Failed, None, Some(e.to_string())),
-                    Err(_) => (
-                        HookOutcome::Failed,
-                        None,
-                        Some(format!("Timed out after {timeout}s")),
+                            Some(stderr)
+                        },
                     ),
+                    Ok((_, stdout, stderr)) => (
+                        HookOutcome::Failed,
+                        Some(stdout),
+                        Some(stderr_or_exit(stderr)),
+                    ),
+                    Err(error) => (HookOutcome::Failed, None, Some(error)),
                 }
             }
 
@@ -191,7 +168,9 @@ impl HookExecutor {
                 let title = substitute(title, ctx);
                 let msg = substitute(message, ctx);
                 // Platform notification — best effort, no hard failure
-                warn!("[HookExecutor] Notification (desktop notifications not yet integrated): {title} — {msg}");
+                warn!(
+                    "[HookExecutor] Notification (desktop notifications not yet integrated): {title} — {msg}"
+                );
                 (HookOutcome::Executed, Some(format!("{title}: {msg}")), None)
             }
 
@@ -226,6 +205,234 @@ impl HookExecutor {
                 )
             }
         }
+    }
+}
+
+#[cfg(windows)]
+const MAX_HOOK_OUTPUT_BYTES: usize = 50_000;
+#[cfg(windows)]
+const HOOK_OUTPUT_READ_BYTES: usize = 8 * 1024;
+async fn run_sandboxed_shell_hook(
+    command: &str,
+    action_working_dir: Option<&str>,
+    ctx: &HookContext,
+    timeout_secs: u64,
+) -> Result<(i32, String, String), String> {
+    let explicit_workspace = ctx
+        .extra
+        .get("working_dir")
+        .and_then(serde_json::Value::as_str)
+        .filter(|path| !path.trim().is_empty());
+    let workspace = crate::platform::workspace::resolve_workspace_dir(explicit_workspace)
+        .map_err(|error| format!("Shell hook selected workspace is unavailable: {error}"))?;
+
+    let cwd = match action_working_dir {
+        Some(path) => crate::platform::workspace::resolve_workspace_dir(Some(path))
+            .map_err(|error| format!("Shell hook working directory is unavailable: {error}"))?,
+        None => workspace.clone(),
+    };
+    if !cwd.starts_with(&workspace) {
+        return Err("Shell hook working directory must stay inside the selected workspace.".into());
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (command, cwd, timeout_secs);
+        return Err(
+            "Shell hooks are unavailable on this platform because Arcana cannot provide the approved sandbox read/network policy and confirmed process-tree cleanup."
+                .into(),
+        );
+    }
+
+    #[cfg(windows)]
+    {
+        use std::ffi::OsString;
+
+        use crate::platform::process_sandbox::ProcessSpec;
+
+        let env_remove = std::env::vars()
+            .filter_map(|(key, _)| {
+                crate::security::env_scrub::looks_like_a_credential(&key)
+                    .then(|| OsString::from(key))
+            })
+            .collect();
+        let spec = ProcessSpec {
+            program: OsString::from("cmd"),
+            args: vec![OsString::from("/C"), OsString::from(command)],
+            raw_arg: None,
+            cwd,
+            env_remove,
+            env_set: Vec::new(),
+            read_only_paths: Vec::new(),
+        };
+
+        match read_sandboxed_shell(spec, &workspace, timeout_secs).await {
+            Ok(result) => Ok(result),
+            Err(error) => Err(error.detail),
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn read_sandboxed_shell(
+    spec: crate::platform::process_sandbox::ProcessSpec,
+    workspace: &std::path::Path,
+    timeout_secs: u64,
+) -> Result<(i32, String, String), ShellHookRunError> {
+    use std::time::Duration;
+
+    let mut child = crate::platform::process_sandbox::spawn_for_shell_hook(spec, workspace)
+        .await
+        .map_err(|error| {
+            ShellHookRunError::releasing(format!("process admission failed: {error}"))
+        })?;
+    let mut stdout = match child.take_stdout() {
+        Some(stdout) => stdout,
+        None => {
+            return Err(stop_failed_hook_child(
+                child,
+                "sandboxed hook stdout was unavailable".into(),
+            )
+            .await);
+        }
+    };
+    let mut stderr = match child.take_stderr() {
+        Some(stderr) => stderr,
+        None => {
+            return Err(stop_failed_hook_child(
+                child,
+                "sandboxed hook stderr was unavailable".into(),
+            )
+            .await);
+        }
+    };
+    let mut stdout_reader =
+        tokio::spawn(async move { read_bounded_hook_output(&mut stdout).await });
+    let mut stderr_reader =
+        tokio::spawn(async move { read_bounded_hook_output(&mut stderr).await });
+
+    let run = async {
+        let exit_code = child
+            .wait()
+            .await
+            .map_err(|error| format!("sandboxed shell wait failed: {error}"))?;
+        let stdout = (&mut stdout_reader)
+            .await
+            .map_err(|error| format!("sandboxed hook stdout reader failed: {error}"))?
+            .map_err(|error| format!("sandboxed hook stdout read failed: {error}"))?;
+        let stderr = (&mut stderr_reader)
+            .await
+            .map_err(|error| format!("sandboxed hook stderr reader failed: {error}"))?
+            .map_err(|error| format!("sandboxed hook stderr read failed: {error}"))?;
+        Ok::<_, String>((exit_code, stdout, stderr))
+    };
+
+    match tokio::time::timeout(Duration::from_secs(timeout_secs), run).await {
+        Ok(Ok(result)) => {
+            if let Err(error) = child.terminate_and_confirm().await {
+                return Err(ShellHookRunError {
+                    detail: format!(
+                        "Shell hook completed, but the sandbox could not confirm its process tree stopped ({error}); the workspace remains quarantined while cleanup retries."
+                    ),
+                });
+            }
+            Ok(result)
+        }
+        Ok(Err(detail)) => {
+            abort_output_readers(stdout_reader, stderr_reader).await;
+            Err(stop_failed_hook_child(child, detail).await)
+        }
+        Err(_) => {
+            abort_output_readers(stdout_reader, stderr_reader).await;
+            Err(stop_failed_hook_child(
+                child,
+                format!("Shell hook timed out after {timeout_secs} seconds; workspace effects may be partial."),
+            )
+            .await)
+        }
+    }
+}
+
+#[cfg(windows)]
+struct ShellHookRunError {
+    detail: String,
+}
+
+#[cfg(windows)]
+impl ShellHookRunError {
+    fn releasing(detail: String) -> Self {
+        Self {
+            detail: format!("Sandboxed shell hook failed: {detail}"),
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn stop_failed_hook_child(
+    mut child: crate::platform::process_sandbox::HookSandboxChild,
+    detail: String,
+) -> ShellHookRunError {
+    match child.terminate_and_confirm().await {
+        Ok(()) => ShellHookRunError::releasing(detail),
+        Err(error) => {
+            // Dropping the owner transfers child, lease, and admission to the
+            // cleanup worker; no new managed writer can enter this workspace.
+            drop(child);
+            ShellHookRunError {
+                detail: format!(
+                    "{detail}; process-tree cleanup is unconfirmed ({error}); the workspace is quarantined while cleanup retries."
+                ),
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+async fn abort_output_readers(
+    stdout_reader: tokio::task::JoinHandle<std::io::Result<String>>,
+    stderr_reader: tokio::task::JoinHandle<std::io::Result<String>>,
+) {
+    stdout_reader.abort();
+    stderr_reader.abort();
+    let _ = stdout_reader.await;
+    let _ = stderr_reader.await;
+}
+
+#[cfg(windows)]
+async fn read_bounded_hook_output(
+    reader: &mut (dyn tokio::io::AsyncRead + Unpin + Send),
+) -> std::io::Result<String> {
+    use tokio::io::AsyncReadExt;
+
+    let mut output = Vec::with_capacity(MAX_HOOK_OUTPUT_BYTES);
+    let mut buffer = [0u8; HOOK_OUTPUT_READ_BYTES];
+    let mut truncated = false;
+    loop {
+        let read = reader.read(&mut buffer).await?;
+        if read == 0 {
+            break;
+        }
+        output.extend_from_slice(&buffer[..read]);
+        if output.len() > MAX_HOOK_OUTPUT_BYTES {
+            let excess = output.len() - MAX_HOOK_OUTPUT_BYTES;
+            output.drain(..excess);
+            truncated = true;
+        }
+    }
+
+    let text = String::from_utf8_lossy(&output).into_owned();
+    Ok(if truncated {
+        format!("[hook output truncated; retaining final {MAX_HOOK_OUTPUT_BYTES} bytes]\n{text}")
+    } else {
+        text
+    })
+}
+
+fn stderr_or_exit(stderr: String) -> String {
+    if stderr.is_empty() {
+        "Shell hook exited unsuccessfully.".into()
+    } else {
+        stderr
     }
 }
 
@@ -305,6 +512,149 @@ mod portability_tests {
         assert!(
             !sentinel.exists(),
             "refused hook must not spawn its command"
+        );
+    }
+}
+
+#[cfg(test)]
+mod shell_boundary_tests {
+    use super::*;
+    use crate::hooks::types::{HookType, ToolCallContext};
+    use serde_json::json;
+
+    fn hook(command: String, working_dir: Option<String>, timeout_secs: Option<u32>) -> HookConfig {
+        HookConfig {
+            id: "shell-boundary-test".into(),
+            name: "Shell boundary test".into(),
+            hook_type: HookType::PostFileWrite,
+            enabled: true,
+            priority: 100,
+            conditions: Default::default(),
+            action: HookAction::Shell {
+                command,
+                working_dir,
+                timeout_secs,
+            },
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    fn context(workspace: Option<&std::path::Path>) -> HookContext {
+        HookContext {
+            hook_type: HookType::PostFileWrite.as_str().into(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some("shell-boundary-test".into()),
+            agent_mode: None,
+            tool_call: Some(ToolCallContext {
+                id: "shell-boundary-test".into(),
+                name: "write_file".into(),
+                input: serde_json::Value::Null,
+                result: None,
+                is_error: false,
+            }),
+            file_path: None,
+            task_id: None,
+            worker_id: None,
+            extra: workspace.map_or(
+                serde_json::Value::Null,
+                |path| json!({"working_dir": path.to_string_lossy()}),
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_hook_requires_selected_workspace_before_spawn() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let sentinel = home.path().join("shell-hook-ran.txt");
+        let log = HookExecutor::execute(
+            &hook(format!("echo ran > {}", sentinel.display()), None, Some(1)),
+            &context(None),
+        )
+        .await;
+
+        assert_eq!(log.outcome, HookOutcome::Failed);
+        assert!(log
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("selected workspace is unavailable")));
+        assert!(
+            !sentinel.exists(),
+            "a missing workspace must not spawn a shell"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_hook_rejects_action_directory_outside_selected_workspace() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = home.path().join("workspace");
+        let outside = home.path().join("outside");
+        std::fs::create_dir(&workspace).expect("selected workspace");
+        std::fs::create_dir(&outside).expect("outside directory");
+        let sentinel = outside.join("shell-hook-ran.txt");
+        let log = HookExecutor::execute(
+            &hook(
+                format!("echo ran > {}", sentinel.display()),
+                Some(outside.to_string_lossy().into_owned()),
+                Some(1),
+            ),
+            &context(Some(&workspace)),
+        )
+        .await;
+
+        assert_eq!(log.outcome, HookOutcome::Failed);
+        assert!(log
+            .error
+            .as_deref()
+            .is_some_and(|error| { error.contains("must stay inside the selected workspace") }));
+        assert!(
+            !sentinel.exists(),
+            "an escaped working directory must not spawn a shell"
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn shell_hook_runs_only_inside_the_selected_sandboxed_workspace() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = home.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("selected workspace");
+        let sentinel = workspace.join("shell-hook-ran.txt");
+        let log = HookExecutor::execute(
+            &hook("echo ran > shell-hook-ran.txt".into(), None, Some(10)),
+            &context(Some(&workspace)),
+        )
+        .await;
+
+        assert_eq!(log.outcome, HookOutcome::Executed, "{:?}", log.error);
+        assert_eq!(std::fs::read_to_string(&sentinel).unwrap().trim(), "ran");
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn shell_hook_fails_closed_when_platform_policy_is_unavailable() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = home.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("selected workspace");
+        let sentinel = workspace.join("shell-hook-ran.txt");
+        let log = HookExecutor::execute(
+            &hook(format!("echo ran > {}", sentinel.display()), None, Some(1)),
+            &context(Some(&workspace)),
+        )
+        .await;
+
+        assert_eq!(log.outcome, HookOutcome::Failed);
+        assert!(log
+            .error
+            .as_deref()
+            .is_some_and(|error| { error.contains("unavailable on this platform") }));
+        assert!(
+            !sentinel.exists(),
+            "unsupported platforms must not spawn a shell"
         );
     }
 }

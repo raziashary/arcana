@@ -1,0 +1,11 @@
+# P4 process write admission — 2026-10-13
+
+Approved existing boundary: ADR0365/0367/0359 and implementation ADR0387. File, process, free-form shell and host-approved dependency mutation effects must share selected-workspace admission; child agents must not hold a parent lease while waiting for nested writes.
+
+The owning ToolExecutor admits Write/Execute/FreeformShell/HostApproval through the existing cross-process write lease before journal intent and retains it through handler/outcome. Existing permission gates remain unchanged. Board/Network operations remain outside the lease. A real registered project_command Cargo Test verifies contention prevents process/cache artifacts, then runs after release and reads its observed passing exit. The initial fixture compile guessed a non-existent registry constructor and hit a concurrently incomplete test module declaration; use the actual ToolRegistry/register_for_mode APIs and wait for the new legacy module. The first runtime test successfully executed the real command but its assertion incorrectly expected JSON from a plain-text success contract; retain the existing output contract and assert its actual observed Exit code instead.
+
+Final test/check receipts are pending. This is process-write coordination, not proof of arbitrary external-editor isolation, full staged copy-back or per-task process checkpoints. No task/gate closes from this unit alone.
+
+The corrected registered Cargo Test flow passesWindows1/1(25.42s), with no target/cache before admission, real observed Exit code0 afterward and subsequent lease reacquisition. Compile completed without errors (1m59s); a nonsemantic concurrent test-only import warning was removed by its owner. Existing real shell-hook/tree cleanup checks separately pass5/5 plus three1/1 cases. Normal core/CLI check receipt follows at stable closeout.
+
+Stable normal validation: cargo check --offline -p arcana-core -p arcanactl --locked passes30.60s. Scoped rustfmt with skip_children=true passes. Residual: non-hook process timeout/cancellation still depends on each sandbox runner stop barrier; this admission unit does not itself prove lease retention until all process descendants stop on every platform. No full P4-18/P4-61 claim is made.

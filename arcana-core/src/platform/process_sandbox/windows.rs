@@ -52,9 +52,10 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_READ_ATTRIBUTES, FILE_TRAVERSE,
 };
 use windows_sys::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-    SetInformationJobObject, TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectBasicAccountingInformation,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+    TerminateJobObject, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LoadLibraryExW, LOAD_LIBRARY_SEARCH_SYSTEM32,
@@ -282,6 +283,42 @@ impl WindowsSandboxChild {
             return Err(last_error());
         }
         Ok(())
+    }
+
+    /// Confirm termination of the entire non-breakaway job hierarchy, rather
+    /// than only observing that a termination request or bridge PID finished.
+    pub async fn terminate_and_wait_tree(&mut self) -> io::Result<()> {
+        self.kill()?;
+        let started = std::time::Instant::now();
+        loop {
+            if self.active_job_processes()? == 0 {
+                return Ok(());
+            }
+            if started.elapsed() >= std::time::Duration::from_secs(5) {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Sandbox process tree termination is unconfirmed",
+                ));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    fn active_job_processes(&self) -> io::Result<u32> {
+        let mut info = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+        if unsafe {
+            QueryInformationJobObject(
+                self._job.0.as_raw_handle() as HANDLE,
+                JobObjectBasicAccountingInformation,
+                (&mut info as *mut JOBOBJECT_BASIC_ACCOUNTING_INFORMATION).cast(),
+                size_of::<JOBOBJECT_BASIC_ACCOUNTING_INFORMATION>() as u32,
+                null_mut(),
+            )
+        } == 0
+        {
+            return Err(last_error());
+        }
+        Ok(info.ActiveProcesses)
     }
 }
 
@@ -3054,6 +3091,61 @@ mod tests {
             !late.exists(),
             "descendant reached its post-cancellation side effect"
         );
+    }
+
+    #[tokio::test]
+    async fn confirmed_tree_stop_counts_and_terminates_real_bridge_descendants() {
+        let _serial = ACL_TEST_LOCK.lock().await;
+        let root = tempfile::Builder::new()
+            .prefix("arcana-confirmed-tree-stop-")
+            .tempdir()
+            .expect("owned workspace");
+        let workspace = root.path();
+        std::fs::write(workspace.join("descendant.cmd"),
+            "@echo off\r\necho ready>ready.txt\r\nfor /l %%i in (1,1,100000000) do @echo alive>>heartbeat.txt\r\necho late>late.txt\r\n").unwrap();
+        std::fs::write(
+            workspace.join("parent.cmd"),
+            "@echo off\r\ncmd.exe /d /c descendant.cmd\r\n",
+        )
+        .unwrap();
+        let spec = super::super::ProcessSpec {
+            program: OsString::from("cmd.exe"),
+            args: vec!["/d".into(), "/c".into(), "parent.cmd".into()],
+            raw_arg: None,
+            cwd: workspace.to_path_buf(),
+            env_remove: credentials_to_remove(),
+            env_set: Vec::new(),
+            read_only_paths: Vec::new(),
+        };
+        let mut child = super::super::spawn(spec, workspace)
+            .await
+            .expect("production bridge spawn");
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !workspace.join("ready.txt").is_file()
+                || !workspace.join("heartbeat.txt").is_file()
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("real descendant starts");
+        let super::super::SandboxedChild::Windows(windows_child) = &child;
+        assert!(
+            windows_child.active_job_processes().unwrap() >= 3,
+            "outer job must account for bridge, command and command descendant"
+        );
+        child
+            .terminate_and_wait_tree()
+            .await
+            .expect("confirmed entire job termination");
+        let super::super::SandboxedChild::Windows(windows_child) = &child;
+        assert_eq!(windows_child.active_job_processes().unwrap(), 0);
+        let heartbeat = workspace.join("heartbeat.txt");
+        let size = std::fs::metadata(&heartbeat).unwrap().len();
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert_eq!(std::fs::metadata(&heartbeat).unwrap().len(), size);
+        assert!(!workspace.join("late.txt").exists());
+        drop(child);
     }
 
     #[tokio::test]

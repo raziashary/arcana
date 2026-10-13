@@ -19,6 +19,8 @@ use tokio::process::Child;
 #[cfg(target_os = "linux")]
 use tokio::process::{Child, Command};
 
+#[cfg(windows)]
+mod cleanup;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(windows)]
@@ -126,7 +128,83 @@ pub(crate) enum SandboxedChild {
     Windows(windows::WindowsSandboxChild),
 }
 
+/// Process ownership for shell hooks. The cleanup reservation and write lease
+/// travel with the child through launch, execution, cancellation and errors.
+/// Dropping this value before confirmed tree termination quarantines the
+/// workspace and transfers all three resources to the Windows cleanup owner.
+#[cfg(windows)]
+pub(crate) struct HookSandboxChild {
+    child: Option<SandboxedChild>,
+    admission: Option<cleanup::CleanupAdmission>,
+    write_lease: Option<crate::platform::workspace_write::WorkspaceWriteLease>,
+}
+
+#[cfg(windows)]
+impl HookSandboxChild {
+    pub(crate) fn take_stdout(&mut self) -> Option<Box<dyn AsyncRead + Unpin + Send>> {
+        self.child.as_mut().and_then(SandboxedChild::take_stdout)
+    }
+
+    pub(crate) fn take_stderr(&mut self) -> Option<Box<dyn AsyncRead + Unpin + Send>> {
+        self.child.as_mut().and_then(SandboxedChild::take_stderr)
+    }
+
+    pub(crate) async fn wait(&mut self) -> io::Result<i32> {
+        self.child
+            .as_mut()
+            .ok_or_else(|| io::Error::other("sandbox child ownership was already released"))?
+            .wait()
+            .await
+    }
+
+    /// Release the write lease and cleanup capacity only after Windows confirms
+    /// that the entire non-breakaway job hierarchy is empty.
+    pub(crate) async fn terminate_and_confirm(&mut self) -> io::Result<()> {
+        self.child
+            .as_mut()
+            .ok_or_else(|| io::Error::other("sandbox child ownership was already released"))?
+            .terminate_and_wait_tree()
+            .await?;
+        self.child.take();
+        self.admission.take();
+        self.write_lease.take();
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for HookSandboxChild {
+    fn drop(&mut self) {
+        let (Some(child), Some(admission), Some(write_lease)) = (
+            self.child.take(),
+            self.admission.take(),
+            self.write_lease.take(),
+        ) else {
+            return;
+        };
+        // `retain` is synchronous and infallible after prelaunch admission.
+        // This also runs when the hook future is cancelled or unwinds.
+        admission.retain(child, write_lease);
+    }
+}
+
 impl SandboxedChild {
+    /// Return success only after the OS reports no live process in the
+    /// Windows sandbox's non-breakaway job hierarchy. Other backends do not
+    /// yet expose equivalent confirmation and must fail closed for callers
+    /// that require this capability.
+    pub(crate) async fn terminate_and_wait_tree(&mut self) -> io::Result<()> {
+        match self {
+            #[cfg(windows)]
+            Self::Windows(child) => child.terminate_and_wait_tree().await,
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            Self::Tokio { .. } => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Confirmed sandbox process-tree termination is unavailable",
+            )),
+        }
+    }
+
     pub(crate) fn take_stdout(&mut self) -> Option<Box<dyn AsyncRead + Unpin + Send>> {
         match self {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -192,22 +270,7 @@ pub(crate) async fn spawn(spec: ProcessSpec, workspace: &Path) -> io::Result<San
     };
     #[cfg(windows)]
     {
-        return run_windows_spawn_blocking(move || {
-            let lease = find_or_retain_workspace(&workspace);
-            let sandbox = lease.inner.sandbox()?;
-            sandbox
-                .spawn_experimental_with_read_only_paths(
-                    &spec.program,
-                    &spec.args,
-                    spec.raw_arg.as_deref(),
-                    &spec.cwd,
-                    &spec.env_remove,
-                    &spec.env_set,
-                    &spec.read_only_paths,
-                )
-                .map(SandboxedChild::Windows)
-        })
-        .await;
+        return run_windows_spawn_blocking(move || spawn_windows_child(spec, workspace)).await;
     }
 
     #[cfg(target_os = "macos")]
@@ -245,6 +308,120 @@ pub(crate) async fn spawn(spec: ProcessSpec, workspace: &Path) -> io::Result<San
             child,
             process_group,
         })
+    }
+}
+
+/// Launch a shell hook only after cleanup capacity and a selected-workspace
+/// write lease are owned. The `spawn_blocking` closure owns both across caller
+/// cancellation while the Windows process is being created.
+#[cfg(windows)]
+pub(crate) async fn spawn_for_shell_hook(
+    spec: ProcessSpec,
+    workspace: &Path,
+) -> io::Result<HookSandboxChild> {
+    let workspace = workspace.canonicalize()?;
+    let identity = crate::platform::workspace::workspace_identity(&workspace)
+        .map_err(|_| io::Error::other("Cannot identify selected workspace"))?;
+    if cleanup::is_quarantined(&identity) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Selected workspace is quarantined by unconfirmed sandbox cleanup",
+        ));
+    }
+    let admission = cleanup::try_admit(&identity)?;
+    let write_lease =
+        crate::platform::workspace_write::WorkspaceWriteLease::acquire(&workspace).await?;
+
+    run_windows_spawn_blocking(move || {
+        let child = spawn_windows_child(spec, workspace)?;
+        Ok(HookSandboxChild {
+            child: Some(child),
+            admission: Some(admission),
+            write_lease: Some(write_lease),
+        })
+    })
+    .await
+}
+
+#[cfg(windows)]
+fn spawn_windows_child(spec: ProcessSpec, workspace: PathBuf) -> io::Result<SandboxedChild> {
+    let lease = find_or_retain_workspace(&workspace);
+    let sandbox = lease.inner.sandbox()?;
+    sandbox
+        .spawn_experimental_with_read_only_paths(
+            &spec.program,
+            &spec.args,
+            spec.raw_arg.as_deref(),
+            &spec.cwd,
+            &spec.env_remove,
+            &spec.env_set,
+            &spec.read_only_paths,
+        )
+        .map(SandboxedChild::Windows)
+}
+
+#[cfg(all(test, windows))]
+mod hook_owner_tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::time::Duration;
+
+    use crate::platform::workspace_write::WorkspaceWriteLease;
+
+    #[tokio::test]
+    async fn dropped_hook_owner_retains_process_and_write_lease_until_cleanup_confirms_empty() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = home.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("selected workspace");
+        let identity = crate::platform::workspace::workspace_identity(&workspace)
+            .expect("canonical workspace identity");
+        let spec = ProcessSpec {
+            program: OsString::from("cmd"),
+            args: vec![
+                OsString::from("/C"),
+                OsString::from("timeout /T 20 /NOBREAK > nul"),
+            ],
+            raw_arg: None,
+            cwd: workspace.clone(),
+            env_remove: Vec::new(),
+            env_set: Vec::new(),
+            read_only_paths: Vec::new(),
+        };
+
+        let owner = spawn_for_shell_hook(spec, &workspace)
+            .await
+            .expect("cleanup capacity and lease are acquired before launch");
+        assert_eq!(
+            cleanup::status(&identity).unwrap().phase,
+            cleanup::CleanupPhase::Admitted
+        );
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(80),
+                WorkspaceWriteLease::acquire(&workspace),
+            )
+            .await
+            .is_err(),
+            "the live hook owner retains the selected-workspace lease"
+        );
+
+        drop(owner);
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if cleanup::status(&identity)
+                    .is_some_and(|status| status.phase == cleanup::CleanupPhase::Confirmed)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cleanup confirms the actual Windows job tree is empty");
+        let _next_writer = WorkspaceWriteLease::acquire(&workspace)
+            .await
+            .expect("confirmed cleanup releases the selected-workspace lease");
     }
 }
 

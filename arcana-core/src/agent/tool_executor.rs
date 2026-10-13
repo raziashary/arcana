@@ -607,11 +607,16 @@ impl ToolExecutor {
         ToolResult,
     > {
         // Coordinate actual workspace mutations across fleet/CLI/desktop
-        // executors. Board, network and child-agent operations do not acquire
-        // this lease; holding it across a nested agent would deadlock its writes.
-        let write_lease = if tool.effect_for_input(input)
-            == crate::agent::tool_effect::ToolEffect::Write
-        {
+        // executors, including subprocesses and explicitly approved installs.
+        // Board/network child-agent operations do not acquire this lease;
+        // holding it across a nested agent would deadlock its writes.
+        let write_lease = if matches!(
+            tool.effect_for_input(input),
+            crate::agent::tool_effect::ToolEffect::Write
+                | crate::agent::tool_effect::ToolEffect::Execute
+                | crate::agent::tool_effect::ToolEffect::FreeformShell
+                | crate::agent::tool_effect::ToolEffect::HostApproval
+        ) {
             match crate::platform::workspace_write::WorkspaceWriteLease::acquire(
                 std::path::Path::new(&ctx.working_dir),
             )
@@ -2324,6 +2329,70 @@ mod p8_execution_registry_tests {
         let _released = crate::platform::workspace_write::WorkspaceWriteLease::acquire(&workspace)
             .await
             .expect("executor released its lease");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn registered_project_command_waits_for_managed_write_admission() {
+        let home = tempfile::tempdir().expect("isolated command home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = home.path().join("project");
+        std::fs::create_dir_all(workspace.join("src")).unwrap();
+        std::fs::write(workspace.join("Cargo.toml"),
+            "[package]\nname = \"lease-command-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(
+            workspace.join("src/lib.rs"),
+            "#[test] fn fixture_passes() { assert_eq!(2 + 2, 4); }\n",
+        )
+        .unwrap();
+        let lease = crate::platform::workspace_write::WorkspaceWriteLease::acquire(&workspace)
+            .await
+            .unwrap();
+        let mut registry = crate::agent::tool_registry::ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        let tool = registry
+            .get("project_command")
+            .expect("real worker registration");
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "managed-command-lease".into(),
+            workspace.to_string_lossy().into_owned(),
+            AgentIdentity::supervisor(),
+        );
+        let execution = executor.execute_batch(vec![(
+            tool,
+            serde_json::json!({"intent":"test","toolchain":"cargo","timeout_secs":30}),
+            "lease-command".into(),
+        )]);
+        tokio::pin!(execution);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), &mut execution)
+                .await
+                .is_err(),
+            "real process dispatch waits for the managed writer"
+        );
+        assert!(
+            !workspace.join("target").exists() && !workspace.join(".arcana-cache").exists(),
+            "no build artifacts or process cache before admission"
+        );
+        drop(lease);
+        let results = tokio::time::timeout(Duration::from_secs(60), execution)
+            .await
+            .expect("command completes after admission")
+            .unwrap();
+        assert!(!results[0].1.is_error, "{}", results[0].1.output);
+        assert!(
+            results[0].1.output.contains("Exit code: 0"),
+            "real command returned its observed passing exit: {}",
+            results[0].1.output
+        );
+        let _next_writer =
+            crate::platform::workspace_write::WorkspaceWriteLease::acquire(&workspace)
+                .await
+                .expect("command releases admission after its handler");
     }
 
     #[tokio::test(flavor = "current_thread")]

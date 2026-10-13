@@ -7490,3 +7490,7 @@ readback.
 ## ADR-LOG-RESTRUCT-0386 — Owner approves isolated renderer IPC receipt harness
 
 On2026-10-13 owner chooses the isolated renderer/IPC receipt alternative proposed in ADR0385. Implement only an explicit test-build feature with fixed checked-in probe and bounded receipt command, real consent/logs UI and exported IPC, fresh owned profile/workspace, no user Vault/live provider, no arbitrary eval listener and finite cleanup. Normal builds retain no probe. Actual renderer and producer/consumer receipts must pass before P4-60/TG4-30 closure. LunaHigh worker owns the isolated harness; root retains integration and status authority.
+
+## ADR-LOG-RESTRUCT-0387 — Serialize managed process writes with shell hooks
+
+On2026-10-13 apply the approved workspace write-lease/copy-back and shell-hook boundary at the owning ToolExecutor admission. Execute, FreeformShell and host-approved install effects acquire the same selected-workspace lease as file mutations before journaling; Board/Network child-agent effects remain outside it to avoid nested-agent deadlock. Existing permission decisions still run first and are unchanged. This closes the concrete cross-tool serialization gap identified in the lease review; actual registered project-command contention/readback and hook cleanup checks are required. Direct untrusted child confinement/staged copy-back remain separate P4-61 proof.
