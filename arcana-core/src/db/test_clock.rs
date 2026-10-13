@@ -536,4 +536,274 @@ mod tests {
         }
         assert!(expected_unified.is_empty(), "all unified rows were read");
     }
+
+    #[test]
+    fn generated_task_auxiliary_writers_round_trip_a_leap_year_and_dst() {
+        use crate::db::tasks::{CreateTaskInput, CreateWorkerRequestInput, TasksDb};
+        use std::collections::HashMap;
+
+        fn canonical_instant(raw: &str) -> DateTime<Utc> {
+            let instant =
+                crate::db::timestamps::parse_db_timestamp(raw).expect("parse generated timestamp");
+            assert_eq!(
+                raw,
+                crate::db::timestamps::format_utc_timestamp(instant),
+                "stored timestamp is in canonical shared format"
+            );
+            instant
+        }
+
+        let home = tempfile::tempdir().expect("isolated annual TasksDb home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let db_path = home.path().join("tasks.db");
+        let instants = yearly_and_dst_instants();
+        assert_eq!(instants.len(), 4400);
+        let _setup = at(instants[0]);
+        let db = TasksDb::open_at(&db_path).expect("actual isolated TasksDb");
+
+        struct AuxiliaryRefs {
+            task_id: i64,
+            route_id: String,
+            request_id: i64,
+            message_id: i64,
+            audit_task_id: i64,
+            created: DateTime<Utc>,
+            updated: DateTime<Utc>,
+        }
+
+        let mut references = Vec::with_capacity(instants.len());
+        for (index, created) in instants.iter().copied().enumerate() {
+            let _created = at(created);
+            let task = db
+                .create(CreateTaskInput {
+                    title: format!("annual auxiliary task {index}"),
+                    description: None,
+                    priority: "p2".into(),
+                    task_type: "feature".into(),
+                    acceptance_criteria: "isolated timestamp fixture".into(),
+                    created_by: Some("annual-clock-test".into()),
+                })
+                .expect("create actual task fixture");
+            let worker = "annual-clock-worker";
+            let route = crate::routing::TaskRouter::assignment_entry(&task, worker);
+            let route_id = route.id.clone();
+            db.assign_with_routing_history(task.id, worker, &route)
+                .expect("actual routed assignment writer");
+            db.claim_task_with_pid(task.id, worker, 10_000 + index as u32)
+                .expect("actual assigned-task claim writer");
+            db.record_build_attempt_for_worker(
+                worker,
+                &format!("annual-session-{index}"),
+                "cargo test",
+                0,
+                "cargo",
+            )
+            .expect("actual build-evidence writer for the claimed task");
+
+            let request = db
+                .create_worker_request(&CreateWorkerRequestInput {
+                    worker_slug: worker.into(),
+                    task_id: Some(task.id),
+                    request_type: "report_issue".into(),
+                    payload: format!("annual request fixture {index}"),
+                })
+                .expect("actual worker-request writer");
+            let message = db
+                .insert_worker_message(
+                    worker,
+                    &format!("annual-recipient-{index}"),
+                    "annual message fixture",
+                    "fyi",
+                    Some(task.id),
+                )
+                .expect("actual worker-message writer");
+
+            let updated = created + chrono::Duration::milliseconds(123);
+            let _updated = at(updated);
+            db.update_worker_request_status(
+                request.id,
+                "completed",
+                Some("annual timestamp fixture resolved"),
+            )
+            .expect("actual worker-request resolution writer");
+            let inbox = db
+                .list_worker_messages_for(&message.to_slug, true)
+                .expect("actual worker inbox reader and read transition");
+            assert_eq!(inbox.len(), 1, "message inbox row {index}");
+            assert_eq!(inbox[0].id, message.id);
+            assert_eq!(inbox[0].created_at, message.created_at);
+            let read_message = db
+                .get_worker_message(message.id)
+                .expect("read message after inbox transition")
+                .expect("message remains available after read");
+            assert_eq!(
+                canonical_instant(read_message.read_at.as_deref().expect("inbox sets read_at")),
+                updated
+            );
+            db.update_status_with_routing_outcome(
+                task.id,
+                "in_progress",
+                worker,
+                "done",
+                Some(worker),
+                None,
+                "success",
+            )
+            .expect("actual task completion and routing-outcome writers");
+
+            let audit_task = db
+                .create(CreateTaskInput {
+                    title: format!("annual budget audit task {index}"),
+                    description: None,
+                    priority: "p2".into(),
+                    task_type: "chore".into(),
+                    acceptance_criteria: "isolated budget resolution fixture".into(),
+                    created_by: Some("annual-clock-test".into()),
+                })
+                .expect("create separate budget audit task");
+            db.set_task_budget(audit_task.id, Some(100), Some(1.0), Some(4))
+                .expect("set budget fixture caps");
+            db.update_task_budget_usage(audit_task.id, 10, 0.1, 1)
+                .expect("record budget fixture usage");
+            db.mark_task_budget_exceeded(audit_task.id, "BUDGET_EXCEEDED_TOKENS")
+                .expect("hold budget audit fixture");
+            db.resolve_exceeded_task_budget(
+                audit_task.id,
+                200,
+                2.0,
+                8,
+                "supervisor",
+                "annual timestamp fixture resolution",
+            )
+            .expect("actual Supervisor budget-resolution writer");
+
+            references.push(AuxiliaryRefs {
+                task_id: task.id,
+                route_id,
+                request_id: request.id,
+                message_id: message.id,
+                audit_task_id: audit_task.id,
+                created,
+                updated,
+            });
+            drop(_updated);
+            drop(_created);
+        }
+        drop(db);
+
+        let reopened = TasksDb::open_at(&db_path).expect("reopen actual TasksDb reader");
+        let mut expected_tasks = references
+            .iter()
+            .map(|reference| (reference.task_id, reference.updated))
+            .collect::<HashMap<_, _>>();
+        let completed = reopened
+            .list(Some("done"))
+            .expect("public completed-task list");
+        assert_eq!(completed.len(), references.len());
+        for task in completed {
+            let expected = expected_tasks
+                .remove(&task.id)
+                .expect("completed-task reader returns each fixture");
+            assert_eq!(
+                canonical_instant(
+                    task.completed_at
+                        .as_deref()
+                        .expect("done task completion timestamp")
+                ),
+                expected
+            );
+        }
+        assert!(expected_tasks.is_empty());
+
+        let mut expected_requests = references
+            .iter()
+            .map(|reference| (reference.request_id, (reference.created, reference.updated)))
+            .collect::<HashMap<_, _>>();
+        let requests = reopened
+            .list_worker_requests(Some("completed"))
+            .expect("public completed worker-request reader");
+        assert_eq!(requests.len(), references.len());
+        for request in requests {
+            let (created, updated) = expected_requests
+                .remove(&request.id)
+                .expect("request reader returns each fixture");
+            assert_eq!(canonical_instant(&request.created_at), created);
+            assert_eq!(
+                canonical_instant(
+                    request
+                        .resolved_at
+                        .as_deref()
+                        .expect("completed request timestamp")
+                ),
+                updated
+            );
+        }
+        assert!(expected_requests.is_empty());
+
+        let mut expected_messages = references
+            .iter()
+            .map(|reference| (reference.message_id, (reference.created, reference.updated)))
+            .collect::<HashMap<_, _>>();
+        let messages = reopened
+            .list_recent_worker_messages(references.len() as i64)
+            .expect("public recent-message reader");
+        assert_eq!(messages.len(), references.len());
+        for message in messages {
+            let (created, read) = expected_messages
+                .remove(&message.id)
+                .expect("message reader returns each fixture");
+            assert_eq!(canonical_instant(&message.created_at), created);
+            assert_eq!(
+                canonical_instant(message.read_at.as_deref().expect("inbox read timestamp")),
+                read
+            );
+        }
+        assert!(expected_messages.is_empty());
+
+        let mut expected_routes = references
+            .iter()
+            .map(|reference| {
+                (
+                    reference.route_id.as_str(),
+                    (reference.created, reference.updated),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let routes = reopened
+            .get_routing_history(references.len() as i64)
+            .expect("public routing-history reader");
+        assert_eq!(routes.len(), references.len());
+        for route in routes {
+            let (assigned, outcome) = expected_routes
+                .remove(route.id.as_str())
+                .expect("routing reader returns each fixture");
+            assert_eq!(canonical_instant(&route.assigned_at), assigned);
+            assert_eq!(
+                canonical_instant(
+                    route
+                        .outcome_at
+                        .as_deref()
+                        .expect("routing outcome timestamp")
+                ),
+                outcome
+            );
+        }
+        assert!(expected_routes.is_empty());
+
+        for reference in &references {
+            let evidence = reopened
+                .latest_build_evidence(reference.task_id)
+                .expect("public build-evidence reader")
+                .expect("recorded build-evidence row");
+            assert_eq!(canonical_instant(&evidence.created_at), reference.created);
+            let resolutions = reopened
+                .get_task_budget_resolution_history(reference.audit_task_id, 20)
+                .expect("public budget-resolution history reader");
+            assert_eq!(resolutions.len(), 1);
+            assert_eq!(
+                canonical_instant(&resolutions[0].resolved_at),
+                reference.updated
+            );
+        }
+    }
 }
