@@ -3056,6 +3056,162 @@ mod tests {
     }
 
     #[test]
+    fn generated_run_journal_writers_round_trip_a_leap_year_and_dst() {
+        use chrono::{Duration, Utc};
+
+        fn assert_timestamp(raw: &str, expected: chrono::DateTime<Utc>) {
+            assert_eq!(raw, crate::db::timestamps::format_utc_timestamp(expected));
+            assert_eq!(
+                parse_db_timestamp(raw).expect("parse persisted timestamp"),
+                expected
+            );
+        }
+
+        let path = temp_db("annual-run-journal");
+        let db = RunsDb::open_at(&path).expect("open explicit temporary RunsDb");
+        let instants = crate::db::test_clock::yearly_and_dst_instants();
+        assert_eq!(instants.len(), 4_400);
+        let mut references = Vec::with_capacity(instants.len());
+
+        for (index, instant) in instants.into_iter().enumerate() {
+            let worker_slug = format!("annual-run-worker-{index}");
+            let session_id = format!("annual-run-session-{index}");
+            let _started = crate::db::test_clock::at(instant);
+            let run_id = db
+                .begin_worker_tick(&worker_slug, &session_id)
+                .expect("actual worker run/state writer");
+
+            let initial = db
+                .latest_worker_tick(&worker_slug)
+                .expect("actual worker state reader")
+                .expect("worker state exists");
+            assert_timestamp(&initial.heartbeat_at, instant);
+
+            let phase_at = instant + Duration::milliseconds(10);
+            let _phase_clock = crate::db::test_clock::at(phase_at);
+            db.update_worker_tick_phase(&run_id, "retrying", None, None)
+                .expect("actual phase timestamp writer");
+            let phase = db
+                .latest_worker_tick(&worker_slug)
+                .expect("read phase update")
+                .expect("worker state exists");
+            assert_timestamp(&phase.heartbeat_at, phase_at);
+            drop(_phase_clock);
+
+            let heartbeat_at = instant + Duration::milliseconds(20);
+            let _heartbeat_clock = crate::db::test_clock::at(heartbeat_at);
+            db.heartbeat_worker_tick(&run_id)
+                .expect("actual heartbeat timestamp writer");
+            let heartbeat = db
+                .latest_worker_tick(&worker_slug)
+                .expect("read heartbeat update")
+                .expect("worker state exists");
+            assert_timestamp(&heartbeat.heartbeat_at, heartbeat_at);
+            drop(_heartbeat_clock);
+
+            let progress_at = instant + Duration::milliseconds(30);
+            let _progress_clock = crate::db::test_clock::at(progress_at);
+            db.record_worker_progress(&run_id, None, "annual_operation_ok")
+                .expect("actual worker progress and event writers");
+            let progress = db
+                .latest_worker_tick(&worker_slug)
+                .expect("read progress state")
+                .expect("worker state exists");
+            assert_timestamp(
+                progress
+                    .last_progress_at
+                    .as_deref()
+                    .expect("progress timestamp persisted"),
+                progress_at,
+            );
+            assert_timestamp(&progress.heartbeat_at, progress_at);
+            let progress_events = db
+                .recent_worker_progress(&run_id, 10)
+                .expect("actual progress event reader");
+            assert_eq!(progress_events.len(), 1);
+            assert_timestamp(&progress_events[0].0, progress_at);
+            drop(_progress_clock);
+
+            let intent_at = instant + Duration::milliseconds(40);
+            let operation_id = format!("annual-operation-{index}");
+            let _intent_clock = crate::db::test_clock::at(intent_at);
+            let intent_cursor = db
+                .record_operation_intent(
+                    &run_id,
+                    None,
+                    &operation_id,
+                    "annual_operation",
+                    "Board",
+                    &[],
+                )
+                .expect("actual operation intent writer");
+            let active = db
+                .active_worker_operation(&run_id)
+                .expect("actual active operation timestamp reader")
+                .expect("unresolved intent remains active during its run");
+            assert_timestamp(&active.started_at, intent_at);
+            drop(_intent_clock);
+
+            let outcome_at = instant + Duration::milliseconds(50);
+            let _outcome_clock = crate::db::test_clock::at(outcome_at);
+            db.record_operation_outcome(&run_id, intent_cursor, OperationOutcome::Ok, &[])
+                .expect("actual operation outcome writer");
+            drop(_outcome_clock);
+
+            let finished_at = instant + Duration::milliseconds(60);
+            let _finish_clock = crate::db::test_clock::at(finished_at);
+            db.finish_worker_tick(&run_id, "completed", outcome::OK, None)
+                .expect("actual worker terminal heartbeat writer");
+            references.push((
+                worker_slug,
+                run_id,
+                progress_at,
+                finished_at,
+                intent_at,
+                outcome_at,
+            ));
+        }
+
+        drop(db);
+        let reopened = RunsDb::open_at(&path).expect("reopen explicit temporary RunsDb");
+        for (worker_slug, run_id, progress_at, finished_at, intent_at, outcome_at) in references {
+            let state = reopened
+                .latest_worker_tick(&worker_slug)
+                .expect("read reopened worker state")
+                .expect("reopened worker state exists");
+            assert_timestamp(&state.heartbeat_at, finished_at);
+            assert_timestamp(
+                state
+                    .last_progress_at
+                    .as_deref()
+                    .expect("reopened progress timestamp"),
+                progress_at,
+            );
+            let events = reopened
+                .recent_worker_progress(&run_id, 10)
+                .expect("read reopened worker events");
+            assert_eq!(events.len(), 1);
+            assert_timestamp(&events[0].0, progress_at);
+
+            let page = reopened
+                .operation_journal_page(&run_id, 0, 10)
+                .expect("read reopened operation journal page");
+            assert_eq!(page.entries.len(), 1);
+            assert!(!page.has_more);
+            let entry = &page.entries[0];
+            assert_timestamp(&entry.intent_at, intent_at);
+            assert_timestamp(
+                entry
+                    .outcome_at
+                    .as_deref()
+                    .expect("reopened outcome timestamp"),
+                outcome_at,
+            );
+            assert_eq!(entry.outcome, OperationOutcome::Ok);
+        }
+    }
+
+    #[test]
     fn worker_run_phase_heartbeat_progress_and_terminal_outcome_round_trip() {
         let path = temp_db("worker-roundtrip");
         let db = RunsDb::open_at(&path).expect("open");
