@@ -2177,6 +2177,65 @@ mod p8_execution_registry_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn malformed_hook_configuration_blocks_the_registered_file_handler() {
+        use crate::hooks::types::{AddHookInput, HookAction, HookType};
+        let home = tempfile::tempdir().expect("isolated hook profile");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        let db = crate::hooks::db::HooksDb::open().unwrap();
+        let hook = db
+            .insert(&AddHookInput {
+                name: "malformed hook guard".into(),
+                hook_type: HookType::PreToolUse,
+                enabled: Some(true),
+                priority: Some(100),
+                conditions: None,
+                action: HookAction::Block { message: None },
+            })
+            .unwrap();
+        crate::db::config_db::open()
+            .unwrap()
+            .execute(
+                "UPDATE hooks SET priority = 'malformed' WHERE id = ?1",
+                [&hook.id],
+            )
+            .unwrap();
+        assert!(
+            db.list_all().is_err(),
+            "the desktop list reader propagates corruption"
+        );
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "malformed-hooks-session".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::supervisor(),
+        );
+        let tool: Arc<dyn Tool> = Arc::new(crate::agent::builtin_tools::write_file::WriteFileTool);
+        let input = serde_json::json!({"path":"guarded.txt", "content":"safe fixture"});
+        let results = executor
+            .execute_batch(vec![(
+                tool.clone(),
+                input.clone(),
+                "blocked-hook-call".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(results[0].1.is_error);
+        assert!(!workspace.path().join("guarded.txt").exists());
+        db.delete(&hook.id).unwrap();
+        let results = executor
+            .execute_batch(vec![(tool, input, "allowed-hook-call".into())])
+            .await
+            .unwrap();
+        assert!(!results[0].1.is_error, "{}", results[0].1.output);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("guarded.txt")).unwrap(),
+            "safe fixture"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn managed_write_waits_for_workspace_lease_before_the_real_file_handler() {
         let home = tempfile::tempdir().expect("isolated home and workspace");
         let _home = crate::db::test_support::with_home(home.path());

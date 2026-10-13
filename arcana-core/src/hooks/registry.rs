@@ -13,13 +13,14 @@ pub struct HookRegistry;
 
 impl HookRegistry {
     /// Fire all enabled hooks matching `hook_type` and `ctx`.
-    /// Returns true if execution should continue (false only if a `Block` hook fires).
+    /// Returns true only when hooks were loaded successfully and none blocked.
+    /// A database or decoding failure cannot establish permission to continue.
     pub async fn fire(hook_type: &HookType, ctx: &HookContext) -> bool {
         let db = match HooksDb::open() {
             Ok(d) => d,
             Err(e) => {
                 warn!("[HookRegistry] Cannot open hooks DB: {e}");
-                return true;
+                return false;
             }
         };
 
@@ -27,7 +28,7 @@ impl HookRegistry {
             Ok(h) => h,
             Err(e) => {
                 warn!("[HookRegistry] list_by_type error: {e}");
-                return true;
+                return false;
             }
         };
 

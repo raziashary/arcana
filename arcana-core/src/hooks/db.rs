@@ -56,7 +56,9 @@ impl HooksDb {
         let rows = stmt
             .query_map([], row_to_hook)
             .map_err(|e| ArcanaError::Agent(format!("HooksDb query: {e}")))?;
-        let hooks = rows.filter_map(|r| r.ok()).collect::<Vec<_>>();
+        let hooks = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| ArcanaError::Agent(format!("HooksDb list_all decode: {e}")))?;
         operation.with_result_count(hooks.len()).succeed();
         Ok(hooks)
     }
@@ -72,7 +74,9 @@ impl HooksDb {
         let rows = stmt
             .query_map(params![type_str], row_to_hook)
             .map_err(|e| ArcanaError::Agent(format!("HooksDb query: {e}")))?;
-        let hooks = rows.filter_map(|r| r.ok()).collect::<Vec<_>>();
+        let hooks = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| ArcanaError::Agent(format!("HooksDb list_by_type decode: {e}")))?;
         operation.with_result_count(hooks.len()).succeed();
         Ok(hooks)
     }
@@ -382,6 +386,39 @@ fn parse_hook_type(s: &str) -> HookType {
 #[cfg(test)]
 mod portability_tests {
     use super::*;
+
+    #[test]
+    fn hook_lists_reject_malformed_rows_instead_of_returning_partial_success() {
+        let db = db();
+        for name in ["valid", "broken"] {
+            let hook = db
+                .insert(&AddHookInput {
+                    name: name.into(),
+                    hook_type: HookType::PreToolUse,
+                    enabled: Some(true),
+                    priority: Some(100),
+                    conditions: None,
+                    action: HookAction::Block { message: None },
+                })
+                .unwrap();
+            if name == "broken" {
+                db.conn
+                    .execute(
+                        "UPDATE hooks SET priority = 'malformed' WHERE id = ?1",
+                        [&hook.id],
+                    )
+                    .unwrap();
+            }
+        }
+        assert!(db.list_all().is_err());
+        assert!(db.list_by_type(&HookType::PreToolUse).is_err());
+        assert!(db.list_by_type(&HookType::PostToolUse).unwrap().is_empty());
+        db.conn
+            .execute("UPDATE hooks SET priority = 100 WHERE name = 'broken'", [])
+            .unwrap();
+        assert_eq!(db.list_all().unwrap().len(), 2);
+        assert_eq!(db.list_by_type(&HookType::PreToolUse).unwrap().len(), 2);
+    }
 
     fn db() -> HooksDb {
         let conn = Connection::open_in_memory().unwrap();
