@@ -3121,7 +3121,11 @@ fn main() {
             .latest_project_build_batch_status(task.id)
             .expect("read build batch status")
             .expect("persisted build batch");
-        assert_eq!(batch.0, "failed");
+        assert_eq!(
+            batch.0, "failed",
+            "project command result: {}",
+            result.output
+        );
         assert_eq!(batch.1, 2, "both ecosystems were selected");
         assert_eq!(
             batch.2, 1,
@@ -3790,7 +3794,8 @@ fn main() {
 
     #[tokio::test]
     async fn spawned_process_exit_status_is_the_status_that_is_returned() {
-        let project = std::env::current_dir().expect("current directory");
+        let fixture = tempfile::tempdir().expect("isolated shell workspace");
+        let project = fixture.path();
         #[cfg(windows)]
         let cases: &[(&str, &[&str], i32)] = &[
             ("cmd.exe", &["/d", "/c", "exit /b 0"], 0),
@@ -3811,7 +3816,7 @@ fn main() {
             &[("sh", &["-c", "exit 0"], 0), ("sh", &["-c", "exit 17"], 17)];
 
         for (program, args, expected) in cases {
-            let actual = run_child_for_test(program, args, &project).await;
+            let actual = run_child_for_test(program, args, project).await;
             assert_eq!(actual.exit_code, *expected, "{program} {args:?}");
         }
     }
