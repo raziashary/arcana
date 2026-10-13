@@ -11,10 +11,12 @@ use crate::provider::types::{
     CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus, StreamChunk,
 };
 use crate::provider::usage::Usage;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 struct NativeFixtureProvider {
     task_id: i64,
     requests: Mutex<Vec<CompletionRequest>>,
+    fail_requests: AtomicBool,
 }
 
 #[async_trait]
@@ -39,6 +41,12 @@ impl Provider for NativeFixtureProvider {
     }
     async fn stream(&self, request: CompletionRequest) -> Result<StreamResult> {
         assert_eq!(request.model, "gemini-3.8-flash");
+        self.requests.lock().unwrap().push(request.clone());
+        if self.fail_requests.load(Ordering::SeqCst) {
+            return Err(crate::errors::ArcanaError::Agent(
+                "scripted provider failure".into(),
+            ));
+        }
         let qc = request.messages.iter().flat_map(|message| &message.content).any(|content| {
             matches!(content, MessageContent::Text { text } if text.contains("Begin QC review of task #"))
         });
@@ -99,16 +107,14 @@ impl Provider for NativeFixtureProvider {
             },
         });
         chunks.push(StreamChunk::Done);
-        self.requests.lock().unwrap().push(request);
         Ok(Box::pin(futures::stream::iter(chunks.into_iter().map(Ok))))
     }
 }
 
-// Install process-global manager/analytics only in an explicit fresh invocation.
-// Ordinary no-manager negative fixtures must never run alongside this test.
+// This fixture is filtered into a fresh test process because the manager and
+// analytics are process-global and one-shot.
 #[tokio::test]
-#[ignore = "requires an isolated test process for native manager OnceLock"]
-async fn registered_subagent_tools_execute_children_and_read_back_qc_accounting() {
+async fn native_subagent_tools_use_scripted_provider_and_return_real_results() {
     let home = tempfile::tempdir().unwrap();
     let _home = crate::db::test_support::with_home(home.path());
     let analytics = Arc::new(crate::analytics::AnalyticsManager::new().await.unwrap());
@@ -183,6 +189,7 @@ async fn registered_subagent_tools_execute_children_and_read_back_qc_accounting(
     let provider = Arc::new(NativeFixtureProvider {
         task_id: task.id,
         requests: Mutex::new(Vec::new()),
+        fail_requests: AtomicBool::new(false),
     });
     let mut state = AppState::new();
     state.active_provider = Some("google".into());
@@ -286,4 +293,129 @@ async fn registered_subagent_tools_execute_children_and_read_back_qc_accounting(
     assert_eq!(requests.len(), 5, "one single, two parallel, two QC turns");
     assert!(requests.iter().any(|request| request.messages.iter().flat_map(|message| &message.content)
         .any(|content| matches!(content, MessageContent::ToolResult { name, is_error: false, .. } if name == "get_task"))));
+    drop(requests);
+
+    // Continue through the same production registrations and manager, but make
+    // every child provider call fail deterministically before yielding output.
+    // The canaries are in actual child prompts (and QC repo context), while the
+    // provider error itself is fixed and does not reflect request content.
+    provider.fail_requests.store(true, Ordering::SeqCst);
+    let failure_marker = "NATIVE_SUBAGENT_PRIVATE_FAILURE_CANARY";
+    let failure_cases = [
+        (
+            "spawn_subagent",
+            json!({"task_description":failure_marker, "timeout_secs":15}),
+        ),
+        (
+            "spawn_parallel_subagents",
+            json!({"subtasks":[{"task_description":failure_marker},{"task_description":failure_marker}], "timeout_secs":15}),
+        ),
+        (
+            "spawn_qc_review",
+            json!({"task_id":task.id, "repo_path":failure_marker, "timeout_secs":15}),
+        ),
+    ];
+    let mut failed_ids = Vec::new();
+    for (name, input) in failure_cases {
+        let call_id = format!("native-failure-{name}");
+        let result = tokio::time::timeout(
+            Duration::from_secs(25),
+            executor.execute_batch(vec![(registry.get(name).unwrap(), input, call_id.clone())]),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .pop()
+        .unwrap();
+        assert_eq!(result.0, call_id);
+        assert!(
+            !result.1.output.contains(failure_marker),
+            "{name} reflected private child input: {}",
+            result.1.output
+        );
+        if name != "spawn_qc_review" {
+            assert!(
+                result.1.is_error,
+                "{name} unexpectedly succeeded: {}",
+                result.1.output
+            );
+        } else {
+            assert!(
+                !result.1.is_error,
+                "QC dispatch is synchronous; child failure is asynchronous: {}",
+                result.1.output
+            );
+        }
+        match name {
+            "spawn_subagent" => {
+                let summaries = manager.list(Some("native-parent")).await;
+                let newly_failed: Vec<_> = summaries
+                    .iter()
+                    .filter(|child| child.status == SubagentStatus::Failed)
+                    .map(|child| child.id.clone())
+                    .collect();
+                assert_eq!(newly_failed.len(), 1);
+                failed_ids.extend(newly_failed);
+            }
+            "spawn_parallel_subagents" => {
+                let summaries = manager.list(Some("native-parent")).await;
+                let newly_failed: Vec<_> = summaries
+                    .iter()
+                    .filter(|child| child.status == SubagentStatus::Failed)
+                    .map(|child| child.id.clone())
+                    .collect();
+                assert_eq!(
+                    newly_failed.len(),
+                    3,
+                    "single plus two parallel child failures"
+                );
+                assert!(result.1.output.contains("all 2 subagent(s) failed"));
+                for id in newly_failed {
+                    if !failed_ids.contains(&id) {
+                        failed_ids.push(id);
+                    }
+                }
+            }
+            _ => {
+                let value: Value = serde_json::from_str(&result.1.output).unwrap();
+                let id = value["subagent_id"].as_str().unwrap().to_string();
+                tokio::time::timeout(Duration::from_secs(20), async {
+                    loop {
+                        let persisted = db.get_by_id(task.id).unwrap().unwrap();
+                        if manager.get_status(&id).await.unwrap() == SubagentStatus::Failed
+                            && persisted.under_review_by.is_none()
+                        {
+                            break;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("QC provider failure must reach terminal failed status and release claim");
+                let summaries = manager.list(Some("native-parent")).await;
+                let newly_failed: Vec<_> = summaries
+                    .iter()
+                    .filter(|child| child.status == SubagentStatus::Failed)
+                    .map(|child| child.id.clone())
+                    .collect();
+                assert_eq!(newly_failed.len(), 4);
+                failed_ids.push(id);
+            }
+        }
+    }
+    assert_eq!(failed_ids.len(), 4);
+    let all_children = manager.list(Some("native-parent")).await;
+    for id in failed_ids {
+        assert!(all_children
+            .iter()
+            .any(|child| child.id == id && child.status == SubagentStatus::Failed));
+    }
+    let failed_requests = provider.requests.lock().unwrap();
+    assert_eq!(
+        failed_requests.len(),
+        9,
+        "five success generations plus four failed children"
+    );
+    assert!(failed_requests.iter().any(|request| request.messages.iter().flat_map(|message| &message.content)
+        .any(|content| matches!(content, MessageContent::Text { text } if text.contains(failure_marker)))));
 }
