@@ -18,6 +18,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::errors::Result;
+#[cfg(not(feature = "e2e-ipc-receipt"))]
 use crate::vault::keychain::{github_pat_key, provider_key, VaultBackend, VaultManager};
 
 /// Providers whose keys are probed by `list_vault_entries`.
@@ -26,6 +27,7 @@ use crate::vault::keychain::{github_pat_key, provider_key, VaultBackend, VaultMa
 /// under a retired provider is precisely the orphan this command exists to
 /// surface — dropping the id from the list would hide the secret in the user's
 /// keychain rather than let them delete it.
+#[cfg(not(feature = "e2e-ipc-receipt"))]
 const PROBED_PROVIDERS: &[&str] = &[
     // Current
     "anthropic",
@@ -88,7 +90,16 @@ pub struct VaultBackendInfo {
 /// Report the credential store in use (`P2-71`).
 #[tauri::command]
 pub fn vault_backend_info() -> VaultBackendInfo {
+    #[cfg(feature = "e2e-ipc-receipt")]
+    return VaultBackendInfo {
+        label: "Isolated receipt profile".into(),
+        note: "Credential storage is disabled in this isolated test build.".into(),
+        is_os_keychain: false,
+    };
+
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
     let b = VaultManager::backend();
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
     VaultBackendInfo {
         label: b.label().to_string(),
         note: b.security_note().to_string(),
@@ -99,6 +110,7 @@ pub fn vault_backend_info() -> VaultBackendInfo {
 /// Last four characters of a secret, or empty if it is too short to mask.
 ///
 /// Below eight characters, four would be half the secret.
+#[cfg(not(feature = "e2e-ipc-receipt"))]
 fn masked_last4(secret: &str) -> String {
     let count = secret.chars().count();
     if count < 8 {
@@ -108,6 +120,7 @@ fn masked_last4(secret: &str) -> String {
 }
 
 /// Whether a provider id is one Arcana currently supports.
+#[cfg(not(feature = "e2e-ipc-receipt"))]
 fn is_supported_provider(id: &str) -> bool {
     matches!(id, "anthropic" | "openai" | "google")
 }
@@ -134,6 +147,16 @@ fn is_supported_provider(id: &str) -> bool {
 /// costs nothing and it cannot be satisfied by a syntactically plausible key.
 #[tauri::command]
 pub async fn set_provider_key(provider: String, api_key: String) -> Result<VaultWriteResult> {
+    #[cfg(feature = "e2e-ipc-receipt")]
+    {
+        let _ = (provider, api_key);
+        return Err(crate::errors::ArcanaError::Agent(
+            "credential storage is disabled in the isolated receipt build".into(),
+        ));
+    }
+
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
+    {
     let trimmed = api_key.trim().to_string();
     if trimmed.is_empty() {
         return Err(crate::errors::ArcanaError::Vault(
@@ -175,6 +198,7 @@ pub async fn set_provider_key(provider: String, api_key: String) -> Result<Vault
         ok: true,
         masked_last4: masked_last4(&trimmed),
     })
+    }
 }
 
 /// Whether a key is stored for this provider. Never returns the key.
@@ -184,11 +208,25 @@ pub async fn set_provider_key(provider: String, api_key: String) -> Result<Vault
 /// left the plaintext key in freed heap memory on every Settings render.
 #[tauri::command]
 pub fn has_provider_key(provider: String) -> Result<bool> {
+    #[cfg(feature = "e2e-ipc-receipt")]
+    {
+        let _ = provider;
+        return Ok(false);
+    }
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
     VaultManager::exists(&provider_key(&provider))
 }
 
 #[tauri::command]
 pub fn delete_provider_key(provider: String) -> Result<()> {
+    #[cfg(feature = "e2e-ipc-receipt")]
+    {
+        let _ = provider;
+        return Err(crate::errors::ArcanaError::Agent(
+            "credential storage is disabled in the isolated receipt build".into(),
+        ));
+    }
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
     VaultManager::delete(&provider_key(&provider))
 }
 
@@ -196,6 +234,16 @@ pub fn delete_provider_key(provider: String) -> Result<()> {
 
 #[tauri::command]
 pub fn set_github_pat(pat: String) -> Result<VaultWriteResult> {
+    #[cfg(feature = "e2e-ipc-receipt")]
+    {
+        let _ = pat;
+        return Err(crate::errors::ArcanaError::Agent(
+            "credential storage is disabled in the isolated receipt build".into(),
+        ));
+    }
+
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
+    {
     let trimmed = pat.trim();
     if trimmed.is_empty() {
         return Err(crate::errors::ArcanaError::Vault(
@@ -207,6 +255,7 @@ pub fn set_github_pat(pat: String) -> Result<VaultWriteResult> {
         ok: true,
         masked_last4: masked_last4(trimmed),
     })
+    }
 }
 
 /// Whether a GitHub PAT is stored.
@@ -217,11 +266,20 @@ pub fn set_github_pat(pat: String) -> Result<VaultWriteResult> {
 /// without any error surfacing.
 #[tauri::command]
 pub fn has_github_pat() -> Result<bool> {
+    #[cfg(feature = "e2e-ipc-receipt")]
+    return Ok(false);
+
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
     VaultManager::exists(&github_pat_key())
 }
 
 #[tauri::command]
 pub fn delete_github_pat() -> Result<()> {
+    #[cfg(feature = "e2e-ipc-receipt")]
+    return Err(crate::errors::ArcanaError::Agent(
+        "credential storage is disabled in the isolated receipt build".into(),
+    ));
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
     VaultManager::delete(&github_pat_key())
 }
 
@@ -243,68 +301,76 @@ pub fn delete_github_pat() -> Result<()> {
 /// the probe list is what still finds those.
 #[tauri::command]
 pub fn list_vault_entries() -> Result<Vec<VaultEntryStatus>> {
-    let backend = VaultManager::backend();
-    let mut entries: Vec<VaultEntryStatus> = Vec::new();
+    // The test build's Settings UI must not probe or enumerate the developer's
+    // OS keychain. The disposable receipt profile intentionally has no entries.
+    #[cfg(feature = "e2e-ipc-receipt")]
+    return Ok(Vec::new());
 
-    let mut seen: Vec<String> = Vec::new();
-    let mut push = |entries: &mut Vec<VaultEntryStatus>,
-                    seen: &mut Vec<String>,
-                    key: String,
-                    label: String,
-                    orphaned_if_present: bool|
-     -> Result<()> {
-        if seen.contains(&key) {
-            return Ok(());
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
+    {
+        let backend = VaultManager::backend();
+        let mut entries: Vec<VaultEntryStatus> = Vec::new();
+
+        let mut seen: Vec<String> = Vec::new();
+        let mut push = |entries: &mut Vec<VaultEntryStatus>,
+                        seen: &mut Vec<String>,
+                        key: String,
+                        label: String,
+                        orphaned_if_present: bool|
+         -> Result<()> {
+            if seen.contains(&key) {
+                return Ok(());
+            }
+            seen.push(key.clone());
+            let present = VaultManager::exists(&key)?;
+            entries.push(VaultEntryStatus {
+                key,
+                label,
+                present,
+                orphaned: present && orphaned_if_present,
+                backend: backend.label().to_string(),
+                backend_note: backend.security_note().to_string(),
+            });
+            Ok(())
+        };
+
+        for id in PROBED_PROVIDERS {
+            push(
+                &mut entries,
+                &mut seen,
+                provider_key(id),
+                format!("{id} API key"),
+                !is_supported_provider(id),
+            )?;
         }
-        seen.push(key.clone());
-        let present = VaultManager::exists(&key)?;
-        entries.push(VaultEntryStatus {
-            key,
-            label,
-            present,
-            orphaned: present && orphaned_if_present,
-            backend: backend.label().to_string(),
-            backend_note: backend.security_note().to_string(),
-        });
-        Ok(())
-    };
 
-    for id in PROBED_PROVIDERS {
         push(
             &mut entries,
             &mut seen,
-            provider_key(id),
-            format!("{id} API key"),
-            !is_supported_provider(id),
+            github_pat_key(),
+            "GitHub personal access token".to_string(),
+            false,
         )?;
+
+        // Anything the index knows about that the probe list does not. These are
+        // orphans by definition: nothing in the current product writes a key the
+        // probe list has never heard of.
+        for key in VaultManager::enumerate()? {
+            let label = key
+                .strip_prefix("provider.")
+                .and_then(|r| r.strip_suffix(".api_key"))
+                .map(|id| format!("{id} API key (unrecognised provider)"))
+                .unwrap_or_else(|| format!("{key} (unrecognised entry)"));
+            push(&mut entries, &mut seen, key, label, true)?;
+        }
+
+        Ok(entries)
     }
-
-    push(
-        &mut entries,
-        &mut seen,
-        github_pat_key(),
-        "GitHub personal access token".to_string(),
-        false,
-    )?;
-
-    // Anything the index knows about that the probe list does not. These are
-    // orphans by definition: nothing in the current product writes a key the
-    // probe list has never heard of.
-    for key in VaultManager::enumerate()? {
-        let label = key
-            .strip_prefix("provider.")
-            .and_then(|r| r.strip_suffix(".api_key"))
-            .map(|id| format!("{id} API key (unrecognised provider)"))
-            .unwrap_or_else(|| format!("{key} (unrecognised entry)"));
-        push(&mut entries, &mut seen, key, label, true)?;
-    }
-
-    Ok(entries)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "e2e-ipc-receipt")))]
 mod tests {
     use super::*;
 

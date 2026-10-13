@@ -7,12 +7,14 @@ use tauri::{Emitter, State};
 use crate::errors::ArcanaError;
 use crate::updater::{
     self,
-    check::{UpdateChannel, UpdateInfo},
+    check::UpdateInfo,
     download::{DownloadProgress, DownloadStage},
     install::{InstallResult, UpdateRecord},
     persistence::IntegrityReport,
     UpdaterState,
 };
+#[cfg(not(feature = "e2e-ipc-receipt"))]
+use crate::updater::check::UpdateChannel;
 
 // ─── Check ────────────────────────────────────────────────────────────────────
 
@@ -22,19 +24,29 @@ pub async fn check_for_update(
     state: State<'_, Arc<UpdaterState>>,
     channel: Option<String>,
 ) -> Result<Option<UpdateInfo>, ArcanaError> {
-    let ch = match channel.as_deref() {
-        Some("beta") => UpdateChannel::Beta,
-        Some("nightly") => UpdateChannel::Nightly,
-        _ => UpdateChannel::Stable,
-    };
+    // The isolated receipt build must not perform a network update check.
+    #[cfg(feature = "e2e-ipc-receipt")]
+    {
+        let _ = (state, channel);
+        return Ok(None);
+    }
 
-    match updater::check_for_update(updater::APP_VERSION, ch).await {
-        Ok(Some(info)) if !updater::is_skipped(&info.version) => {
-            *state.latest.lock().await = Some(info.clone());
-            Ok(Some(info))
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
+    {
+        let ch = match channel.as_deref() {
+            Some("beta") => UpdateChannel::Beta,
+            Some("nightly") => UpdateChannel::Nightly,
+            _ => UpdateChannel::Stable,
+        };
+
+        match updater::check_for_update(updater::APP_VERSION, ch).await {
+            Ok(Some(info)) if !updater::is_skipped(&info.version) => {
+                *state.latest.lock().await = Some(info.clone());
+                Ok(Some(info))
+            }
+            Ok(_) => Ok(None),
+            Err(e) => Err(ArcanaError::from(e)),
         }
-        Ok(_) => Ok(None),
-        Err(e) => Err(ArcanaError::from(e)),
     }
 }
 

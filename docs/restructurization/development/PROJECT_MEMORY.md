@@ -1,7 +1,7 @@
 # Arcana working memory (updated 2026-10-13)
 
-**Current navigation (ADR0391):** P4 is Windows-first, **45/59 tasks checked and
-23/33 TG4 gates passing** after the named QC, diagnosis and timestamp
+**Current navigation (ADR0391):** P4 is Windows-first, **46/59 tasks checked and
+24/33 TG4 gates passing** after the named QC, diagnosis, timestamp and consent
 closeouts. Windows PA → Fleet engineering, full built-in failure,
 graph/MCP/observability proof and the owner's final Calendar P4-49 remain.
 P4-14/TG4-07, P4-15/TG4-08 and P4-57/TG4-19 close on their named Windows
@@ -17,7 +17,7 @@ below are historical snapshots. No second paid provider run is authorized.
 
 Current state: active, following owner resume and ADR0359 approvals. Historical
 paused/pending notes are superseded. Shared prefix hardening and provider cancellation units are verified. Offline production CLI success/deadline/export harness passes 5/5;
-Live-provider Fleet completion, strict sandbox, and desktop attachment remain open. The Windows shell-hook lifecycle subproof passes seven focused tests, and the Linux staging planner module passes 8/8; see _verify/P4-61-SHELL-HOOK-BOUNDARY-2026-10-12.md and _verify/P4-61-COPYBACK-WIRING-NEXT-2026-10-12.md.
+Live-provider Fleet completion and strict sandbox remain open. The isolated real desktop consent/Logs/export receipt passes; see _verify/P4-60-IPC-RECEIPT-2026-10-13.md. The Windows shell-hook lifecycle subproof passes seven focused tests, and the Linux staging planner module passes 8/8; see _verify/P4-61-SHELL-HOOK-BOUNDARY-2026-10-12.md and _verify/P4-61-COPYBACK-WIRING-NEXT-2026-10-12.md.
 
 Latest checkpoint plus dated 2026-10-12 follow-up reports: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`.
 Current tally: **42/59 P4, 20/33 TG4**. P4-62/TG4-32 close on their own deadline/timing proof (ADR0374). P4-39 remains closed on its saved-Fleet and retained-audit proof. Retention P4-59/TG4-21 is proven

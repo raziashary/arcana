@@ -2,9 +2,11 @@
 
 use crate::agent::context::ContextBuilder;
 use crate::errors::{ArcanaError, Result};
-use crate::provider::traits::Provider;
 use crate::provider::types::{ModelInfo, ProviderStatus};
 use crate::state::AppState;
+#[cfg(not(feature = "e2e-ipc-receipt"))]
+use crate::provider::traits::Provider;
+#[cfg(not(feature = "e2e-ipc-receipt"))]
 use crate::vault::keychain::{provider_key, VaultManager};
 use arcana_core::state::lock::LockTolerant;
 use serde::{Deserialize, Serialize};
@@ -22,12 +24,19 @@ pub struct ProviderInfo {
 
 #[tauri::command]
 pub async fn list_providers(_state: State<'_, Arc<Mutex<AppState>>>) -> Result<Vec<ProviderInfo>> {
+    // The receipt build must render Settings without even probing the host
+    // credential store. Consent UI uses the GitHub MCP row independently.
+    #[cfg(feature = "e2e-ipc-receipt")]
+    return Ok(Vec::new());
+
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
     supported_provider_labels()?
         .into_iter()
         .map(|(id, name)| build_provider_info(id, name))
         .collect()
 }
 
+#[cfg(not(feature = "e2e-ipc-receipt"))]
 fn supported_provider_labels() -> Result<Vec<(&'static str, &'static str)>> {
     arcana_core::provider::factory::supported_ids()
         .into_iter()
@@ -47,6 +56,7 @@ fn supported_provider_labels() -> Result<Vec<(&'static str, &'static str)>> {
         .collect()
 }
 
+#[cfg(not(feature = "e2e-ipc-receipt"))]
 fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
     // P2-70. `VaultManager::get(..).is_some()` pulled the plaintext key out of
     // the keychain to compute a boolean and dropped it unzeroized — on every
@@ -70,16 +80,28 @@ fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
 
 #[tauri::command]
 pub async fn test_provider_connection(provider: String) -> Result<ProviderStatus> {
+    #[cfg(feature = "e2e-ipc-receipt")]
+    {
+        let _ = provider;
+        return Err(ArcanaError::Agent(
+            "provider access is disabled in the isolated receipt build".into(),
+        ));
+    }
+
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
+    {
     let key = VaultManager::get(&provider_key(&provider))?
         .ok_or_else(|| ArcanaError::Provider("No API key stored for provider".into()))?;
 
     let candidate = arcana_core::provider::factory::build(&provider, key)?;
     check_provider_metadata_connection(candidate.as_ref(), false).await
+    }
 }
 
 /// Explicit Settings authentication/model-list checks send no workspace data.
 /// ADR-0303 permits these before workspace selection; generation still requires
 /// persisted workspace consent. Never reflect credentials or response text here.
+#[cfg(not(feature = "e2e-ipc-receipt"))]
 pub(super) async fn check_provider_metadata_connection(
     provider: &dyn Provider,
     key_validation: bool,
@@ -273,7 +295,7 @@ pub fn get_default_system_prompt() -> Result<String> {
     Ok(ContextBuilder::default_system_prompt().to_string())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "e2e-ipc-receipt")))]
 mod provider_list_tests {
     use super::supported_provider_labels;
 
@@ -290,7 +312,7 @@ mod provider_list_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "e2e-ipc-receipt")))]
 mod connection_audit_tests {
     use super::*;
     use std::io::Write;

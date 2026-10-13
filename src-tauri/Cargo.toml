@@ -9,6 +9,10 @@ edition = "2021"
 name = "arcana_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = []
+e2e-ipc-receipt = ["tauri/custom-protocol"]
+
 [[bin]]
 name = "arcana"
 path = "src/main.rs"

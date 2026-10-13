@@ -571,6 +571,43 @@ impl Drop for IsolatedProfile {
 }
 
 #[test]
+fn offline_fleet_denied_preflight_persists_content_free_audit() {
+    let profile = IsolatedProfile::new();
+    let title = format!("Unconsented Fleet {}", Uuid::new_v4());
+    let output = profile.run_fleet("success", &title, 10);
+    assert!(
+        !output.status.success(),
+        "unconsented Fleet must stop before dispatch"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("Provider egress is not authorized"),
+        "Fleet should identify the missing grant"
+    );
+    let config = arcana_core::db::config_db::open_at(&profile.root.join(".arcana/config.db"))
+        .expect("open isolated consent audit");
+    let row: (String, String, String, String) = config
+        .query_row(
+            "SELECT workspace_path, destination, operation, outcome
+             FROM workspace_egress_audit ORDER BY id DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .expect("read denied Fleet audit row");
+    assert_eq!(
+        row.0,
+        profile.workspace.canonicalize().unwrap().to_string_lossy()
+    );
+    assert_eq!(row.1, "provider:google");
+    assert_eq!(row.2, "fleet_cli_preflight");
+    assert_eq!(row.3, "denied");
+    assert!(
+        !row.0.contains(&title),
+        "task content must not enter the audit"
+    );
+    assert!(profile.tasks().list(None).unwrap().is_empty());
+}
+
+#[test]
 fn offline_fleet_cli_completes_board_child_and_exports_observability() {
     let profile = IsolatedProfile::new();
     profile.grant_workspace_egress();

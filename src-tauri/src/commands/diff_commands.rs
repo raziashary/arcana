@@ -101,7 +101,10 @@ where
     // The provider wrapper checks the persisted consent again immediately
     // before its outbound request, so revocation between this decision and the
     // call still fails closed.
-    analyze(diff_text.to_owned(), workspace, state.clone()).await
+    match analyze(diff_text.to_owned(), workspace, state.clone()).await {
+        Err(ArcanaError::EgressDenied { .. }) => DiffAnalyzer::analyze_structural(diff_text),
+        result => result,
+    }
 }
 
 /// Analyze a raw unified diff string.
@@ -308,5 +311,49 @@ mod tests {
         assert_eq!(row.1, "provider:google");
         assert_eq!(row.2, "tauri_diff_analysis");
         assert_eq!(row.3, "allowed");
+    }
+
+    #[tokio::test]
+    async fn revocation_between_diff_preflight_and_provider_request_returns_structural_review() {
+        let home = tempfile::tempdir().expect("create isolated Arcana home");
+        let workspace_path = home.path().join("workspace");
+        std::fs::create_dir_all(&workspace_path).expect("create workspace");
+        let workspace = workspace_path
+            .canonicalize()
+            .expect("canonicalize workspace");
+        let _home = crate::test_support::isolate_home(home.path());
+        WorkspaceEgressConsentDb::open()
+            .expect("open consent database")
+            .grant(&workspace, "provider:google")
+            .expect("grant provider");
+        let state = Arc::new(Mutex::new(AppState {
+            active_provider: Some("google".into()),
+            active_model: Some("gemini-3.8-flash".into()),
+            ..AppState::default()
+        }));
+        let patch = "diff --git a/src.txt b/src.txt\n--- a/src.txt\n+++ b/src.txt\n@@ -1 +1,2 @@\n-old\n+new\n";
+        let revoke_workspace = workspace.clone();
+        let result = analyze_with_workspace_consent_using(
+            patch,
+            workspace.clone(),
+            &state,
+            move |_, _, _| async move {
+                WorkspaceEgressConsentDb::open()
+                    .expect("open consent database")
+                    .revoke(&revoke_workspace, "provider:google")
+                    .expect("revoke provider");
+                Err(ArcanaError::EgressDenied {
+                    destination: "provider:google".into(),
+                })
+            },
+        )
+        .await
+        .expect("revoked provider should yield local review");
+        assert_eq!(result.analysis_mode, "deterministic_only");
+        assert!(result.summary.contains("were not sent"));
+        assert!(!WorkspaceEgressConsentDb::open()
+            .unwrap()
+            .is_granted(&workspace, "provider:google")
+            .unwrap());
     }
 }

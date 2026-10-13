@@ -4,11 +4,22 @@ use arcana_lib::agent::builtin_tools;
 use arcana_lib::agent::ToolRegistry;
 use arcana_lib::mcp::health::McpHealthMonitor;
 use arcana_lib::skills::SkillRegistry;
-use arcana_lib::updater::{start_background_check, UpdateChannel, UpdaterState};
+use arcana_lib::updater::UpdaterState;
+#[cfg(not(feature = "e2e-ipc-receipt"))]
+use arcana_lib::updater::{start_background_check, UpdateChannel};
 use std::sync::Arc;
 use tauri::Manager;
 
 fn main() {
+    // Refuse to initialize any production runtime or persistent subsystem
+    // from the receipt feature unless the launcher supplied its disposable
+    // profile, workspace, marker, and credential-free environment.
+    #[cfg(feature = "e2e-ipc-receipt")]
+    if let Err(error) = arcana_lib::commands::e2e_ipc_receipt::validate_startup_fixture() {
+        eprintln!("P4-60 receipt startup guard rejected launch: {error}");
+        std::process::exit(78);
+    }
+
     if let Some(exit_code) = arcana_core::platform::process_sandbox::run_bridge_entrypoint() {
         std::process::exit(exit_code);
     }
@@ -68,8 +79,13 @@ fn main() {
 
     // Desktop and CLI share one host-independent production runtime. The
     // desktop retains its Tauri event/UI services below.
+    let runtime_options = arcana_core::runtime::CoreRuntimeOptions {
+        #[cfg(feature = "e2e-ipc-receipt")]
+        start_analytics_rollup: false,
+        ..Default::default()
+    };
     let core_runtime = tauri::async_runtime::block_on(arcana_core::runtime::initialize(
-        arcana_core::runtime::CoreRuntimeOptions::default(),
+        runtime_options,
     ))
     .expect("Failed to initialise Arcana core runtime");
 
@@ -113,13 +129,30 @@ fn main() {
     // Clone Arcs for the setup hook (setup runs after app handle is available)
     let scheduler = core_runtime.recipe_scheduler.clone();
     let subagent_mgr_for_setup = subagent_mgr.clone();
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
     let updater_state_for_setup = updater_state.clone();
+    #[cfg(not(feature = "e2e-ipc-receipt"))]
     let mcp_health_for_setup = mcp_health_monitor.clone();
 
     // register_commands is defined in the lib crate so generate_handler! runs
     // where the #[tauri::command] __cmd__* macros are in scope.
+    let builder = tauri::Builder::default();
+    // The setup callback runs before the main page is ready. Injecting the
+    // receipt there can execute against about:blank and disappear on navigation.
+    #[cfg(feature = "e2e-ipc-receipt")]
+    let builder = builder.on_page_load(|webview, payload| {
+        if webview.label() == "main"
+            && payload.event() == tauri::webview::PageLoadEvent::Finished
+            && std::env::var("ARCANA_E2E_IPC_RECEIPT").as_deref() == Ok("1")
+        {
+            if let Err(error) = webview.eval(include_str!("../../e2e/probes/p4-60-ipc-receipt.js"))
+            {
+                tracing::error!("P4-60 fixed renderer probe could not start: {error}");
+            }
+        }
+    });
     let app = arcana_lib::register_commands(
-        tauri::Builder::default()
+        builder
             .plugin(tauri_plugin_shell::init())
             .plugin(tauri_plugin_dialog::init())
             .manage(app_state)
@@ -201,6 +234,7 @@ fn main() {
                 // Ruflo Feature 6 — Start MCP Connection Health Monitor.
                 // Registers the GitHub MCP server (if configured + enabled) and any other
                 // user-configured external MCP servers, then starts the background ping loop.
+                #[cfg(not(feature = "e2e-ipc-receipt"))]
                 {
                     let monitor_ref  = mcp_health_for_setup.clone();
                     let app_for_mcp  = app.handle().clone();
@@ -262,7 +296,9 @@ fn main() {
 
                 // Auto-start every worker that has a recipe bound and is not paused/deleted.
                 // Deferred via async_runtime::spawn to ensure the Tokio runtime is active.
+                #[cfg(not(feature = "e2e-ipc-receipt"))]
                 let scheduler_clone = scheduler.clone();
+                #[cfg(not(feature = "e2e-ipc-receipt"))]
                 tauri::async_runtime::spawn(async move {
                     // Small delay to ensure the Tauri event loop is fully running
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -303,11 +339,19 @@ fn main() {
 
                 // Phase 5.3 — start background update checker (every 4 hours).
                 // Runs on the Tokio async runtime; won't block the UI thread.
-                let updater_state_bg = updater_state_for_setup.clone();
-                let app_handle_bg    = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    start_background_check(updater_state_bg, app_handle_bg, UpdateChannel::Stable).await;
-                });
+                #[cfg(not(feature = "e2e-ipc-receipt"))]
+                {
+                    let updater_state_bg = updater_state_for_setup.clone();
+                    let app_handle_bg = app.handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        start_background_check(
+                            updater_state_bg,
+                            app_handle_bg,
+                            UpdateChannel::Stable,
+                        )
+                        .await;
+                    });
+                }
 
                 Ok(())
             }),

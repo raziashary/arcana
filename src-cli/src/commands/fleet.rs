@@ -121,11 +121,11 @@ async fn run_epic(args: RunArgs, ctx: OutputContext) -> Result<()> {
         .canonicalize()
         .context("Could not establish the canonical Fleet workspace")?;
     let destination = arcana_core::egress_consent::provider_destination(&provider_id)?;
-    let consent_db = arcana_core::egress_consent::WorkspaceEgressConsentDb::open()
+    let mut consent_db = arcana_core::egress_consent::WorkspaceEgressConsentDb::open()
         .context("Could not open Arcana's workspace-consent store")?;
     if !consent_db
-        .is_granted(&workspace, &destination)
-        .context("Could not check workspace egress consent")?
+        .authorize_and_audit(&workspace, &destination, "fleet_cli_preflight")
+        .context("Could not check and audit workspace egress consent")?
     {
         bail!(
             "Provider egress is not authorized for this workspace. Grant it explicitly with `arcanactl consent grant --workspace \"{}\" --provider {provider_id}`",
