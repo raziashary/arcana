@@ -1,12 +1,23 @@
 # Arcana goal (updated 2026-10-13)
 
+**Current scope and proof (ADR0391, 2026-10-13):** Core P4 is Windows-first and
+remains open at **44/59 tasks and 22/33 TG4 gates** after the named P4-14/TG4-07
+QC and P4-15/TG4-08 diagnosis closeouts. Finish the Windows PA → Fleet engineering path, complete the full
+built-in failure, timestamp-pair, graph/MCP and observability requirements,
+then leave P4-49's Calendar acceptance to the owner. Safe quarantine,
+host-verified reconciliation and explicit Supervisor manual handoff stay in
+P4. Automatic process-loss replay/reassignment belongs to P7-19/TG7-06;
+Linux/macOS Fleet sandbox, toolchain, dependency, timestamp and worker parity
+belongs to P9-16/TG9-06 and must stay fail-closed until proven. After core P4,
+read and finish `P4_EXPANDED_GOAL.md`, followed by P5, P6, P7 and P9.
+No second paid provider run is authorized. The dated status below is retained
+as history where it differs from this current scope.
+
 Current state: **active**. Owner resumed core P4 and approved all five runtime,
 sandbox and privacy decisions in ADR0359. Earlier pause/pending notes below are
-historical. Shared privacy hardening and provider cancellation are verified.
-The actual offline CLI Fleet success/deadline/export suite passes5/5;
-live-provider completion and strict sandbox proof remain open.
+historical. Shared privacy hardening and provider cancellation units are verified. The 2026-10-12 feature-gated production CLI success/deadline/export harness passes 5/5, but live-provider Fleet completion remains open. Windows shell-hook lifecycle also gained seven focused passes, and the Linux staging planner regressions pass 8/8; strict sandbox, desktop attachment, provider-cost, and remaining observability proof continue.
 
-Latest boundary: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`. Core P4 is
+Latest checkpoint/continuation: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`. Core P4 is
 **42/59 checked**, TG4 **20/33 passing**; 17 tasks remain, including the
 owner-run Calendar acceptance. P4-59/TG4-21 closes on complete retention
 consumer evidence across Windows, Linux and macOS. P4-52/TG4-26 closes on its
@@ -24,7 +35,7 @@ hook execution-time preservation (ADR-0320) is implemented and verified: hook
 module 11/11 on both hosts, core check, and real Windows CLI export 1/1.
 P4-57 remains open for other pairs and complete platform proof. The isolated
 test-only desktop build (ADR-0321) now builds; attachment proof is underway.
-No second paid Fleet run is authorized. The expanded goal remains unread
+No second paid Fleet run is authorized. P5 and P6 remain downstream of P4 and the expanded-goal closeout. The expanded goal remains unread
 until core P4 closes.
 
 2026-10-06 continuation: three RunsDb CI failures were traced to stale test
@@ -1160,6 +1171,10 @@ Goal is PAUSED. Resume core P4 from the final Paused checkpoint section of _veri
 
 2026-10-12 provider cancellation unit (ADR0359/0361/0364): AgentEngine cancels preflight, request establishment, retry delay and body waits, prioritizes cancellation over ready chunks, and dispatches no later tool in the focused fixtures. Both budget decorators retain unknown-output holds through partial usage; explicit Done or recognized terminal reason followed by EOF reconciles observed totals, while bare/unknown EOF, errors and drops charge the conservative maximum. Windows exact run-token9/9, daily-cap9/9, engine cancellation6/6 pass; measured pending cancellation110–143ms, ready-body~5ms/onepoll. Independent Luna High final source review found no unresolved scoped defect. Linux and live-vendor cancellation are not established by this evidence; remote processing/billing may continue. Reports: `_verify/P4-51-PROVIDER-CANCELLATION-2026-10-12.md`, `_verify/P4-51-FAILURE-BOUNDARY-REVIEW-2026-10-12.md`. P441/59, TG419/33 unchanged; shared lease and actual CLI Fleet proof are separate ongoing units.
 
+2026-10-12 P4-61 kernel quota milestone: source-matched delegated cgroup test passes Linux1/1 (6.37s). Actual aggregate CPU throttling, 48MiB memory OOM kill, pids.max=4 denial, confirmed empty-state teardown and zero owned leftovers are observed. Transient service is removed/inactive; no persistent machine changes. Evidence: `_verify/P4-61-DELEGATED-QUOTA-PROOF-2026-10-12.md`. This is kernel proof, not production sandbox enablement: private-stage lifetime, recoverable copy-back, full filesystem/network capability conjunctions and macOS remain open. Root managed-file lease tests pass Windows3/3 plus ignored subprocess helper, and actual file-tool consumer/context/panic checks pass1/1 each; admission-before-journal cancellation refinement is being verified. Owner explicitly approved sandboxed shell hooks and retained child/lease cleanup ownership (ADR0365/0367); launch remains disabled until lifecycle proof. Privacy6554942 and cancellation102ff7d are pushed to main. Core tally41/59, TG419/33 unchanged; actual CLI child has passing batch and is at QC, not yet full Fleet success. Calendar owner-only; expanded goal unread.
+
+2026-10-12 continuation correction: the write-admission cancellation test now passes on Windows and confirms no false unknown journal entry after DB reopen. The owner-approved Windows shell-hook launch/cleanup path is enabled and passes its focused lifecycle tests; the earlier note that it remained disabled is superseded. The current cleanup owner reports `Retrying` and retains the workspace lease until the OS confirms an empty job. A remaining gap is that Execute/FreeformShell process handlers do not yet acquire the same lease; shutdown/drain exclusion is also unproven. No whole P4 task/gate is closed. P4 remains 41/59 checked and TG4 19/33 passing.
+
 2026-10-12 offline CLI Fleet unit closeout: the actual feature-gated CLI Fleet subprocess completes worker Cargo verification, QC review, child/epic completion, and Logs/analytics export readback. Windows fleet_offline passes5/5 (22.54s), including unmarked/redirected-profile refusal; ordinary builds execute0 offline tests, and core/CLI cargo check passes (24.96s). Default-off marker paths are reparse/symlink guarded; the parent test has an outer deadline and Windows tree cleanup. Unix outer-timeout descendant cleanup remains unproved. Evidence: _verify/P4-50-CLI-OFFLINE-FLEET-2026-10-12.md and _verify/P4-50-OFFLINE-CLI-COMMIT-REVIEW-2026-10-12.md; ADR0368/0369. This completes the offline CLI execution slice, not live Gemini, full observability/UI, platform sandbox or P4-49. Core checklist remains41/59 P4 and19/33 TG4. No paid provider or owner Calendar activity.
 
 2026-10-12 managed-file admission unit: ca9e21f is pushed to origin/main. ToolEffect::Write handlers hold a canonical-workspace OS lease; cancellation before admission records no intent, and actual cross-process/contention/drop/cancellation consumer evidence is recorded in _verify/P4-61-MANAGED-FILE-ADMISSION-2026-10-12.md. No new dependency/schema. Shell-hook/process writer integration, staged copy-back, host shutdown drain and complete recovery snapshots remain open. Core remains41/59 P4 and19/33 TG4. The initial remote commit_refs failure was retried only after verifying the remote exactly matched the local parent; the normal push succeeded without history changes.
@@ -1180,4 +1195,8 @@ Source unit `2db3f39` implements approved bounded journal snapshots and host-ver
 
 RetrySafe is refused in production until a task/operation-bound one-use permit is revalidated and consumed under executor admission's write lease (ADR0379, owner decision pending). Reconciled returns operation_complete=true and retry_permitted=false. P4-53/TG4-27 remain open for durable continuation, replay-safe replacement execution, other interruption/effect classes and task-scoped restore. Counts remain **42/59 P4, 20/33 TG4**:17 open tasks, including owner-only Calendar;16 engineering tasks. No paid provider, owner Calendar, server or listener was used. Core P4 precedes the unread expanded goal and P5/P6. Latest continuation: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`.
 
-2026-10-13 annual writer proof: Windows tests now add10fields across Memory (episodic.created_at, semantic.created_at/updated_at, procedural.created_at/updated_at, unified memories.created_at), checkpoint.created_ms, graph nodes.updated_at and hook-config.created_at/updated_at. Each uses4400leap-year/DST instants through actual writers and reopened production readers. Unified Memory covers direct gateway plus episodic/semantic/procedural sync paths; checkpoints also verify50-row per-file/ownership retention. Exact tests each pass1/1: Memory711.90s, checkpoints112.33s, graph264.95s, hook-config213.77s. Fixture wall times are not application speed measurements. This makes21distinct generated-now fields proven on Windows with the earlier11Task/Run/Worker/Plan fields. Remaining inventory pairs and platform/legacy aggregation keep P4-57/TG4-19 open; counts42/59 P4 and20/33 TG4 unchanged. Reports: `_verify/P4-57-MEMORY-ANNUAL-2026-10-13.md`, `_verify/P4-57-CHECKPOINT-ANNUAL-2026-10-13.md`, `_verify/P4-57-GRAPH-HOOK-ANNUAL-2026-10-13.md`. No live provider/database, Calendar, server or listener was used; all four test processes ended. Next missing timestamp unit targets actual run heartbeat/progress/events/journal; retry-admission decision remains pending under ADR0379.
+2026-10-13 annual writer proof: Windows tests now add10fields across Memory (episodic.created_at, semantic.created_at/updated_at, procedural.created_at/updated_at, unified memories.created_at), checkpoint.created_ms, graph nodes.updated_at and hook-config.created_at/updated_at. Each uses4400leap-year/DST instants through actual writers and reopened production readers. Unified Memory covers direct gateway plus episodic/semantic/procedural sync paths; checkpoints also verify50-row per-file/ownership retention. Exact tests each pass1/1: Memory711.90s, checkpoints112.33s, graph264.95s, hook-config213.77s. Fixture wall times are not application speed measurements. This makes21distinct generated-now fields proven on Windows with the earlier11Task/Run/Worker/Plan fields. Remaining inventory pairs and platform/legacy aggregation keep P4-57/TG4-19 open; counts42/59 P4 and20/33 TG4 unchanged. Reports: `_verify/P4-57-MEMORY-ANNUAL-2026-10-13.md`, `_verify/P4-57-CHECKPOINT-ANNUAL-2026-10-13.md`, `_verify/P4-57-GRAPH-HOOK-ANNUAL-2026-10-13.md`. No live provider/database, Calendar, server or listener was used; all four test processes ended. Superseded by13October run-journal and Task-auxiliary receipts:34generated-now fields now have Windows annual proof; approved one-use admission is implemented and pushed as bdced1c. Platform/legacy aggregation remains open.
+
+## Owner deadline — 2026-10-13
+
+Owner sets a maximum deadline of16:00 Asia/Bangkok on2026-10-13, stating current time07:53. Prioritize closure of the17open core P4 items through their named gates, coherent verified commits/pushes and immediate blocker reporting. Do not fabricate platform/behavior proof or relax security to meet the deadline. Hook readers and one-use revalidated retry admission are now explicitly approved by ADR0380. Calendar ownership clarification is pending because P4-49 was previously owner-only. Existing earlier approvals stand; do not re-ask settled decisions.

@@ -1,0 +1,9 @@
+# P4-14 / TG4-07 named closeout — 2026-10-13
+
+Owner decision ADR0389 assigns the three-OS command-sandbox corpus to P4-11/P4-61 and live Fleet success to P4-50. This receipt covers only the named task-scoped QC evidence and conservation gate; P4 overall remains open.
+
+The current compiled Windows `arcana-core` test binary passed these exact production-reader checks: `shared_task_status_api_rejects_qc_review_without_latest_attributable_passing_build` 1/1, `project_build_batches_block_partial_and_interrupted_qc_until_complete_pass` 1/1, and `stranded_task_reconciliation_cannot_bypass_qc_build_evidence` 1/1. They exercise the shared transition API, direct-SQL guard, interrupted/reopened batch, exact task association and RecipeRunner consumer. The current Windows shell test `spawned_process_exit_status_is_the_status_that_is_returned` passed 1/1 after its fixture selected an isolated temporary workspace; it observes actual cmd.exe and PowerShell exits 0 and 17. This fixture fix does not relax sandbox policy.
+
+Prior retained production receipts `_verify/P4-14-MIXED-LINUX-CLOSEOUT-2026-10-10.md`, `_verify/P4-14-QC-CLOSURE-CHECK-2026-10-09.md` and the P4-14/TG4-07 dated entries cover actual Cargo/Python mixed success/failure, timeout, cancellation and spawn-failure batches on Windows/Linux. A passing sibling cannot authorize QC after an incomplete batch, and an observed pass remains recorded as pass. The current source still routes the UI status command and task tool into the same TasksDb transition boundary. The unrelated P4-15 mixed threshold regression currently fails with `command_spawn_failed` / incomplete batch and remains open for diagnosis; it does not constitute a passing P4-15 receipt.
+
+P4-14 and TG4-07 close on their named contract under ADR0389. P4-11/P4-61 retain complete platform sandbox proof, and P4-49 remains owner acceptance. No paid provider or Calendar execution was used.

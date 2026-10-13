@@ -7280,6 +7280,10 @@ readback.
 
 **Owner decision / when / where.** Accepted2026-10-09 for P4-39. Retain the original numeric task ID in the immutable resolution audit without a restrictive task foreign key; validate task existence when recording a resolution. Task deletion and Clear Board must remain usable while resolution history survives. Correct the uncommitted additive migration and prove task deletion, board clearing, audit readback and rejection of a nonexistent task. Preserve the approved Supervisor-only explicit resolution and durable recovery semantics.
 
+## ADR-LOG-RESTRUCT-0334 — Compare an isolated fixed WebView2 runtime
+
+**Owner decision / when / where.** Accepted2026-10-09 for P4-60. Install fixed WebView2 runtime152 and a matching driver beneath ignored test-tools paths and compare fresh-profile attachment with current153. Only the test-launch environment changes; shipped app settings stay unchanged. Bound endpoint readiness, collect browser diagnostics, and clean all owned processes/listeners. No paid provider or Calendar run is authorized by this comparison.
+
 ## ADR-LOG-RESTRUCT-0335 — Retained task audit requires non-reused identity
 
 **Confirmed finding / date / decision pending.** On2026-10-09 the scoped budget author verified TasksDb.clear_all resets the tasks sqlite_sequence counter. Removing the restrictive audit FK as approved allows board clearing, but a new task can reuse an old audited numeric ID. Reported immediately to the owner: recommend preserving task AUTOINCREMENT across clears; alternative is a separate immutable task identity. Do not close P4-39 or commit a known ambiguous retained-history contract before the choice and negative/positive proof. Ordinary deletion and the existing immutable-audit guard remain separate valid cases.
@@ -7289,9 +7293,19 @@ readback.
 
 **Owner decision / date.** Accepted2026-10-09 in response to ADR0335: add separate immutable task identity for provenance AND preserve task IDs across Clear Board. Backfill existing tasks additively, assign unique identity at creation, enforce immutability, and carry identity into retained budget-audit records/readers. New tasks after clearing cannot inherit prior history by reused identity or numeric ID. This supersedes the pending choice; scoped TasksDb implementation and populated-upgrade/deletion/clear/reader tests are required before closure.
 
+## ADR-LOG-RESTRUCT-0337 — Build the macOS XPC service with SDK/clang scripts
+
+**Owner decision / date.** Accepted2026-10-09: use a small native SDK/clang XPC service and scripted Tauri/CI packaging, rather than a separate Xcode project. Preserve the approved separate signed App Sandbox boundary, CLI/desktop shared consumer, staged workspace/copy-back, exact runtime capability limits, bounded child I/O, process-tree cancellation and fail-closed readiness. Existing macOS unavailable stub is not an implementation. Native build/sign/runtime security proof is still required; approving the build mechanism does not approve a weaker sandbox.
+
+
 ## ADR-LOG-RESTRUCT-0338 — Backfill identity inside the migration transaction
 
 **Bounded migration correction / date.** On2026-10-09 review of the new migration22 found that migration21's whole-row immutable audit UPDATE trigger would reject populated audit identity backfill. Drop that update guard only inside migration22's existing atomic transaction, backfill identities, and immediately recreate the identical guard before commit. The guard is never absent in a committed schema; failed migration rolls back. The populated-v21 regression must prove old rows upgrade and remain immutable. Also correct the test-only moved-string fixture and stale latest-schema assertions; no lifecycle/security policy changes.
+
+
+## ADR-LOG-RESTRUCT-0339 — Confine probe launches with an approved loopback capability
+
+**Confirmed gap and owner decision / date.** On2026-10-09 source inspection verified e2e_probe::run_probe spawns model-authored shell commands through plain Tokio Command, outside the shared process sandbox. Owner approves adding an explicit bounded loopback-server capability for smoke runs while retaining filesystem confinement and outbound-network denial. The current sandbox denies bind as well as connect, so merely replacing the launcher cannot establish a working smoke server. Integrate through the shared sandbox and per-call host approval; prove per-OS listener scope, no external ingress/egress or sibling reads, process-tree cleanup and privacy-safe failures before enabling the capability. No unrestricted fallback or assumed network safety is approved.
 
 
 ## ADR-LOG-RESTRUCT-0340 — Make retained audit consumable after task deletion
@@ -7300,13 +7314,26 @@ readback.
 
 **Migration correction, ADR0338 follow-up.** The full TasksDb suite caught tasks_updated_at overwriting historical updated_at during identity backfill. Migration22 temporarily drops/recreates the identical timestamp trigger inside its atomic transaction as well as the audit UPDATE guard. The unchanged legacy timestamp assertion now passes; final full Windows TasksDb70/70 passes61.36s. No committed schema lacks either trigger.
 
+
+## ADR-LOG-RESTRUCT-0341 — Use a private Linux smoke network and exact host proxy
+
+**Owner decision / date.** Accepted2026-10-09: build a private Linux network-namespace runner and Arcana-owned proxy exposing only the explicitly approved host loopback port. Current seccomp cannot inspect sockaddr bind address/port, and broad socket allowance would weaken the security contract. Filesystem confinement/outbound denial remain mandatory; run per-OS positive/negative/cleanup proofs before enabling. Windows/macOS smoke launches stay unavailable until equivalent confinement is proven. No native helper is deemed ready by this architectural approval.
+
+
 ## ADR-LOG-RESTRUCT-0342 — Select the real bridge for every Cargo test harness
 
 **Reproduced bug / bounded correction / date.** On2026-10-09 the new actual ProjectCommand→JSONL→CLI reader test fails before command output because Windows bridge_executable recognizes only core/desktop unit-test basenames, then selects the integration test executable itself as the bridge. Rust test harness main cannot dispatch the private bridge flag. Generalize the existing Cargo deps/name-hash detection to integration harnesses while preserving ordinary installed/debug host paths, and test both positive and negative layouts. This changes test-host routing only; no filesystem/network policy, child permission, argv or installed app path is broadened. Rerun the unchanged real stage/DB/export assertions before claiming proof.
 
+
 ## ADR-LOG-RESTRUCT-0343 — Derive privacy-safe telemetry call identity
 
 **Owner decision / date.** Accepted2026-10-09: derive a stable canonical telemetry UUID from compound session/provider call IDs in designated Arcana telemetry call fields. Keep provider response IDs and tool-result contracts unchanged; retain normal redaction for arbitrary strings, unknown fields and sensitive keys. Derivation must be consistent across event/span ancestry, domain-separated, and proved through actual registered project_command execution, structured writer and CLI export. This is not an exception permitting raw opaque identifiers to bypass redaction.
+
+
+## ADR-LOG-RESTRUCT-0344 — Require aggregate smoke resource quotas
+
+**Owner decision / date.** Accepted2026-10-09: require per-run tree-wide cgroup process/memory/CPU limits plus an enforceable workspace disk quota before enabling Linux smoke launches. Per-process limits alone are insufficient. Fail closed where the quota boundary is unavailable. This WSL host has USER+NET namespace support but no writable delegated cgroup root; test-only admission proof does not enable the production capability. Windows/macOS equivalents also remain unavailable until independently proved.
+
 
 ## ADR-LOG-RESTRUCT-0345 — Isolate WebView2 attachment from Arcana startup
 
@@ -7315,9 +7342,11 @@ readback.
 
 **ADR0345 claim correction, 2026-10-09.** The minimal-host author claimed Tauri reexports Tao/Wry on Windows; actual compile fails because those exports are Android-only. This was an incomplete cfg inspection, not evidence of a runtime restriction. Use Windows-only dev dependency on the same already-locked tauri-runtime-wry2.11.1 reexports, then compile and run before making attachment claims.
 
+
 ## ADR-LOG-RESTRUCT-0346 — Prove native subagents with a test-only provider seam
 
 **Owner decision / date.** Accepted2026-10-09: native_runner may use an explicit test-only scripted provider override analogous to RecipeRunner, so the actual registered subagent tools run real AgentEngine children without Vault keys or paid calls. Shipped provider selection remains unchanged. The process-global manager must be isolated in a dedicated test invocation and cannot contaminate ordinary no-manager failure fixtures. Prove successful child execution and actual returned/result readers rather than substituting a fake manager or tool.
+
 
 ## ADR-LOG-RESTRUCT-0347 — Repair isolated Linux Python test support
 
@@ -7326,14 +7355,6 @@ readback.
 ## ADR-LOG-RESTRUCT-0348 — Run Linux timeout proof on its native filesystem
 
 **Grounded fixture decision / date.** On2026-10-09 the approved isolated pytest setup succeeds. The same sandboxed descendant fixture passes on native /tmp but fails on WSL DrvFS /mnt/c during pytest capture: truncating an already-unlinked temporary file returns ENOENT. The CLI fixture inherited a repository-local parent required for Windows ACLs; Linux has no such requirement. Use a native temporary parent on Linux, retain the repository-owned Windows parent, and preserve the exact production timeout/error, descendant-stop and JSONL/CLI assertions. This is a test-location correction, not a sandbox relaxation or a claim that DrvFS execution is supported. Record the DrvFS limitation; no production workaround is added. Remove the temporary underlying-launcher diagnostic after its controlled comparison.
-
-## ADR-LOG-RESTRUCT-0351 — Correct model failure fixture run attribution
-
-**Claim correction / date.** On2026-10-09 registered Bash/Git fixtures initially failed before handler dispatch because they supplied invented run IDs to the durable journal. Reading the earlier seventeen-builtin AgentEngine fixture found the same invented run ID without RunsDb.begin_worker_tick. ~~That fixture proves seventeen concrete builtin handler failures reach the model.~~ It proves returned failures reach the model, but mutation rows may exercise operation_intent_unavailable rather than their intended handlers. The error was reading the fixture assertions without tracing the journal prerequisite. Create real isolated worker-run records and assert the intended failure classification, then rerun and replace the affected current claims. Preserve prior evidence as historical; no gate closure depended on this fixture alone.
-
-## ADR-LOG-RESTRUCT-0344 — Require aggregate smoke resource quotas
-
-**Owner decision / date.** Accepted2026-10-09: require per-run tree-wide cgroup process/memory/CPU limits plus an enforceable workspace disk quota before enabling Linux smoke launches. Per-process limits alone are insufficient. Fail closed where the quota boundary is unavailable. This WSL host has USER+NET namespace support but no writable delegated cgroup root; test-only admission proof does not enable the production capability. Windows/macOS equivalents also remain unavailable until independently proved.
 
 ## ADR-LOG-RESTRUCT-0349 — Enforce Linux smoke disk bounds with private staged tmpfs
 
@@ -7345,12 +7366,18 @@ readback.
 
 **Grounded integration decision / date.** On2026-10-09 the real e2e_probe still spawns model-authored commands with plain Tokio Command and only kills direct children. This contradicts owner-approved ADR0339/0344/0349: no smoke capability may launch before per-platform confinement, aggregate quotas and cleanup are proved. Remove that unrestricted production path and return the existing structured sandbox_violation contract after argument/workspace validation until a proved confined runner is integrated. No arbitrary loopback HTTP request or child launch is allowed on this unavailable path. This enforces the accepted boundary; it does not complete smoke capability or TG4-31. Preserve registration/schema, update the description and verify the real registered executor refuses valid commands without creating a marker.
 
+## ADR-LOG-RESTRUCT-0351 — Correct model failure fixture run attribution
+
+**Claim correction / date.** On2026-10-09 registered Bash/Git fixtures initially failed before handler dispatch because they supplied invented run IDs to the durable journal. Reading the earlier seventeen-builtin AgentEngine fixture found the same invented run ID without RunsDb.begin_worker_tick. ~~That fixture proves seventeen concrete builtin handler failures reach the model.~~ It proves returned failures reach the model, but mutation rows may exercise operation_intent_unavailable rather than their intended handlers. The error was reading the fixture assertions without tracing the journal prerequisite. Create real isolated worker-run records and assert the intended failure classification, then rerun and replace the affected current claims. Preserve prior evidence as historical; no gate closure depended on this fixture alone.
+
+
 ## ADR-LOG-RESTRUCT-0352 — Make bounded HTTP fixtures blocking after accept
 
 **Observed fixture correction / date.** On2026-10-09 the surrounding AgentEngine regression suite fails on Windows: the retry-then-stream-error fixture accepts from a nonblocking listener and the accepted socket retains nonblocking mode. A timed blocking BufReader then returns WouldBlock before the request arrives. Explicitly set the accepted socket to blocking before applying its existing ten-second read timeout, matching provider/usage.rs test_response_server. Keep listener admission bounded and preserve response, retry, analytics and privacy assertions. This is test transport setup only; no provider timeout/retry contract changes. Rerun the surrounding module before publishing the all-registration model consumer unit.
 
 
 **ADR0351 verified correction, 2026-10-09.** The corrected all47-registration AgentEngine fixture creates/finishes real durable runs and rejects operation_intent_unavailable. Matrix Windows1/1 (6.13s), Linux1/1 (7.82s); surrounding module15/15 both. Actual handlers or intentional permission/sandbox guards now supply the failed results consumed by the next model request. No full P4-51 closure is claimed.
+
 
 ## ADR-LOG-RESTRUCT-0353 — Separate configured timeout proof from shipped provider cancellation
 
@@ -7373,11 +7400,9 @@ readback.
 
 **Grounded proof refinement / date.** On2026-10-10 the existing RunsDb lifecycle fixture reads recent_worker_progress but ignores event_at and compares heartbeat strings lexically. Extend this same real begin/heartbeat/progress/finish API path with shared-parser instant equality across event, worker-state and terminal-run projections, canonical shape, observed normal wall-clock chronology and database-reopen readback. This changes tests only; no shipped timestamp, schema or clock source changes. It closes one concrete consumer assertion gap from the TasksDb/RunsDb inventory, not the annual all-pair/platform TG4-19 contract. Remaining Memory/configuration inventory is independently mapped.
 
-
 ## ADR-LOG-RESTRUCT-0357 — Order procedural search by the represented instant
 
 **Grounded correction / date.** On2026-10-10 the production ProceduralStore::search reader selects a canonical09:00 topic ahead of a legacy SQLite noon topic at limit1. The isolated regression drives save_topic, retains both supported persisted formats, and reopens the actual search reader; Windows fails1/1 (0.25s) before the correction. This is the same timestamp-reader defect covered by owner-approved reader fixes (ADR0302); follow existing episodic/semantic/recall chronology using julianday(updated_at) with stable id tie-breaking. No dependency, schema or API changes. The keyword query already scans substring matches and sorts; do not claim index/performance improvements. Verify actual production readback and surrounding procedural tests before committing. Full annual write/read-pair/platform proof remains required by TG4-19.
-
 
 ## ADR-LOG-RESTRUCT-0358 — Preserve the real read-file OS cause without reflecting its path
 
@@ -7395,9 +7420,31 @@ readback.
 
 **Review correction / date.** On2026-10-12 independent Luna High review found two concrete gaps in the first owner-approved cancellation patch: budget decorators settled on an input-only usage frame before output was known, and a stream-first biased select could starve cancellation while chunks remained ready. Within ADR0359's approved runtime boundary, retain conservative reservations until explicit Done or successful EOF, aggregate normalized usage for successful reconciliation, and poll cancellation before body chunks. Cancellation/error/early drop preserves the full unknown-usage hold. Tests must read both ledgers after partial cancellation and successful split usage/EOF, and prove an always-ready stream stops after one poll. No claim that local cancellation prevents remote processing or billing. This extends worker ownership to the existing two decorator modules; no new dependency/schema.
 
+## ADR-LOG-RESTRUCT-0362 — Retract an unsupported scripted Fleet stop-reason diagnosis
+
+**Claim retraction / date.** On2026-10-12 the CLI proof worker attributed missing tool execution to the fixture stop reason tool_calls. Source inspection of StopReason::parse shows tool_calls is already accepted; that causal claim was wrong and is retracted. Using the conventional tool_use fixture string does not establish a fix. A real provider-to-AgentEngine round-trip now passes, but only actual CLI child creation, build, QC, completion and export readback can establish Fleet success. Continue the bounded isolated run and inspect actual role/turn handling rather than repeating the unsupported diagnosis.
+
+## ADR-LOG-RESTRUCT-0363 — Coordinate managed file mutations through the approved write lease
+
+**Implementation / basis / date.** On2026-10-12 begin ADR0359's approved host-write boundary with a cross-process OS file lock keyed by canonical workspace identity in Arcana-owned storage, using the installed Rust standard library rather than a new dependency. Retain lock files, poll nonblocking admission with bounded waits, and release handles on cancellation/drop. The actual ToolExecutor handler boundary acquires it for ToolEffect::Write; board/network/nested-agent calls do not hold it. This is cooperative managed-file serialization, not an external-editor lock or complete subprocess/copy-back integration. Staging still needs displacement preservation, fresh validation, durable recovery and confirmed child-tree stop. Prove contention, cancellation/drop, independent workspaces and actual executor consumption before committing; no sandbox enablement or gate closure follows merely from the lock API.
+
 ## ADR-LOG-RESTRUCT-0364 — Distinguish terminal completion from bare transport EOF
 
 **Independent correction / date.** On2026-10-12 follow-up review found ADR0361's first implementation treated any clean EOF as final usage, although Anthropic can end after an input-only frame. Correct both existing decorators: explicit Done authorizes reconciliation; EOF does so only after the existing StopReason parser recognized a terminal reason. Empty/unknown reason plus EOF charges the conservative maximum. Focused tests add both negative EOF cases and retain split-usage positive reconciliation. Final independent source review reports all three scoped findings resolved. This remains within owner-approved conservative cancellation/accounting, with no schema/dependency change or guarantee about remote billing.
+
+## ADR-LOG-RESTRUCT-0365 — Admit the write lease before journaling and sandbox shell hooks
+
+**Review correction and owner direction / date.** On2026-10-12 independent review identified that cancelling a pre-handler lease wait left a false unknown mutation intent, and detached PostFileWrite shell hooks bypassed managed serialization. Move lease admission before begin_operation_journal, race admission with existing cancellation, and record no mutation intent when the handler has not started. Owner explicitly approves routing shell hooks through the selected-workspace lease and existing OS sandbox with confirmed tree cleanup, failing closed where the capability is unavailable. Hook runtime changes are a distinct unit; pending plain Command hooks prevent claiming complete write coordination or sandbox closure. Preserve tests that prove actual file writes wait/release and add durable no-intent cancellation readback.
+
+## ADR-LOG-RESTRUCT-0366 — Confirm Windows job-tree emptiness explicitly
+
+**Approved-boundary implementation / date.** On2026-10-12 shell-hook source inspection finds shared SandboxedChild lacked a confirmed-stop API. Within owner ADR0365, add terminate_and_wait_tree: Windows TerminateJobObject followed by bounded polling of JobObjectBasicAccountingInformation.ActiveProcesses until zero; return error after five seconds or an OS failure. The bridge creates descendants without breakaway, and jobs enable only KILL_ON_JOB_CLOSE, so Microsoft nested-job accounting includes child jobs; actual descendant-membership/stop proof is required before enabling hooks. Unix direct-child/group signal is not equivalent, so its shared method returns Unsupported. An error is unconfirmed cleanup, never permission for copy-back or lease release. Stop-failure retention/quarantine remains an explicit consumer requirement to resolve before claiming full cancellation safety.
+
+**Primary source.** https://learn.microsoft.com/windows/win32/procthread/nested-jobs
+
+## ADR-LOG-RESTRUCT-0367 — Retain cleanup ownership after unconfirmed shell termination
+
+**Owner direction / date.** On2026-10-12 owner explicitly approves a retained cleanup/quarantine owner: preserve sandbox child and workspace write lease after OS confirmation failure, block further managed mutations, and release only after the whole tree is confirmed empty. Do not substitute mem::forget or drop guards while effects may continue. Admission/worker ownership must be bounded, startup failure must refuse before process launch, and quarantine must be observable. Root owns shared process admission/wiring; Luna High worker owns the new cleanup module only; Hook launch stays disabled until this actual consumer exists and passes its negative/positive cleanup proofs. Snapshot current work before the writer proceeds in target/p4-ci-checks/p4-before-cleanup-owner-2026-10-12.
 
 ## ADR-LOG-RESTRUCT-0368 — Gate offline Fleet integration tests and correct stale Linux proof
 
@@ -7412,14 +7459,6 @@ readback.
 ## ADR-LOG-RESTRUCT-0370 — Pending direction for isolated annual writer clocks
 
 **Grounded proposal / date / status.** On2026-10-12 the completed P4-57 field inventory identifies generated-now writer pairs without annual producer coverage. RunsDb and Memory call db/timestamps::now_rfc3339 internally; TasksDb/defaults/triggers use SQLite strftime with now; checkpoint now_ms uses SystemTime and an existing integer epoch representation. These public writers cannot accept a historical instant. Rusqlite already enables functions, so no dependency addition is needed. Proposed test-only fixture: RAII thread-isolated Rust time override plus per-connection SQLite clock interception, preserving built-in date-function behavior for non-now inputs; checkpoint tests retain integer milliseconds. Invoke the actual writers/readers across the existing leap-year/DST corpus and legacy rows. No shipped schema/API, machine clock or normal-build override is proposed. Owner direction was requested under Universal Rule4 for this shared testing pattern; implementation is not authorized until the reply. This is a test-design decision, not a new defect or gate closure.
-
-## ADR-LOG-RESTRUCT-0363 — Coordinate managed file mutations through the approved write lease
-
-**Implementation / basis / date.** On2026-10-12 begin ADR0359's approved host-write boundary with a cross-process OS file lock keyed by canonical workspace identity in Arcana-owned storage, using the installed Rust standard library rather than a new dependency. Retain lock files, poll nonblocking admission with bounded waits, and release handles on cancellation/drop. The actual ToolExecutor handler boundary acquires it for ToolEffect::Write; board/network/nested-agent calls do not hold it. This is cooperative managed-file serialization, not an external-editor lock or complete subprocess/copy-back integration. Staging still needs displacement preservation, fresh validation, durable recovery and confirmed child-tree stop. Prove contention, cancellation/drop, independent workspaces and actual executor consumption before committing; no sandbox enablement or gate closure follows merely from the lock API.
-
-## ADR-LOG-RESTRUCT-0365 — Admit the write lease before journaling and sandbox shell hooks
-
-**Review correction and owner direction / date.** On2026-10-12 independent review identified that cancelling a pre-handler lease wait left a false unknown mutation intent, and detached PostFileWrite shell hooks bypassed managed serialization. Move lease admission before begin_operation_journal, race admission with existing cancellation, and record no mutation intent when the handler has not started. Owner explicitly approves routing shell hooks through the selected-workspace lease and existing OS sandbox with confirmed tree cleanup, failing closed where the capability is unavailable. Hook runtime changes are a distinct unit; pending plain Command hooks prevent claiming complete write coordination or sandbox closure. Preserve tests that prove actual file writes wait/release and add durable no-intent cancellation readback.
 
 ## ADR-LOG-RESTRUCT-0371 — Pending durable snapshots and host-verified reconciliation
 
@@ -7498,3 +7537,15 @@ On2026-10-13 apply the approved workspace write-lease/copy-back and shell-hook b
 ## ADR-LOG-RESTRUCT-0388 — Owner clarifies timestamp representations
 
 On2026-10-13 owner approves retaining canonical UTC text for textual timestamps, unchanged epoch milliseconds for checkpoints, and equivalent canonical SQLite default expressions, each with exact production writer/reader proof. Reconcile TG4-19 wording to these already approved contracts; this does not waive year/DST, legacy readability or platform execution evidence.
+
+## ADR-LOG-RESTRUCT-0389 — Owner separates QC/retry named gates from platform/Fleet acceptance
+
+On2026-10-13 owner approves closing P4-14/TG4-07 and P4-15/TG4-08 on their named checks after focused closeout; retain three-OS execution with P4-11/P4-61 and successful paid Fleet proof with P4-50. This corrects added status dependencies, not their substantive QC/retry contracts or the overall phase goal. The first fresh Windows shell filter correctly denies the old fixture selected at repository CWD because the readonly host bridge lies inside that writable workspace. Fix the fixture to an owned isolated directory, matching its shell-exit purpose; do not widen the sandbox. Exact closeout must pass before checkboxes change.
+
+## ADR-LOG-RESTRUCT-0390 — Strengthen legacy readback and recovery tool guidance
+
+On2026-10-13 integration review finds the new legacy fixtures only assert timestamp parseability, which would accept an unrelated parseable fallback. Assert the independently seeded creation/offset instant for every projected field before accepting the unit. Update reconcile_worker_operation guidance to describe the approved now-implemented one-use cursor path, replacing its pre-admission wording; no API/authorization change. These are bounded owning-test/documentation corrections within the approved contracts, not a new feature or gate exception.
+
+## ADR-LOG-RESTRUCT-0391 — Windows P4 acceptance and deferred release-platform parity
+
+**Owner decision / 2026-10-13.** Core P4 targets a Windows PA-to-Fleet, build-verified, observable Calendar-ready workflow. Linux and macOS project-command/toolchain/sandbox execution parity moves to P9 delivery and stays fail-closed until proven; this does not weaken Windows child confinement, install approval, egress consent, QC evidence, or the owner's final Calendar acceptance. P4 keeps task-scoped checkpoints, uncertain-effect quarantine, host reconciliation and a visible Supervisor handoff. Automatic replay/reassignment across process loss moves to P7; uncertain effects cannot be retried automatically under the P4 contract. The owner explicitly keeps exhaustive builtin failure, timestamp-pair and graph/MCP observability breadth in P4. The governing P4 tasks/gates and P7/P9 task owners must be edited together; no checkbox closes from this scope decision alone. Current baseline remains 42/59 P4 and 20/33 TG4 before fresh closure proof.

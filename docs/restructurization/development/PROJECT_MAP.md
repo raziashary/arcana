@@ -1,4 +1,10 @@
-# Arcana codebase map (source verified 2026-10-01; P4 implementation in progress)
+# Arcana codebase map (refreshed 2026-10-13; P4 implementation in progress)
+
+Current phase boundary: P4 proves the Windows PA → Fleet coding path,
+including safe manual Supervisor recovery and full Windows observability
+breadth. P7-19 owns automatic process-loss replay/reassignment; P9-16 owns
+Linux/macOS Fleet toolchain, sandbox, dependency, timestamp and worker parity.
+Unsupported platform execution stays fail-closed (ADR-LOG-RESTRUCT-0391).
 
 ```mermaid
 flowchart LR
@@ -102,13 +108,14 @@ default worker recipes request explicit install/build/test/lint intents, Rust
 resolves the selected ecosystem's argv, bounds output, and records task-scoped
 evidence read by the QC status gate. Rust/Node multi-ecosystem selection and
 ancestor fallback have focused tests. P4-13's observed process result and
-shipped QC-reader proof pass. P4-14 is reopened because stranded-task
-reconciliation and the Tauri status command bypass that guard; the shared
-enforcement choice and direct-writer negative test remain pending. TG4-07 and
-P4-12 is closed by the file-backed evidence/reopen/QC-reader proof. P4-11 and
-TG4-07 remain open for real PowerShell/`cmd` process results, the cross-platform
-command corpus, and full desktop worker-to-QC smoke. Bash remains available for
-general shell work but cannot create build evidence.
+shipped QC-reader proof pass. P4-14/TG4-07 now close on task-scoped atomic
+batch evidence, direct-SQL and shared-transition enforcement, interrupted
+batch refusal and actual PowerShell/`cmd` exit results; see
+`_verify/P4-14-QC-NAMED-CLOSEOUT-2026-10-13.md`. P4-12 is closed by the
+file-backed evidence/reopen/QC-reader proof. P4-11 and P4-61 retain the
+Windows production command corpus, sandbox and full desktop worker-to-QC
+smoke. Bash remains available for general shell work but cannot create build
+evidence.
 
 Graph-driven IDE navigation emits `ide:navigate` from the Tauri host. The
 app-root listener in `src/utils/ideNavigation.ts` validates the workspace path,

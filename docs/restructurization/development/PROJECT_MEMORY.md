@@ -1,11 +1,24 @@
 # Arcana working memory (updated 2026-10-13)
 
-Current state: active, following owner resume and ADR0359 approvals. Historical
-paused/pending notes are superseded. Shared prefix hardening and provider
-cancellation are verified. Offline CLI Fleet passes5/5; live-provider completion
-and strict sandbox proof remain open.
+**Current navigation (ADR0391):** P4 is Windows-first, **44/59 tasks checked and
+22/33 TG4 gates passing** after P4-14/TG4-07 named QC closeout. Windows PA →
+Fleet engineering, full built-in failure/timestamp/graph/MCP/observability
+proof and the owner's final Calendar P4-49 remain. P4-14/TG4-07 and
+P4-15/TG4-08 close on their named Windows QC/diagnosis contracts; the isolated
+P4-15 test requires an explicit selected Rustup toolchain after profile
+redirection. P4
+retains quarantine, host reconciliation and explicit manual Supervisor
+handoff. Automatic process-loss replay/reassignment moves to P7-19/TG7-06;
+Linux/macOS Fleet parity moves to P9-16/TG9-06 and stays fail-closed until
+proven. The active sources are the MDP §10, Testing Gates §8, Readiness
+Matrix's current table and the dated `_verify` receipts. Older status paragraphs
+below are historical snapshots. No second paid provider run is authorized.
 
-Latest active checkpoint: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`.
+Current state: active, following owner resume and ADR0359 approvals. Historical
+paused/pending notes are superseded. Shared prefix hardening and provider cancellation units are verified. Offline production CLI success/deadline/export harness passes 5/5;
+Live-provider Fleet completion, strict sandbox, and desktop attachment remain open. The Windows shell-hook lifecycle subproof passes seven focused tests, and the Linux staging planner module passes 8/8; see _verify/P4-61-SHELL-HOOK-BOUNDARY-2026-10-12.md and _verify/P4-61-COPYBACK-WIRING-NEXT-2026-10-12.md.
+
+Latest checkpoint plus dated 2026-10-12 follow-up reports: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`.
 Current tally: **42/59 P4, 20/33 TG4**. P4-62/TG4-32 close on their own deadline/timing proof (ADR0374). P4-39 remains closed on its saved-Fleet and retained-audit proof. Retention P4-59/TG4-21 is proven
 across the complete Windows/Linux/macOS consumer checks. Startup retry
 P4-52/TG4-26 is proven on its own contract, as the owner approved in ADR-0319;
@@ -1047,6 +1060,10 @@ coverage remain open; expanded goal is unread and Calendar was untouched.
 2026-10-12 P4-51 shared prefix hardening (ADR0359/0360): owner-approved executor enrichment now removes bounded full/truncated argument reflections at Unicode boundaries while preserving existing twelve-character matching, useful causes, JSON shape and correlation. Exact tool_result_error_tests pass Windows11/11 (.15s), Linux11/11 (.57s), with credential/database variables absent. Independent Luna High source review found no scoped sanitizer defect. Producer-truncated causes cannot be reconstructed. Evidence: `_verify/P4-51-SHARED-PREFIX-HARDENING-2026-10-12.md`. Provider cancellation and actual offline CLI Fleet proof proceed separately; sandbox/desktop prerequisites remain. No task/gate closure or readiness rescore: P441/59, TG419/33. No paid call, owner Calendar or expanded-goal work.
 
 2026-10-12 provider cancellation unit (ADR0359/0361/0364): AgentEngine cancels preflight, request establishment, retry delay and body waits, prioritizes cancellation over ready chunks, and dispatches no later tool in the focused fixtures. Both budget decorators retain unknown-output holds through partial usage; explicit Done or recognized terminal reason followed by EOF reconciles observed totals, while bare/unknown EOF, errors and drops charge the conservative maximum. Windows exact run-token9/9, daily-cap9/9, engine cancellation6/6 pass; measured pending cancellation110–143ms, ready-body~5ms/onepoll. Independent Luna High final source review found no unresolved scoped defect. Linux and live-vendor cancellation are not established by this evidence; remote processing/billing may continue. Reports: `_verify/P4-51-PROVIDER-CANCELLATION-2026-10-12.md`, `_verify/P4-51-FAILURE-BOUNDARY-REVIEW-2026-10-12.md`. P441/59, TG419/33 unchanged; shared lease and actual CLI Fleet proof are separate ongoing units.
+
+2026-10-12 P4-61 kernel quota milestone: source-matched delegated cgroup test passes Linux1/1 (6.37s). Actual aggregate CPU throttling, 48MiB memory OOM kill, pids.max=4 denial, confirmed empty-state teardown and zero owned leftovers are observed. Transient service is removed/inactive; no persistent machine changes. Evidence: `_verify/P4-61-DELEGATED-QUOTA-PROOF-2026-10-12.md`. This is kernel proof, not production sandbox enablement: private-stage lifetime, recoverable copy-back, full filesystem/network capability conjunctions and macOS remain open. Root managed-file lease tests pass Windows3/3 plus ignored subprocess helper, and actual file-tool consumer/context/panic checks pass1/1 each; admission-before-journal cancellation refinement is being verified. Owner explicitly approved sandboxed shell hooks and retained child/lease cleanup ownership (ADR0365/0367); Windows launch is enabled with focused lifecycle tests, while production shutdown drain remains open. Privacy6554942 and cancellation102ff7d are pushed to main. Core tally41/59, TG419/33 unchanged; actual CLI child has passing batch and is at QC, not yet full Fleet success. Calendar owner-only; expanded goal unread.
+
+2026-10-12 P4-53 write-admission continuation: formatting is clean after the cleanup retry-status change. The cancellation-before-journal regression passes after reopening `runs.db`; cleanup retry ownership is observable as Retrying and releases the retained child/lease only after confirmation. Focused shell-hook tests pass, but the production cleanup owner has no shutdown drain and the lease does not serialize Execute/FreeformShell tools, so this evidence does not close P4-18/P4-19/P4-53 or TG4-27/TG4-30. Counts remain P441/59 and TG419/33. Evidence: `_verify/P4-61-WRITE-LEASE-REVIEW-2026-10-12.md` and `_verify/P4-61-SHELL-HOOK-BOUNDARY-2026-10-12.md`.
 
 2026-10-12 offline CLI Fleet unit closeout: the actual feature-gated CLI Fleet subprocess completes worker Cargo verification, QC review, child/epic completion, and Logs/analytics export readback. Windows fleet_offline passes5/5 (22.54s), including unmarked/redirected-profile refusal; ordinary builds execute0 offline tests, and core/CLI cargo check passes (24.96s). Default-off marker paths are reparse/symlink guarded; the parent test has an outer deadline and Windows tree cleanup. Unix outer-timeout descendant cleanup remains unproved. Evidence: _verify/P4-50-CLI-OFFLINE-FLEET-2026-10-12.md and _verify/P4-50-OFFLINE-CLI-COMMIT-REVIEW-2026-10-12.md; ADR0368/0369. This completes the offline CLI execution slice, not live Gemini, full observability/UI, platform sandbox or P4-49. Core checklist remains41/59 P4 and19/33 TG4. No paid provider or owner Calendar activity.
 
