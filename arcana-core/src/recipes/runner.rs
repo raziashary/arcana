@@ -1479,9 +1479,17 @@ mod production_git_commit_recipe_tests {
         run_commit_recipe(true).await;
     }
 
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum LostAckInterruption {
+        Error,
+        Panic,
+        Cancel,
+    }
+
     struct MultiMutationInterruptionProvider {
         task_id: i64,
-        panic_after_lost_ack: bool,
+        interruption: LostAckInterruption,
+        cancel_ready: Arc<tokio::sync::Notify>,
         turn: Mutex<usize>,
         requests: Mutex<Vec<CompletionRequest>>,
     }
@@ -1632,8 +1640,15 @@ mod production_git_commit_recipe_tests {
                         serde_json::from_str(&second_write.0).expect("unknown result envelope");
                     assert_eq!(result["error"]["code"], "side_effect_outcome_unknown");
                     assert_eq!(result["error"]["retry_safe"], false);
-                    if self.panic_after_lost_ack {
-                        panic!("injected provider panic after lost mutation acknowledgement");
+                    match self.interruption {
+                        LostAckInterruption::Panic => {
+                            panic!("injected provider panic after lost mutation acknowledgement");
+                        }
+                        LostAckInterruption::Cancel => {
+                            self.cancel_ready.notify_one();
+                            return std::future::pending().await;
+                        }
+                        LostAckInterruption::Error => {}
                     }
                     return Err(ArcanaError::Agent(
                         "scripted provider interruption after lost mutation acknowledgement".into(),
@@ -1740,22 +1755,11 @@ mod production_git_commit_recipe_tests {
         }
     }
 
-    async fn exercise_shipped_worker_lost_ack_continuation(panic_after_lost_ack: bool) {
-        let expected_phase = if panic_after_lost_ack {
-            "interrupted"
-        } else {
-            "failed"
-        };
-        let expected_outcome = if panic_after_lost_ack {
-            "abandoned"
-        } else {
-            "failed"
-        };
-        let expected_worker_status = if panic_after_lost_ack {
-            "idle"
-        } else {
-            "error"
-        };
+    async fn exercise_shipped_worker_lost_ack_continuation(interruption: LostAckInterruption) {
+        let abrupt = interruption != LostAckInterruption::Error;
+        let expected_phase = if abrupt { "interrupted" } else { "failed" };
+        let expected_outcome = if abrupt { "abandoned" } else { "failed" };
+        let expected_worker_status = if abrupt { "idle" } else { "error" };
         let home = tempfile::tempdir().expect("isolated Arcana home");
         let _home = crate::db::test_support::with_home(home.path());
         let analytics = Arc::new(
@@ -1843,9 +1847,11 @@ mod production_git_commit_recipe_tests {
             .expect("install isolated outcome failure trigger");
         drop(trigger_db);
 
+        let cancel_ready = Arc::new(tokio::sync::Notify::new());
         let provider = Arc::new(MultiMutationInterruptionProvider {
             task_id,
-            panic_after_lost_ack,
+            interruption,
+            cancel_ready: Arc::clone(&cancel_ready),
             turn: Mutex::new(0),
             requests: Mutex::new(Vec::new()),
         });
@@ -1875,6 +1881,12 @@ mod production_git_commit_recipe_tests {
 
         let scheduler = crate::recipes::scheduler::RecipeScheduler::new(Arc::new(make_runner()));
         scheduler.kick_worker("worker-backend");
+        if interruption == LostAckInterruption::Cancel {
+            tokio::time::timeout(Duration::from_secs(10), cancel_ready.notified())
+                .await
+                .expect("provider reaches cancellation after the lost acknowledgement");
+            scheduler.shutdown().await;
+        }
         tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if crate::db::runs::RunsDb::open()
@@ -1890,7 +1902,9 @@ mod production_git_commit_recipe_tests {
         })
         .await
         .expect("provider interruption must finish the worker tick");
-        scheduler.shutdown().await;
+        if interruption != LostAckInterruption::Cancel {
+            scheduler.shutdown().await;
+        }
 
         let task = TasksDb::open()
             .expect("reopen isolated task database")
@@ -2269,12 +2283,17 @@ mod production_git_commit_recipe_tests {
 
     #[tokio::test]
     async fn shipped_worker_preserves_multiple_mutations_and_quarantines_lost_acknowledgement() {
-        exercise_shipped_worker_lost_ack_continuation(false).await;
+        exercise_shipped_worker_lost_ack_continuation(LostAckInterruption::Error).await;
     }
 
     #[tokio::test]
     async fn shipped_worker_panic_after_lost_ack_requires_reconciliation_before_handoff() {
-        exercise_shipped_worker_lost_ack_continuation(true).await;
+        exercise_shipped_worker_lost_ack_continuation(LostAckInterruption::Panic).await;
+    }
+
+    #[tokio::test]
+    async fn shipped_worker_cancel_after_lost_ack_requires_reconciliation_before_handoff() {
+        exercise_shipped_worker_lost_ack_continuation(LostAckInterruption::Cancel).await;
     }
 
     #[tokio::test]
