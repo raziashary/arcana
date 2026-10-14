@@ -5,6 +5,10 @@
 Windows Build/Test proofs.
 Windows PA → Fleet engineering, full built-in failure,
 graph/MCP/observability proof and the owner's final Calendar P4-49 remain.
+The latest P4-53 process-loss test passes after a separate worker process exits
+with an uncertain file outcome; reopened recovery holds the task and preserves
+the file, checkpoint and journal. Full TG4-27 continuity remains open; see
+`_verify/P4-53-DEAD-PROCESS-UNKNOWN-WRITE-2026-10-14.md`.
 P4-14/TG4-07, P4-15/TG4-08 and P4-57/TG4-19 close on their named Windows
 contracts; the isolated
 P4-15 test requires an explicit selected Rustup toolchain after profile

@@ -2816,6 +2816,164 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dead_worker_process_keeps_unknown_write_for_supervisor_handoff() {
+        const CHILD_MARKER: &str = "ARCANA_P4_DEAD_WORKER_CHILD";
+        const HOME: &str = "ARCANA_P4_DEAD_WORKER_HOME";
+        const WORKSPACE: &str = "ARCANA_P4_DEAD_WORKER_WORKSPACE";
+        const TASK_ID: &str = "ARCANA_P4_DEAD_WORKER_TASK";
+        let child = std::env::var_os(CHILD_MARKER).is_some();
+        let (home, workspace, task_id, _owned_dirs) = if child {
+            (
+                std::path::PathBuf::from(std::env::var_os(HOME).expect("parent supplies home")),
+                std::path::PathBuf::from(
+                    std::env::var_os(WORKSPACE).expect("parent supplies workspace"),
+                ),
+                std::env::var(TASK_ID)
+                    .expect("parent supplies task")
+                    .parse::<i64>()
+                    .expect("numeric task ID"),
+                None,
+            )
+        } else {
+            let home = tempfile::tempdir().expect("isolated home");
+            let workspace = tempfile::tempdir().expect("isolated workspace");
+            let home_path = home.path().to_path_buf();
+            let workspace_path = workspace.path().to_path_buf();
+            let _home = crate::db::test_support::with_home(&home_path);
+            crate::recipes::init().expect("persist default worker roster");
+            let tasks = TasksDb::open().expect("open isolated task board");
+            let task_id = new_ready_task(&tasks, "lost process after an unknown file outcome");
+            tasks
+                .update_status(task_id, "assigned", Some("worker-backend"))
+                .expect("assign backend worker");
+            let worker = WorkersDb::open()
+                .unwrap()
+                .get_by_slug("worker-backend")
+                .unwrap()
+                .unwrap();
+            WorkersDb::open()
+                .unwrap()
+                .update_status(worker.id, WorkerStatus::Active)
+                .unwrap();
+
+            let test_name = std::thread::current()
+                .name()
+                .expect("test harness names the current test")
+                .to_owned();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("--exact")
+                .arg(test_name)
+                .arg("--nocapture")
+                .env(CHILD_MARKER, "1")
+                .env(HOME, &home_path)
+                .env(WORKSPACE, &workspace_path)
+                .env(TASK_ID, task_id.to_string())
+                .env_remove("GOOGLE_API_KEY")
+                .env_remove("GEMINI_API_KEY")
+                .output()
+                .expect("launch disposable worker process");
+            assert!(
+                output.status.success(),
+                "child failed before process loss\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            (home_path, workspace_path, task_id, Some((home, workspace)))
+        };
+
+        let _home = crate::db::test_support::with_home(&home);
+        let tasks = TasksDb::open().expect("reopen isolated task board");
+        if child {
+            use crate::agent::builtin_tools::write_file::WriteFileTool;
+            use crate::agent::permission::{new_pending_permissions, PermissionMode};
+            use crate::agent::tool_executor::ToolExecutor;
+            use crate::agent::tool_trait::AgentIdentity;
+
+            let worker = WorkersDb::open()
+                .unwrap()
+                .get_by_slug("worker-backend")
+                .unwrap()
+                .unwrap();
+            WorkersDb::open()
+                .unwrap()
+                .update_status(worker.id, WorkerStatus::Working)
+                .unwrap();
+            tasks
+                .claim_task_with_pid(task_id, "worker-backend", std::process::id())
+                .expect("persist child process claim");
+            let run_id = crate::db::runs::RunsDb::open()
+                .unwrap()
+                .begin_worker_tick("worker-backend", "lost-process-session")
+                .expect("persist child run owner");
+            crate::db::runs::RunsDb::open()
+                .unwrap()
+                .update_worker_tick_phase(&run_id, "running", Some(task_id), None)
+                .expect("bind claimed task to child run");
+            let runs_path = home.join(".arcana").join("runs.db");
+            rusqlite::Connection::open(runs_path)
+                .unwrap()
+                .execute_batch(
+                    "CREATE TRIGGER test_fail_process_loss_outcome
+                     BEFORE INSERT ON operation_journal
+                     WHEN NEW.record_type = 'outcome'
+                     BEGIN SELECT RAISE(ABORT, 'injected lost outcome'); END;",
+                )
+                .expect("inject lost acknowledgement after registered write");
+            let mut executor = ToolExecutor::new(
+                PermissionMode::Autonomous,
+                new_pending_permissions(),
+                "lost-process-session".into(),
+                workspace.to_string_lossy().into_owned(),
+                AgentIdentity::worker("worker-backend"),
+            )
+            .with_run_id(Some(run_id));
+            executor.set_task_id(Some(task_id));
+            let result = executor
+                .execute_batch(vec![(
+                    Arc::new(WriteFileTool),
+                    json!({"path":"lost-process.txt","content":"effect happened before process loss\n"}),
+                    "lost-process-write".into(),
+                )])
+                .await
+                .expect("registered write returns its unknown outcome");
+            assert!(result[0].1.is_error);
+            assert!(workspace.join("lost-process.txt").is_file());
+            std::process::exit(0);
+        }
+
+        let held = recover_interrupted_worker_run("worker-backend", false)
+            .expect("reconcile exact dead-process owner");
+        assert_eq!(held, vec![task_id]);
+        let task = tasks.get_by_id(task_id).unwrap().unwrap();
+        assert_eq!(task.status, crate::db::tasks::TaskStatus::NeedsInfo);
+        assert_eq!(task.assigned_worker.as_deref(), Some("worker-backend"));
+        assert!(task.claimed_by_pid.is_none());
+        assert_eq!(
+            std::fs::read_to_string(workspace.join("lost-process.txt")).unwrap(),
+            "effect happened before process loss\n"
+        );
+        let runs = crate::db::runs::RunsDb::open().unwrap();
+        let run = runs.latest_worker_tick("worker-backend").unwrap().unwrap();
+        assert_eq!(run.phase, "interrupted");
+        assert_eq!(run.task_id, Some(task_id));
+        let journal = runs.operation_journal_page(&run.run_id, 0, 10).unwrap();
+        let unknown = journal
+            .entries
+            .iter()
+            .find(|entry| entry.operation == "write_file")
+            .expect("durable write intent survives process loss");
+        assert_eq!(unknown.outcome, crate::db::runs::OperationOutcome::Unknown);
+        assert!(runs.unresolved_task_side_effect(task_id).unwrap().is_some());
+        assert_eq!(
+            crate::git::checkpoint::list(None, None, Some(task_id))
+                .unwrap()
+                .len(),
+            1,
+            "task-scoped pre-write checkpoint survives process loss"
+        );
+    }
+
+    #[tokio::test]
     async fn cancelling_a_guarded_recipe_recovers_the_task_and_worker() {
         let home = tempfile::tempdir().expect("isolated Arcana home");
         let _home = crate::db::test_support::with_home(home.path());

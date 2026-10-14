@@ -15,6 +15,12 @@ read and finish `P4_EXPANDED_GOAL.md`, followed by P5, P6, P7 and P9.
 No second paid provider run is authorized. The dated status below is retained
 as history where it differs from this current scope.
 
+The latest P4-53 Windows process-loss test reopens the real stores after a
+separate worker process exits with a completed file write and missing journal
+outcome. Recovery holds the task and preserves its file/checkpoint/unknown
+intent; full restarted-host manual handoff and restore proof remain open.
+Evidence: `_verify/P4-53-DEAD-PROCESS-UNKNOWN-WRITE-2026-10-14.md`.
+
 Current state: **active**. Owner resumed core P4 and approved all five runtime,
 sandbox and privacy decisions in ADR0359. Earlier pause/pending notes below are
 historical. Shared privacy hardening and provider cancellation units are verified. The 2026-10-12 feature-gated production CLI success/deadline/export harness passes 5/5, but live-provider Fleet completion remains open. Windows shell-hook lifecycle also gained seven focused passes, and the Linux staging planner regressions pass 8/8; strict sandbox, provider-cost, and remaining observability proof continue. The isolated real desktop consent/Logs/export receipt passes under P4-60/TG4-16.

@@ -25,6 +25,11 @@ consumer receipt: persisted Supervisor recipe → RecipeRunner → AgentEngine �
 registered health/task tools → next model turn. Together with the prior
 panic/lost-acknowledgement manual-continuation proof, this closes P4-36/S4-03;
 P4-53/TG4-27 and P4-54/TG4-28 retain their wider contracts.
+The separate-process P4-53 receipt follows worker claim/run binding →
+`ToolExecutor`/`WriteFileTool` → failed journal outcome → process exit →
+reopened `RunsDb`/`TasksDb`/checkpoint readers → exact-owner recovery and held
+task. It proves quarantine across process loss; manual restarted-host handoff
+and restore remain open.
 The Windows P4-57/TG4-19 timestamp writer/reader corpus and legacy public
 reader checks are recorded in
 `_verify/P4-57-WINDOWS-CLOSEOUT-2026-10-13.md`; Linux/macOS execution remains
