@@ -24,6 +24,133 @@ const MAX_SAFE_DIAGNOSTICS: usize = 24;
 
 pub struct ProjectCommandTool;
 
+/// Result of a user-initiated, bounded IDE Run action. This path deliberately
+/// does not produce task build evidence or impersonate a worker claim.
+#[derive(Debug, serde::Serialize)]
+pub struct IdeRunResult {
+    pub toolchain: String,
+    pub project_path: String,
+    pub command: String,
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// Run the project containing an opened IDE file through the same fixed-argv
+/// resolver and OS sandbox used by the worker's project command. Only an
+/// explicit user action reaches this entry point; agent calls still require a
+/// current task claim through `ProjectCommandTool`.
+pub async fn run_ide_project(
+    workspace: &Path,
+    relative_file: &str,
+    selector: Option<&str>,
+) -> Result<IdeRunResult, String> {
+    let workspace = workspace
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve selected workspace: {error}"))?;
+    let supplied = Path::new(relative_file);
+    if supplied.is_absolute() || relative_file.trim().is_empty() {
+        return Err("IDE Run requires an opened workspace-relative file".into());
+    }
+    let file = validate_workspace_path(&workspace.join(supplied), &workspace.to_string_lossy())?
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve opened IDE file: {error}"))?;
+    if !file.is_file() {
+        return Err("IDE Run target is not an existing workspace file".into());
+    }
+    let directory = file
+        .parent()
+        .ok_or_else(|| "IDE Run target has no project directory".to_string())?;
+    let detected = command::detect_toolchains(directory, &workspace)?;
+    // Discovery also scans descendants. They are not projects of the opened
+    // file, even when they happen to live beneath its containing directory.
+    let mut candidates = detected
+        .into_iter()
+        .filter(|project| file.starts_with(&project.project_dir))
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Err("No supported project manifest contains the opened file".into());
+    }
+    if let Some(selector) = selector {
+        let selected = command::parse_toolchain_selector(selector)
+            .ok_or_else(|| format!("Unknown IDE Run toolchain selector '{selector}'"))?;
+        candidates.retain(|project| project.toolchain == selected);
+        if candidates.is_empty() {
+            return Err(format!("No {selected:?} project contains the opened file"));
+        }
+    } else if let Some(preferred) = preferred_ide_toolchain(&file) {
+        if candidates
+            .iter()
+            .any(|project| ide_toolchain_matches(preferred, project.toolchain))
+        {
+            candidates.retain(|project| ide_toolchain_matches(preferred, project.toolchain));
+        }
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .project_dir
+            .components()
+            .count()
+            .cmp(&left.project_dir.components().count())
+    });
+    if candidates.len() > 1
+        && candidates[0].project_dir.components().count()
+            == candidates[1].project_dir.components().count()
+    {
+        return Err(format!(
+            "Opened file belongs to multiple detected projects ({}). Select a toolchain to run.",
+            format_detected_projects(&candidates)
+        ));
+    }
+    let project = &candidates[0];
+    let resolved = command::resolve(project.toolchain, CommandIntent::Run).ok_or_else(|| {
+        format!(
+            "No validated Run intent exists for {:?} at {}",
+            project.toolchain,
+            workspace_relative_path(&workspace, &project.project_dir)
+        )
+    })?;
+    let _workspace_lease = process_sandbox::retain_workspace(&workspace);
+    let output = tokio::time::timeout(
+        Duration::from_secs(120),
+        run_resolved_command_inner(&resolved, &project.project_dir, &workspace, &[], None),
+    )
+    .await
+    .map_err(|_| {
+        "IDE Run reached its 120-second limit; the sandboxed process tree was stopped".to_string()
+    })?
+    .map_err(|error| format!("IDE Run could not launch in the workspace sandbox: {error}"))?;
+    Ok(IdeRunResult {
+        toolchain: format!("{:?}", project.toolchain).to_ascii_lowercase(),
+        project_path: workspace_relative_path(&workspace, &project.project_dir),
+        command: resolved.display(),
+        exit_code: output.exit_code,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
+}
+
+fn preferred_ide_toolchain(file: &Path) -> Option<Toolchain> {
+    match file.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "rs" => Some(Toolchain::Cargo),
+        "go" => Some(Toolchain::Go),
+        "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" => Some(Toolchain::Npm),
+        "py" => Some(Toolchain::Python),
+        _ => None,
+    }
+}
+
+fn ide_toolchain_matches(preferred: Toolchain, detected: Toolchain) -> bool {
+    if preferred == Toolchain::Npm {
+        matches!(
+            detected,
+            Toolchain::Npm | Toolchain::Pnpm | Toolchain::Yarn | Toolchain::Bun
+        )
+    } else {
+        preferred == detected
+    }
+}
+
 fn bounded_timeout_secs(requested: Option<u64>) -> u64 {
     requested
         .unwrap_or(DEFAULT_TIMEOUT_SECS)
@@ -1618,6 +1745,43 @@ fn resolve_project_directory(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn ide_run_uses_opened_file_project_and_sandbox_without_a_task_claim() {
+        let root = tempfile::tempdir().expect("isolated IDE workspace");
+        let src = root.path().join("src");
+        std::fs::create_dir(&src).expect("create source directory");
+        std::fs::write(
+            root.path().join("Cargo.toml"),
+            "[package]\nname = \"ide_run_fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .expect("write Cargo manifest");
+        std::fs::write(
+            root.path().join("package.json"),
+            r#"{"name":"wrong-project","version":"1.0.0","scripts":{"start":"exit 99"}}"#,
+        )
+        .expect("write competing Node manifest");
+        std::fs::write(
+            src.join("main.rs"),
+            "fn main() { println!(\"ARCANA_IDE_RUN_OK\"); }\n",
+        )
+        .expect("write runnable artifact");
+
+        let result = run_ide_project(root.path(), "src/main.rs", None)
+            .await
+            .expect("run selected Rust project without a task claim");
+        assert_eq!(result.toolchain, "cargo");
+        assert_eq!(result.project_path, ".");
+        assert_eq!(result.command, "cargo run");
+        assert_eq!(result.exit_code, 0, "{}", result.stderr);
+        assert!(result.stdout.contains("ARCANA_IDE_RUN_OK"));
+        assert!(run_ide_project(root.path(), "../outside.rs", None)
+            .await
+            .is_err());
+        assert!(run_ide_project(root.path(), "src/main.rs", Some("python"))
+            .await
+            .is_err());
+    }
 
     #[cfg(not(windows))]
     #[tokio::test]

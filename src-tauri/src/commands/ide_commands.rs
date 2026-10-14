@@ -20,6 +20,24 @@ fn require_workspace() -> Result<String> {
         .map_err(|error| ArcanaError::Agent(format!("Workspace is unavailable: {error}")))
 }
 
+/// Run the opened file's detected project through Arcana's validated argv and
+/// workspace sandbox. This is a user action, separate from task-scoped agent
+/// `project_command` calls and their QC build evidence.
+#[tauri::command]
+pub async fn run_ide_project(
+    path: String,
+    toolchain: Option<String>,
+) -> Result<arcana_core::agent::builtin_tools::project_command::IdeRunResult> {
+    let workspace = require_workspace()?;
+    arcana_core::agent::builtin_tools::project_command::run_ide_project(
+        std::path::Path::new(&workspace),
+        &path,
+        toolchain.as_deref(),
+    )
+    .await
+    .map_err(ArcanaError::Agent)
+}
+
 // ─── File Tree ────────────────────────────────────────────────────────────────
 
 /// Read the file tree at `path` (defaults to workspace root when empty).

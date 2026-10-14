@@ -116,7 +116,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         ide_commands::{
             create_directory, create_file, delete_file, find_symbol_references, get_file_metadata,
             get_ide_workspace_state, get_symbol_tree, move_file, read_file_content, read_file_tree,
-            rename_file, resolve_symbol, search_file_contents, search_files,
+            rename_file, resolve_symbol, run_ide_project, search_file_contents, search_files,
             set_ide_workspace_state,
         },
         log_commands::{
@@ -340,6 +340,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             // IDE (Phase 3.2)
             read_file_tree,
             read_file_content,
+            run_ide_project,
             get_file_metadata,
             search_files,
             search_file_contents,
