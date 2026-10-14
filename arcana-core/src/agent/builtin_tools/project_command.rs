@@ -3131,6 +3131,52 @@ fn main() {
 
     #[cfg(windows)]
     #[tokio::test]
+    async fn windows_build_and_test_intents_run_for_all_checked_in_ecosystems() {
+        use command::{CommandIntent, Toolchain};
+
+        let profile = tempfile::tempdir().expect("isolated Arcana profile");
+        let _profile_guard = crate::db::test_support::with_home(profile.path());
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture_parent = manifest_dir.join("target").join("p4-acl-tests");
+        std::fs::create_dir_all(&fixture_parent).expect("create repository-local ACL parent");
+
+        for (fixture_name, toolchain) in [
+            ("fx-repo-rust", Toolchain::Cargo),
+            ("fx-repo-node", Toolchain::Npm),
+            ("fx-repo-python", Toolchain::Python),
+        ] {
+            let sandbox = tempfile::Builder::new()
+                .prefix("project-command-build-test-")
+                .tempdir_in(&fixture_parent)
+                .expect("create isolated checked-in project");
+            let project = sandbox.path().join(fixture_name);
+            copy_fixture_tree(
+                &manifest_dir.join("tests/fixtures").join(fixture_name),
+                &project,
+            );
+            let _workspace_lease = process_sandbox::retain_workspace(&project);
+            let detected = command::detect_toolchains(&project, &project)
+                .expect("detect the checked-in project");
+            assert_eq!(detected.len(), 1, "{fixture_name}");
+            assert_eq!(detected[0].toolchain, toolchain, "{fixture_name}");
+
+            for intent in [CommandIntent::Build, CommandIntent::Test] {
+                let resolved = command::resolve(toolchain, intent)
+                    .unwrap_or_else(|| panic!("{fixture_name} must support {intent:?}"));
+                let output = run_resolved_command(&resolved, &project, &project)
+                    .await
+                    .unwrap_or_else(|error| panic!("{fixture_name} {intent:?}: {error}"));
+                assert_eq!(
+                    output.exit_code, 0,
+                    "{fixture_name} {intent:?} failed\nstdout: {}\nstderr: {}",
+                    output.stdout, output.stderr
+                );
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
     async fn production_python_build_and_tests_use_the_staged_runtime() {
         use command::{CommandIntent, Toolchain};
 

@@ -12,6 +12,11 @@ Cargo Run → renderer output path passed the isolated P4-21 receipt. The
 Windows Node `.cmd` path also passes a focused production IDE Run with a denied
 sibling-file read. The complete P4-11/TG4-09 Windows command and containment
 corpus remains open.
+P4-11 now has isolated selected-workspace Build/Test exits for all three
+checked-in Rust, npm/Node and Python fixtures through the production resolver
+and sandbox. Registered `project_command` receipts connect the launcher to
+worker calls. TG4-18 retains Lint/Run and the complete Windows corpus;
+TG4-31 retains strict confinement/dependency staging.
 The scheduler's in-process timeout recovery now has a real `kick("supervisor")`
 consumer receipt: persisted Supervisor recipe → RecipeRunner → AgentEngine →
 registered health/task tools → next model turn. Together with the prior

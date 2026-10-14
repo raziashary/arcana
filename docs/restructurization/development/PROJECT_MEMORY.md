@@ -1,7 +1,8 @@
 # Arcana working memory (updated 2026-10-14)
 
-**Current navigation (ADR0391):** P4 is Windows-first, **48/59 tasks checked and
-24/33 TG4 gates passing** after the P4-21 IDE handoff and P4-36 recovery proofs.
+**Current navigation (ADR0391):** P4 is Windows-first, **49/59 tasks checked and
+24/33 TG4 gates passing** after P4-21 IDE handoff, P4-36 recovery and P4-11
+Windows Build/Test proofs.
 Windows PA → Fleet engineering, full built-in failure,
 graph/MCP/observability proof and the owner's final Calendar P4-49 remain.
 P4-14/TG4-07, P4-15/TG4-08 and P4-57/TG4-19 close on their named Windows

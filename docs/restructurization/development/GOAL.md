@@ -1,8 +1,9 @@
 # Arcana goal (updated 2026-10-14)
 
 **Current scope and proof (ADR0391, 2026-10-13):** Core P4 is Windows-first and
-remains open at **48/59 tasks and 24/33 TG4 gates** after the built-desktop
-P4-21 IDE handoff and P4-36 in-process recovery proofs. Finish the
+remains open at **49/59 tasks and 24/33 TG4 gates** after the built-desktop
+P4-21 IDE handoff, P4-36 in-process recovery, and P4-11 Windows Build/Test
+proofs. Finish the
 Windows PA → Fleet engineering path and complete the full built-in failure,
 graph/MCP and observability requirements,
 then leave P4-49's Calendar acceptance to the owner. Safe quarantine,
