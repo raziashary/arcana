@@ -17,6 +17,9 @@ checked-in Rust, npm/Node and Python fixtures through the production resolver
 and sandbox. Registered `project_command` receipts connect the launcher to
 worker calls. TG4-18 retains Lint/Run and the complete Windows corpus;
 TG4-31 retains strict confinement/dependency staging.
+The remaining TG4-18 Windows command failure is isolated to Cargo Clippy
+configuration path canonicalization: Rust Run and npm Lint/Run also pass the
+production sandbox. See `_verify/P4-18-WINDOWS-INTENT-ISOLATION-2026-10-14.md`.
 The scheduler's in-process timeout recovery now has a real `kick("supervisor")`
 consumer receipt: persisted Supervisor recipe → RecipeRunner → AgentEngine →
 registered health/task tools → next model turn. Together with the prior
