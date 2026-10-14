@@ -1,10 +1,22 @@
-# Arcana codebase map (refreshed 2026-10-13; P4 implementation in progress)
+# Arcana codebase map (refreshed 2026-10-14; P4 implementation in progress)
 
 Current phase boundary: P4 proves the Windows PA → Fleet coding path,
 including safe manual Supervisor recovery and full Windows observability
 breadth. P7-19 owns automatic process-loss replay/reassignment; P9-16 owns
 Linux/macOS Fleet toolchain, sandbox, dependency, timestamp and worker parity.
 Unsupported platform execution stays fail-closed (ADR-LOG-RESTRUCT-0391).
+S4-01 now requires the Windows end-to-end task and build-verified artifact;
+the equivalent Linux/macOS worker smoke is P9-16/TG9-06. The built desktop's
+agent `WriteFileTool` → Tauri `ide:navigate` → IDE tab → validated sandboxed
+Cargo Run → renderer output path passed the isolated P4-21 receipt. The
+Windows Node `.cmd` path also passes a focused production IDE Run with a denied
+sibling-file read. The complete P4-11/TG4-09 Windows command and containment
+corpus remains open.
+The scheduler's in-process timeout recovery now has a real `kick("supervisor")`
+consumer receipt: persisted Supervisor recipe → RecipeRunner → AgentEngine →
+registered health/task tools → next model turn. Together with the prior
+panic/lost-acknowledgement manual-continuation proof, this closes P4-36/S4-03;
+P4-53/TG4-27 and P4-54/TG4-28 retain their wider contracts.
 The Windows P4-57/TG4-19 timestamp writer/reader corpus and legacy public
 reader checks are recorded in
 `_verify/P4-57-WINDOWS-CLOSEOUT-2026-10-13.md`; Linux/macOS execution remains

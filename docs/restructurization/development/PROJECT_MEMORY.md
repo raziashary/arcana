@@ -1,8 +1,8 @@
-# Arcana working memory (updated 2026-10-13)
+# Arcana working memory (updated 2026-10-14)
 
-**Current navigation (ADR0391):** P4 is Windows-first, **46/59 tasks checked and
-24/33 TG4 gates passing** after the named QC, diagnosis, timestamp and consent
-closeouts. Windows PA → Fleet engineering, full built-in failure,
+**Current navigation (ADR0391):** P4 is Windows-first, **48/59 tasks checked and
+24/33 TG4 gates passing** after the P4-21 IDE handoff and P4-36 recovery proofs.
+Windows PA → Fleet engineering, full built-in failure,
 graph/MCP/observability proof and the owner's final Calendar P4-49 remain.
 P4-14/TG4-07, P4-15/TG4-08 and P4-57/TG4-19 close on their named Windows
 contracts; the isolated
@@ -10,8 +10,9 @@ P4-15 test requires an explicit selected Rustup toolchain after profile
 redirection. P4
 retains quarantine, host reconciliation and explicit manual Supervisor
 handoff. Automatic process-loss replay/reassignment moves to P7-19/TG7-06;
-Linux/macOS Fleet parity moves to P9-16/TG9-06 and stays fail-closed until
-proven. The active sources are the MDP §10, Testing Gates §8, Readiness
+Linux/macOS Fleet parity, including the former S4-01 three-platform smoke,
+moves to P9-16/TG9-06 and stays fail-closed until proven. Windows S4-01 remains
+open for the end-to-end task acceptance. The active sources are the MDP §10, Testing Gates §8, Readiness
 Matrix's current table and the dated `_verify` receipts. Older status paragraphs
 below are historical snapshots. No second paid provider run is authorized.
 
@@ -19,8 +20,8 @@ Current state: active, following owner resume and ADR0359 approvals. Historical
 paused/pending notes are superseded. Shared prefix hardening and provider cancellation units are verified. Offline production CLI success/deadline/export harness passes 5/5;
 Live-provider Fleet completion and strict sandbox remain open. The isolated real desktop consent/Logs/export receipt passes; see _verify/P4-60-IPC-RECEIPT-2026-10-13.md. The Windows shell-hook lifecycle subproof passes seven focused tests, and the Linux staging planner module passes 8/8; see _verify/P4-61-SHELL-HOOK-BOUNDARY-2026-10-12.md and _verify/P4-61-COPYBACK-WIRING-NEXT-2026-10-12.md.
 
-Latest checkpoint plus dated 2026-10-12 follow-up reports: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`.
-Current tally: **42/59 P4, 20/33 TG4**. P4-62/TG4-32 close on their own deadline/timing proof (ADR0374). P4-39 remains closed on its saved-Fleet and retained-audit proof. Retention P4-59/TG4-21 is proven
+Historical checkpoint and dated 2026-10-12 follow-up reports: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`.
+That checkpoint's tally was **42/59 P4, 20/33 TG4**; it is superseded by the current navigation above. P4-62/TG4-32 close on their own deadline/timing proof (ADR0374). P4-39 remains closed on its saved-Fleet and retained-audit proof. Retention P4-59/TG4-21 is proven
 across the complete Windows/Linux/macOS consumer checks. Startup retry
 P4-52/TG4-26 is proven on its own contract, as the owner approved in ADR-0319;
 successful paid Fleet stays open under P4-50. Capture unit `1cdb7a1` passes

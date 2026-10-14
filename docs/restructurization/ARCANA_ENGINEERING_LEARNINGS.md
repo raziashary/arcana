@@ -53,6 +53,17 @@ owns AgentEngine, worker recipes, provider adapters, SQLite stores and tools.
    source; the phase checklist and gate receipt identify what is proven and
    what is merely implemented. The owner performs the final P4-49 Calendar
    acceptance after engineering readiness.
+7. **Desktop handoff needs the real producer and reader.** The P4-21 receipt
+   creates an artifact with the production file tool, follows Tauri's
+   `ide:navigate` event into the IDE, clicks Run and reads back the sandboxed
+   Cargo result. A `.cmd` package manager is a separate Windows runtime case:
+   fixed `cmd.exe` argv alone did not grant the selected Node installation.
+   The focused npm run now passes with sibling-read denial, while the full
+   Windows command corpus remains open. A reported linker-temp `LNK1104` did
+   not recur in a complete desktop receipt or three repeated MSVC sandbox
+   builds, so its cause remains unconfirmed. See
+   [`development/_verify/P4-21-IDE-RUN-2026-10-14.md`](development/_verify/P4-21-IDE-RUN-2026-10-14.md)
+   and [`development/_verify/P4-11-NODE-SHIM-2026-10-14.md`](development/_verify/P4-11-NODE-SHIM-2026-10-14.md).
 
 ## Current route
 

@@ -2634,6 +2634,188 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interrupted_worker_kick_reaches_shipped_supervisor_and_reads_held_task() {
+        const CHILD_MARKER: &str = "ARCANA_P4_RECOVERY_KICK_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let test_name = std::thread::current()
+                .name()
+                .expect("Rust test harness names the current test")
+                .to_owned();
+            let output = std::process::Command::new(
+                std::env::current_exe().expect("resolve current Rust test executable"),
+            )
+            .arg("--exact")
+            .arg(test_name)
+            .arg("--nocapture")
+            .env(CHILD_MARKER, "1")
+            .env_remove("GOOGLE_API_KEY")
+            .env_remove("GEMINI_API_KEY")
+            .output()
+            .expect("run global-scheduler fixture in an isolated test process");
+            assert!(
+                output.status.success(),
+                "isolated recovery kick failed\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home and workspace");
+        let _home = crate::db::test_support::with_home(home.path());
+        crate::db::app_settings::set(
+            crate::db::app_settings::WORKSPACE_KEY,
+            &home.path().to_string_lossy(),
+        )
+        .expect("configure isolated selected workspace");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated consent store")
+            .grant(home.path(), "provider:google")
+            .expect("grant the scripted provider destination");
+        crate::recipes::init().expect("persist shipped Supervisor recipe and workers");
+        let workers = WorkersDb::open().expect("open isolated workers DB");
+        let worker = workers
+            .get_by_slug("worker-backend")
+            .expect("read shipped backend worker")
+            .expect("shipped backend worker exists");
+        workers
+            .update_status(worker.id, WorkerStatus::Working)
+            .expect("mark backend run active");
+        let tasks = TasksDb::open().expect("open isolated tasks DB");
+        let task_id = new_ready_task(&tasks, "interrupted backend task for Supervisor recovery");
+        tasks
+            .update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign task to backend worker");
+        tasks
+            .claim_task_with_pid(task_id, "worker-backend", std::process::id())
+            .expect("persist exact worker claim");
+        let runs = crate::db::runs::RunsDb::open().expect("open run ledger");
+        let interrupted_run_id = runs
+            .begin_worker_tick("worker-backend", "p4-recovery-kick-session")
+            .expect("persist backend run owner");
+
+        let provider = Arc::new(QcInboxProvider {
+            responses: Mutex::new(VecDeque::from([
+                DependencyCompletionProvider::tool_call(
+                    "recovery-health",
+                    "list_worker_health",
+                    json!({}),
+                ),
+                DependencyCompletionProvider::tool_call(
+                    "recovery-task",
+                    "get_task",
+                    json!({"id": task_id}),
+                ),
+                DependencyCompletionProvider::final_answer(
+                    "The interrupted task remains held for side-effect reconciliation.",
+                ),
+            ])),
+            requests: Mutex::new(Vec::new()),
+            pause_after_script: None,
+        });
+        let runner = RecipeRunner::new_with_workspace_override(
+            Arc::new(Mutex::new(crate::state::AppState {
+                active_provider: Some("google".into()),
+                active_model: Some("gemini-3.8-flash".into()),
+                ..crate::state::AppState::default()
+            })),
+            Arc::new(
+                crate::session::manager::SessionManager::new()
+                    .expect("open isolated session manager"),
+            ),
+            crate::agent::permission::new_pending_permissions(),
+            Some(home.path().to_string_lossy().into_owned()),
+        )
+        .with_provider_for_test(provider.clone());
+        let scheduler = Arc::new(RecipeScheduler::new(Arc::new(runner)));
+        install_global(Arc::clone(&scheduler));
+
+        let interrupted = run_if_recoverable_work_with_timeout(
+            "worker-backend",
+            Duration::from_millis(1),
+            || Ok(true),
+            std::future::pending::<Result<()>>(),
+        )
+        .await;
+        assert!(
+            interrupted.is_err(),
+            "the injected backend run must time out"
+        );
+        let completed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if runs
+                    .latest_worker_tick("supervisor")
+                    .expect("read kicked Supervisor run")
+                    .is_some_and(|run| run.phase == "completed")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(
+            completed.is_ok(),
+            "recovery kick did not complete: provider requests={}, Supervisor status={:?}, latest run={:?}, kick handles={:?}",
+            provider.request_count(),
+            workers.get_by_slug("supervisor").unwrap().map(|worker| worker.status),
+            runs.latest_worker_tick("supervisor").unwrap(),
+            scheduler.kick_handles.lock().unwrap().keys().collect::<Vec<_>>()
+        );
+        scheduler.shutdown().await;
+
+        let held = tasks.get_by_id(task_id).unwrap().unwrap();
+        assert_eq!(held.status, crate::db::tasks::TaskStatus::NeedsInfo);
+        assert_eq!(held.assigned_worker.as_deref(), Some("worker-backend"));
+        assert!(held.claimed_by_pid.is_none());
+        let interrupted_run = runs.latest_worker_tick("worker-backend").unwrap().unwrap();
+        assert_eq!(interrupted_run.run_id, interrupted_run_id);
+        assert_eq!(interrupted_run.phase, "interrupted");
+        let requests = provider.requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            3,
+            "the shipped recipe makes one inspected run"
+        );
+        assert!(requests[0]
+            .system
+            .as_deref()
+            .unwrap_or_default()
+            .contains("You are the Arcana Supervisor Agent."));
+        let result_for = |call_id: &str| {
+            requests
+                .iter()
+                .flat_map(|request| &request.messages)
+                .flat_map(|message| &message.content)
+                .find_map(|content| match content {
+                    MessageContent::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                        ..
+                    } if tool_use_id == call_id => {
+                        assert!(!is_error);
+                        Some(serde_json::from_str::<serde_json::Value>(content).unwrap())
+                    }
+                    _ => None,
+                })
+                .expect("the next Supervisor model turn consumes the production tool result")
+        };
+        let health = result_for("recovery-health");
+        let backend = health["workers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|worker| worker["slug"] == "worker-backend")
+            .expect("Supervisor reads backend health");
+        assert_eq!(backend["status"], "idle");
+        let task = result_for("recovery-task");
+        assert_eq!(task["id"], task_id);
+        assert_eq!(task["status"], "needs_info");
+    }
+
+    #[tokio::test]
     async fn cancelling_a_guarded_recipe_recovers_the_task_and_worker() {
         let home = tempfile::tempdir().expect("isolated Arcana home");
         let _home = crate::db::test_support::with_home(home.path());

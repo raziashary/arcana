@@ -1,8 +1,8 @@
-# Arcana goal (updated 2026-10-13)
+# Arcana goal (updated 2026-10-14)
 
 **Current scope and proof (ADR0391, 2026-10-13):** Core P4 is Windows-first and
-remains open at **46/59 tasks and 24/33 TG4 gates** after the named QC,
-diagnosis, timestamp and P4-60/TG4-16 consent closeouts. Finish the
+remains open at **48/59 tasks and 24/33 TG4 gates** after the built-desktop
+P4-21 IDE handoff and P4-36 in-process recovery proofs. Finish the
 Windows PA → Fleet engineering path and complete the full built-in failure,
 graph/MCP and observability requirements,
 then leave P4-49's Calendar acceptance to the owner. Safe quarantine,
@@ -18,8 +18,8 @@ Current state: **active**. Owner resumed core P4 and approved all five runtime,
 sandbox and privacy decisions in ADR0359. Earlier pause/pending notes below are
 historical. Shared privacy hardening and provider cancellation units are verified. The 2026-10-12 feature-gated production CLI success/deadline/export harness passes 5/5, but live-provider Fleet completion remains open. Windows shell-hook lifecycle also gained seven focused passes, and the Linux staging planner regressions pass 8/8; strict sandbox, provider-cost, and remaining observability proof continue. The isolated real desktop consent/Logs/export receipt passes under P4-60/TG4-16.
 
-Latest checkpoint/continuation: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`. Core P4 is
-**42/59 checked**, TG4 **20/33 passing**; 17 tasks remain, including the
+Historical checkpoint/continuation: `_verify/P4-SESSION-CHECKPOINT-2026-10-13.md`. At that point core P4 was
+**42/59 checked**, TG4 **20/33 passing**; 17 tasks remained, including the
 owner-run Calendar acceptance. P4-59/TG4-21 closes on complete retention
 consumer evidence across Windows, Linux and macOS. P4-52/TG4-26 closes on its
 own verified retry contract with owner approval; successful paid Fleet
