@@ -1635,7 +1635,98 @@ mod production_git_commit_recipe_tests {
                         "scripted provider interruption after lost mutation acknowledgement".into(),
                     ));
                 }
-                _ => panic!("unexpected provider request after interruption"),
+                4 => Self::tool_call(
+                    "resume-claim",
+                    "claim_task",
+                    json!({"task_id":self.task_id}),
+                ),
+                5 => Self::tool_call(
+                    "resume-instructions",
+                    "get_task",
+                    json!({"id":self.task_id}),
+                ),
+                6 => {
+                    assert!(request.messages.iter().flat_map(|message| &message.content).any(|content|
+                        matches!(content, MessageContent::ToolResult {name, content, is_error:false, ..}
+                            if name == "get_task" && content.contains("continuation.txt"))),
+                        "replacement reads persisted remaining-work instructions");
+                    Self::tool_call(
+                        "read-acknowledged",
+                        "read_file",
+                        json!({"path":"acknowledged.txt"}),
+                    )
+                }
+                7 => Self::tool_call("read-verified", "read_file", json!({"path":"lost-ack.txt"})),
+                8 => {
+                    for expected in ["first real mutation", "second real mutation"] {
+                        assert!(request.messages.iter().flat_map(|message| &message.content).any(|content|
+                            matches!(content, MessageContent::ToolResult {name, content, is_error:false, ..}
+                                if name == "read_file" && content.contains(expected))),
+                            "replacement consumes persisted artifacts");
+                    }
+                    Self::tool_call(
+                        "write-remaining",
+                        "write_file",
+                        json!({"path":"continuation.txt","content":"remaining work complete\n"}),
+                    )
+                }
+                9 => Self::tool_call(
+                    "verify-resumed-build",
+                    "project_command",
+                    json!({"intent":"build","toolchain":"cargo","timeout_secs":60}),
+                ),
+                10 => {
+                    let build = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if name == "project_command" => Some((content, is_error)),
+                            _ => None,
+                        })
+                        .expect("replacement receives build result");
+                    assert!(!*build.1, "replacement build failed: {}", build.0);
+                    Self::tool_call(
+                        "submit-resumed-qc",
+                        "update_task_status",
+                        json!({"id":self.task_id,"status":"qc_review"}),
+                    )
+                }
+                11 => {
+                    let qc = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult {
+                                name,
+                                content,
+                                is_error,
+                                ..
+                            } if name == "update_task_status" => Some((content, is_error)),
+                            _ => None,
+                        })
+                        .expect("replacement receives QC result");
+                    assert!(!*qc.1, "replacement QC refused: {}", qc.0);
+                    vec![
+                        StreamChunk::TextDelta {
+                            text: "Reconciled artifacts preserved; remaining work build-verified."
+                                .into(),
+                            block_index: 0,
+                        },
+                        StreamChunk::MessageDelta {
+                            stop_reason: "end_turn".into(),
+                            usage: Usage::default(),
+                        },
+                        StreamChunk::Done,
+                    ]
+                }
+                _ => panic!("unexpected provider request after resumed completion"),
             };
             Ok(Box::pin(stream::iter(chunks.into_iter().map(Ok))))
         }
@@ -1656,6 +1747,30 @@ mod production_git_commit_recipe_tests {
         );
         crate::analytics::install_global(analytics);
         let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        std::fs::create_dir(workspace.path().join("src")).unwrap();
+        std::fs::write(workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"recovered-worker-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n").unwrap();
+        std::fs::write(
+            workspace.path().join("src/lib.rs"),
+            "pub fn ready() -> bool { true }\n",
+        )
+        .unwrap();
+        let lock = std::process::Command::new("cargo")
+            .current_dir(workspace.path())
+            .env_remove("GOOGLE_API_KEY")
+            .env_remove("GEMINI_API_KEY")
+            .env_remove("OPENAI_API_KEY")
+            .env_remove("ANTHROPIC_API_KEY")
+            .env_remove("DATABASE_URL")
+            .env_remove("DIRECT_URL")
+            .args(["generate-lockfile", "--offline"])
+            .output()
+            .expect("generate isolated fixture lockfile offline");
+        assert!(
+            lock.status.success(),
+            "fixture lockfile generation failed: {}",
+            String::from_utf8_lossy(&lock.stderr)
+        );
         crate::egress_consent::WorkspaceEgressConsentDb::open()
             .expect("open isolated workspace consent store")
             .grant(workspace.path(), "provider:google")
@@ -1670,7 +1785,7 @@ mod production_git_commit_recipe_tests {
                 ),
                 priority: "p2".into(),
                 task_type: "feature".into(),
-                acceptance_criteria: "An unknown file mutation must remain quarantined.".into(),
+                acceptance_criteria: "An unknown mutation remains quarantined. After host reconciliation, read both artifacts, write continuation.txt without replaying either write, build and submit QC.".into(),
                 created_by: Some("tg4-27-test".into()),
             })
             .expect("create task")
@@ -1956,6 +2071,171 @@ mod production_git_commit_recipe_tests {
             std::fs::read_to_string(workspace.path().join("lost-ack.txt")).unwrap(),
             "second real mutation\n",
             "the later scheduler kick must not repeat the second write"
+        );
+
+        let mut recovery_executor = crate::agent::tool_executor::ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "verified-worker-recovery".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            crate::agent::tool_trait::AgentIdentity::supervisor(),
+        );
+        let recovered = recovery_executor
+            .execute_batch(vec![(
+                registry.get("reconcile_worker_operation").unwrap(),
+                json!({"run_id":run.run_id,"intent_cursor":unknown.cursor,
+                "decision":"reconciled","reason_code":"effect_verified_complete"}),
+                "verify-lost-ack-file".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(!recovered[0].1.is_error, "{}", recovered[0].1.output);
+        assert!(runs.unresolved_task_side_effect(task_id).unwrap().is_none());
+        // Retire only the isolated injected fault, preserving all actual guards.
+        rusqlite::Connection::open(&runs_path)
+            .unwrap()
+            .execute_batch("DROP TRIGGER test_fail_lost_ack_outcome;")
+            .unwrap();
+        let tasks = TasksDb::open().unwrap();
+        tasks.update_status(task_id, "ready", None).unwrap();
+        let frontend = workers
+            .get_by_slug("worker-frontend")
+            .unwrap()
+            .expect("replacement frontend worker exists");
+        workers
+            .update_status(frontend.id, WorkerStatus::Active)
+            .expect("make replacement worker runnable");
+        let handoff = recovery_executor
+            .execute_batch(vec![(
+                registry
+                    .get("assign_task")
+                    .expect("Supervisor assignment tool"),
+                json!({"id":task_id,"worker_slug":"worker-frontend",
+                    "override_reason":"Host verified both effects and approved remaining work"}),
+                "approved-manual-handoff".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(!handoff[0].1.is_error, "{}", handoff[0].1.output);
+        assert_eq!(
+            TasksDb::open()
+                .unwrap()
+                .get_by_id(task_id)
+                .unwrap()
+                .unwrap()
+                .assigned_worker
+                .as_deref(),
+            Some("worker-frontend")
+        );
+        let handoff_audit: (String, String) =
+            rusqlite::Connection::open(home.path().join(".arcana").join("tasks.db"))
+                .unwrap()
+                .query_row(
+                    "SELECT assignment_method, override_reason FROM routing_history
+             WHERE task_id = ?1 AND worker_slug = 'worker-frontend'
+             ORDER BY assigned_at DESC LIMIT 1",
+                    [task_id.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("manual handoff remains auditable after reopen");
+        assert_eq!(handoff_audit.0, "override");
+        assert_eq!(
+            handoff_audit.1,
+            "Host verified both effects and approved remaining work"
+        );
+        let resumed_scheduler =
+            crate::recipes::scheduler::RecipeScheduler::new(Arc::new(make_runner()));
+        resumed_scheduler.kick_worker("worker-frontend");
+        tokio::time::timeout(Duration::from_secs(90), async {
+            loop {
+                let latest = crate::db::runs::RunsDb::open()
+                    .unwrap()
+                    .latest_worker_tick("worker-frontend")
+                    .unwrap();
+                if latest.is_some_and(|latest| latest.outcome.is_some()) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("replacement worker settles");
+        resumed_scheduler.shutdown().await;
+        let tasks = TasksDb::open().unwrap();
+        let resumed_task = tasks.get_by_id(task_id).unwrap().unwrap();
+        let observed_run = crate::db::runs::RunsDb::open()
+            .unwrap()
+            .latest_worker_tick("worker-frontend")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            provider.requests.lock().unwrap().len(),
+            12,
+            "replacement stopped before scripted completion: outcome={:?} failure={:?}",
+            observed_run.outcome,
+            observed_run.failure_code
+        );
+        assert_eq!(resumed_task.task_identity, task.task_identity);
+        assert_eq!(
+            resumed_task.status,
+            crate::db::tasks::TaskStatus::QcReview,
+            "resumed worker uses observed build before QC"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("continuation.txt")).unwrap(),
+            "remaining work complete\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("acknowledged.txt")).unwrap(),
+            "first real mutation\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("lost-ack.txt")).unwrap(),
+            "second real mutation\n"
+        );
+        let resumed_runs = crate::db::runs::RunsDb::open().unwrap();
+        let resumed = resumed_runs
+            .latest_worker_tick("worker-frontend")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            resumed_runs
+                .latest_worker_tick("worker-backend")
+                .unwrap()
+                .unwrap()
+                .run_id,
+            run.run_id,
+            "the original worker is not redispatched after handoff"
+        );
+        assert_ne!(resumed.run_id, run.run_id);
+        assert_ne!(
+            resumed.session_id, run.session_id,
+            "continuation reconstructs fresh session"
+        );
+        let resumed_journal = resumed_runs
+            .operation_journal_page(&resumed.run_id, 0, 50)
+            .unwrap();
+        let remaining_writes = resumed_journal
+            .entries
+            .iter()
+            .filter(|entry| entry.operation == "write_file")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            remaining_writes.len(),
+            1,
+            "prior effects are never replayed"
+        );
+        assert_eq!(remaining_writes[0].target_paths, ["continuation.txt"]);
+        assert_eq!(
+            remaining_writes[0].outcome,
+            crate::db::runs::OperationOutcome::Ok
+        );
+        assert_eq!(provider.requests.lock().unwrap().len(), 12);
+        assert_eq!(
+            crate::git::checkpoint::list(None, None, Some(task_id))
+                .unwrap()
+                .len(),
+            3
         );
     }
 

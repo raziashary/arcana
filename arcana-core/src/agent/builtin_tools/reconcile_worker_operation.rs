@@ -20,7 +20,7 @@ impl Tool for ReconcileWorkerOperationTool {
     }
 
     fn description(&self) -> &str {
-        "Supervisor-only: after inspecting the exact task, workspace/checkpoint and Git state, persist one decision for an unknown worker side effect. Use reconciled when the effect is verified complete, and do_not_retry when uncertainty remains unsafe. Arcana verifies sealed host snapshots and local file state before granting completion. Retry authorization remains held until operation-bound execution admission can revalidate it; a Supervisor assertion alone cannot permit replay. Legacy/unprovable effects remain held."
+        "Supervisor-only: after inspecting the exact task, workspace/checkpoint and Git state, persist one decision for an unknown worker side effect. Use reconciled when the effect is verified complete, and do_not_retry when uncertainty remains unsafe. Arcana verifies sealed host snapshots and local file state before granting completion. For a verifiable unchanged write, retry_safe creates a task/worker-bound one-use grant. Tell the owning worker to call write_file with the original recovery_intent_cursor; Arcana revalidates and atomically consumes that grant under the write lease. A grant alone never executes or clears uncertainty. Legacy/unprovable effects remain held."
     }
 
     fn input_schema(&self) -> Value {
