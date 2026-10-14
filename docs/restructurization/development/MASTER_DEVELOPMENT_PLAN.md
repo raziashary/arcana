@@ -1498,7 +1498,7 @@ P4. Do not close P4 while either gate remains open.
 
 **Exit.** S4 → `TG-P4` → matrix → progress → no-stale → commit.
 
-**Narrative success criterion.** *A newcomer types one sentence, watches the fleet pick it up, and finds a working, build-verified change in their own repository that they can run — on any of the three operating systems. This is the first phase at which AutoDev does what it claims to do.*
+**Narrative success criterion.** *On Windows, a newcomer types one sentence, watches the fleet pick it up, and finds a working, build-verified change in their own repository that they can run. P9-16/TG9-06 extend that same outcome to Linux and macOS before release.*
 
 ---
 

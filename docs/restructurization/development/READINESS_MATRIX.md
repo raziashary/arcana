@@ -190,7 +190,7 @@ the phases that can close them.
 > insufficient, and a matrix that hid that would be repeating the mistake.
 > See [`P2-AUDIT-TRIAGE.md`](_verify/P2-AUDIT-TRIAGE.md).
 
-**Why P4 carries the most weight.** It is the only phase whose completion means AutoDev does what it claims: a task runs end to end on three operating systems and produces a build-verified, reversible artifact the user can run. Everything before it is a precondition; everything after it is polish, cleanup or distribution.
+**Why P4 carries the most weight.** It proves Arcana's Windows PA-to-Fleet task runs end to end and produces a build-verified, reversible artifact the user can run. P9-16/TG9-06 own equivalent Linux/macOS execution as a release blocker; later phases also deliver Graph, UI and Experience work.
 
 ---
 
