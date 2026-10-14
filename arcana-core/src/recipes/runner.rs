@@ -1481,6 +1481,7 @@ mod production_git_commit_recipe_tests {
 
     struct MultiMutationInterruptionProvider {
         task_id: i64,
+        panic_after_lost_ack: bool,
         turn: Mutex<usize>,
         requests: Mutex<Vec<CompletionRequest>>,
     }
@@ -1631,6 +1632,9 @@ mod production_git_commit_recipe_tests {
                         serde_json::from_str(&second_write.0).expect("unknown result envelope");
                     assert_eq!(result["error"]["code"], "side_effect_outcome_unknown");
                     assert_eq!(result["error"]["retry_safe"], false);
+                    if self.panic_after_lost_ack {
+                        panic!("injected provider panic after lost mutation acknowledgement");
+                    }
                     return Err(ArcanaError::Agent(
                         "scripted provider interruption after lost mutation acknowledgement".into(),
                     ));
@@ -1736,8 +1740,22 @@ mod production_git_commit_recipe_tests {
         }
     }
 
-    #[tokio::test]
-    async fn shipped_worker_preserves_multiple_mutations_and_quarantines_lost_acknowledgement() {
+    async fn exercise_shipped_worker_lost_ack_continuation(panic_after_lost_ack: bool) {
+        let expected_phase = if panic_after_lost_ack {
+            "interrupted"
+        } else {
+            "failed"
+        };
+        let expected_outcome = if panic_after_lost_ack {
+            "abandoned"
+        } else {
+            "failed"
+        };
+        let expected_worker_status = if panic_after_lost_ack {
+            "idle"
+        } else {
+            "error"
+        };
         let home = tempfile::tempdir().expect("isolated Arcana home");
         let _home = crate::db::test_support::with_home(home.path());
         let analytics = Arc::new(
@@ -1827,6 +1845,7 @@ mod production_git_commit_recipe_tests {
 
         let provider = Arc::new(MultiMutationInterruptionProvider {
             task_id,
+            panic_after_lost_ack,
             turn: Mutex::new(0),
             requests: Mutex::new(Vec::new()),
         });
@@ -1862,7 +1881,7 @@ mod production_git_commit_recipe_tests {
                     .expect("open worker run ledger")
                     .latest_worker_tick("worker-backend")
                     .expect("read worker tick")
-                    .is_some_and(|run| run.phase == "failed")
+                    .is_some_and(|run| run.phase == expected_phase)
                 {
                     break;
                 }
@@ -1910,7 +1929,7 @@ mod production_git_commit_recipe_tests {
             .expect("read persisted worker tick")
             .expect("worker run remains persisted");
         assert_eq!(run.task_id, Some(task_id));
-        assert_eq!(run.phase, "failed");
+        assert_eq!(run.phase, expected_phase);
         let journal = runs
             .operation_journal_page(&run.run_id, 0, 20)
             .expect("read task-attributed mutation journal");
@@ -1995,12 +2014,12 @@ mod production_git_commit_recipe_tests {
             .iter()
             .find(|worker| worker["slug"] == "worker-backend")
             .expect("Supervisor-visible backend worker");
-        assert_eq!(backend_health["status"], "error");
+        assert_eq!(backend_health["status"], expected_worker_status);
         let supervisor_run = &backend_health["run"];
         assert_eq!(supervisor_run["run_id"], run.run_id);
-        assert_eq!(supervisor_run["phase"], "failed");
+        assert_eq!(supervisor_run["phase"], expected_phase);
         assert_eq!(supervisor_run["task_id"], task_id);
-        assert_eq!(supervisor_run["outcome"], "failed");
+        assert_eq!(supervisor_run["outcome"], expected_outcome);
         assert_eq!(
             supervisor_run["failure_code"].as_str(),
             run.failure_code.as_deref()
@@ -2096,8 +2115,17 @@ mod production_git_commit_recipe_tests {
             .unwrap()
             .execute_batch("DROP TRIGGER test_fail_lost_ack_outcome;")
             .unwrap();
-        let tasks = TasksDb::open().unwrap();
-        tasks.update_status(task_id, "ready", None).unwrap();
+        let released = recovery_executor
+            .execute_batch(vec![(
+                registry
+                    .get("update_task_status")
+                    .expect("Supervisor lifecycle tool"),
+                json!({"id":task_id,"status":"ready"}),
+                "release-verified-task".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(!released[0].1.is_error, "{}", released[0].1.output);
         let frontend = workers
             .get_by_slug("worker-frontend")
             .unwrap()
@@ -2237,6 +2265,16 @@ mod production_git_commit_recipe_tests {
                 .len(),
             3
         );
+    }
+
+    #[tokio::test]
+    async fn shipped_worker_preserves_multiple_mutations_and_quarantines_lost_acknowledgement() {
+        exercise_shipped_worker_lost_ack_continuation(false).await;
+    }
+
+    #[tokio::test]
+    async fn shipped_worker_panic_after_lost_ack_requires_reconciliation_before_handoff() {
+        exercise_shipped_worker_lost_ack_continuation(true).await;
     }
 
     #[tokio::test]
