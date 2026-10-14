@@ -371,12 +371,23 @@ struct BridgeResult {
 struct BridgeFiles {
     request_path: PathBuf,
     output_path: PathBuf,
+    scratch_profile_path: PathBuf,
 }
 
 impl Drop for BridgeFiles {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.request_path);
         let _ = std::fs::remove_file(&self.output_path);
+        if let Err(error) = std::fs::remove_dir_all(&self.scratch_profile_path) {
+            if error.kind() != io::ErrorKind::NotFound {
+                tracing::warn!(
+                    target: "arcana::telemetry",
+                    event_type = "sandbox_scratch_cleanup_failed",
+                    error_kind = ?error.kind(),
+                    "could not remove the completed Windows sandbox scratch profile"
+                );
+            }
+        }
     }
 }
 
@@ -1069,10 +1080,17 @@ fn spawn_experimental_bridge(
         }
     }
     let specification = super::windows_sbox::build_specification(workspace, &read_roots)?;
-    let identity = wide_null(OsStr::new(&format!(
-        "ArcanaSandbox-{}",
-        uuid::Uuid::new_v4()
-    )));
+    let identity_name = format!("ArcanaSandbox-{}", uuid::Uuid::new_v4());
+    // MSVC link.exe uses the AppContainer profile's AC\Temp directory even
+    // when TEMP/TMP point at the workspace. The sandbox identity is unique to
+    // this launch, so create only that exact scratch path under the already
+    // confined LOCALAPPDATA before the child begins.
+    let local_app_data = ensure_workspace_directory(&cache_dir, "local-app-data")?;
+    let packages = ensure_workspace_directory(&local_app_data, "Packages")?;
+    let package = ensure_workspace_directory(&packages, &identity_name)?;
+    let ac = ensure_workspace_directory(&package, "AC")?;
+    ensure_workspace_directory(&ac, "Temp")?;
+    let identity = wide_null(OsStr::new(&identity_name));
 
     let request_id = uuid::Uuid::new_v4();
     let request_path = temp_dir.join(format!(".arcana-bridge-request-{request_id}.json"));
@@ -1080,6 +1098,7 @@ fn spawn_experimental_bridge(
     let bridge_files = BridgeFiles {
         request_path: request_path.clone(),
         output_path: output_path.clone(),
+        scratch_profile_path: package,
     };
     let request = BridgeRequest {
         version: 1,
@@ -1864,6 +1883,10 @@ fn environment_block(
     cache_dir: &Path,
     cargo_target_dir: &Path,
 ) -> io::Result<Vec<u16>> {
+    // Windows AppContainer descendants can ignore TEMP/TMP and derive their
+    // own scratch path from LOCALAPPDATA (notably MSVC link.exe). Keep that
+    // profile scratch inside the selected workspace as well.
+    let local_app_data = ensure_workspace_directory(cache_dir, "local-app-data")?;
     let removed = env_remove
         .iter()
         .map(|key| key.to_string_lossy().to_ascii_lowercase())
@@ -1890,6 +1913,7 @@ fn environment_block(
     let workspace_overrides = vec![
         ("TEMP", temp_dir.as_os_str().to_os_string()),
         ("TMP", temp_dir.as_os_str().to_os_string()),
+        ("LOCALAPPDATA", local_app_data.into_os_string()),
         (
             "CARGO_TARGET_DIR",
             cargo_target_dir.as_os_str().to_os_string(),
@@ -2681,6 +2705,18 @@ mod tests {
             String::from_utf8_lossy(&stderr)
         );
         assert!(String::from_utf8_lossy(&stdout).contains("temp-workspace"));
+        let packages = workspace
+            .path()
+            .join(CACHE_DIR_NAME)
+            .join("local-app-data")
+            .join("Packages");
+        assert_eq!(
+            std::fs::read_dir(packages)
+                .expect("workspace-local package directory")
+                .count(),
+            0,
+            "the completed sandbox left a per-run scratch profile"
+        );
     }
 
     #[tokio::test]

@@ -46,6 +46,8 @@
       trace_visible: false,
       metrics_visible: false,
       export_ipc_returned: false,
+      ide_navigation_opened: false,
+      ide_run_output_visible: false,
     };
 
     stage = 'settings_controls';
@@ -118,6 +120,23 @@
     });
     claims.export_ipc_returned = exported === fixture.export_path;
     if (!claims.export_ipc_returned) throw new Error('Observability export IPC returned an unexpected path.');
+    stage = 'ide_navigation';
+    await invoke('open_in_ide', { file: `${fixture.workspace}\\src\\main.rs`, line: 1 });
+    await waitFor(() => {
+      const run = [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Run');
+      return hasText('main.rs') && run && !run.disabled;
+    }, 'the IDE event consumer and opened artifact');
+    claims.ide_navigation_opened = true;
+    stage = 'ide_run';
+    clickButton('Run');
+    await waitFor(() => Boolean(document.querySelector('[aria-label="Run output"]'))
+      || Boolean(document.querySelector('[aria-label="IDE run result"] [role="alert"]')),
+    'the native IDE Run result', 120_000);
+    const runOutput = document.querySelector('[aria-label="Run output"]')?.textContent ?? '';
+    if (!runOutput.includes('exit 0') || !runOutput.includes('P4_21_IDE_RUN_OK')) {
+      throw new Error('The native IDE Run did not complete with the fixed artifact output.');
+    }
+    claims.ide_run_output_visible = true;
     await invoke('finish_e2e_ipc_receipt', { rendererReceipt: JSON.stringify(claims) });
   } catch (error) {
     console.error('P4-60 isolated IPC receipt failed at stage:', stage);

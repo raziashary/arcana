@@ -53,8 +53,6 @@ function isolatedAppEnvironment(buildEnv) {
   env.XDG_CONFIG_HOME = join(profile, '.config');
   env.XDG_DATA_HOME = join(profile, '.local', 'share');
   env.WEBVIEW2_USER_DATA_FOLDER = join(profile, 'WebView2');
-  delete env.RUSTUP_HOME;
-  delete env.CARGO_HOME;
   return env;
 }
 
@@ -209,6 +207,9 @@ async function stopProcessTree(child) {
 try {
   await mkdir(profile, { recursive: true });
   await mkdir(workspace, { recursive: true });
+  await mkdir(join(workspace, 'src'), { recursive: true });
+  await writeFile(join(workspace, 'Cargo.toml'),
+    '[package]\nname = "arcana-ide-receipt"\nversion = "0.1.0"\nedition = "2021"\n');
   await mkdir(emptyViteEnv, { recursive: true });
   await Promise.all(['AppData/Roaming', 'AppData/Local', '.config', '.local/share', 'WebView2']
     .map(path => mkdir(join(profile, path), { recursive: true })));
@@ -237,7 +238,7 @@ try {
     let result;
     try {
       captureOwnedDescendants(app.pid);
-      result = await waitForExit(app, 120_000);
+      result = await waitForExit(app, 210_000);
     } finally {
       clearInterval(treeWatch);
       captureOwnedDescendants(app.pid);

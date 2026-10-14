@@ -11,6 +11,14 @@ use std::sync::Arc;
 use tauri::Manager;
 
 fn main() {
+    // The sandbox bridge is a child of this executable. It must process its
+    // AppContainer-validated request before the test-only desktop fixture
+    // guard, because that child cannot read the fixture marker outside the
+    // selected workspace. A normal launch still reaches the guard below.
+    if let Some(exit_code) = arcana_core::platform::process_sandbox::run_bridge_entrypoint() {
+        std::process::exit(exit_code);
+    }
+
     // Refuse to initialize any production runtime or persistent subsystem
     // from the receipt feature unless the launcher supplied its disposable
     // profile, workspace, marker, and credential-free environment.
@@ -18,10 +26,6 @@ fn main() {
     if let Err(error) = arcana_lib::commands::e2e_ipc_receipt::validate_startup_fixture() {
         eprintln!("P4-60 receipt startup guard rejected launch: {error}");
         std::process::exit(78);
-    }
-
-    if let Some(exit_code) = arcana_core::platform::process_sandbox::run_bridge_entrypoint() {
-        std::process::exit(exit_code);
     }
 
     // 🔴 `P8-64`. A `dotenvy::dotenv()` call stood here, in the SHIPPED binary.
@@ -84,10 +88,9 @@ fn main() {
         start_analytics_rollup: false,
         ..Default::default()
     };
-    let core_runtime = tauri::async_runtime::block_on(arcana_core::runtime::initialize(
-        runtime_options,
-    ))
-    .expect("Failed to initialise Arcana core runtime");
+    let core_runtime =
+        tauri::async_runtime::block_on(arcana_core::runtime::initialize(runtime_options))
+            .expect("Failed to initialise Arcana core runtime");
 
     // Initialise skills (writes default builtin skills to ~/.arcana/skills/)
     if let Err(e) = arcana_lib::skills::ensure_default_skills() {

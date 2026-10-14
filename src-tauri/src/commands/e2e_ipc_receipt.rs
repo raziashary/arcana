@@ -48,6 +48,8 @@ struct RendererClaims {
     trace_visible: bool,
     metrics_visible: bool,
     export_ipc_returned: bool,
+    ide_navigation_opened: bool,
+    ide_run_output_visible: bool,
 }
 
 fn enabled() -> Result<()> {
@@ -177,8 +179,34 @@ fn fixture_paths() -> Result<(PathBuf, PathBuf, PathBuf)> {
 /// Produce fixed, privacy-safe evidence through Arcana's real tracing producer
 /// and return only paths rooted in the launcher's disposable profile.
 #[tauri::command]
-pub fn begin_e2e_ipc_receipt() -> Result<ReceiptFixture> {
+pub async fn begin_e2e_ipc_receipt() -> Result<ReceiptFixture> {
     let (workspace, export_path, _) = fixture_paths()?;
+    // Produce the IDE artifact through the production agent file tool.
+    // The fixed probe acts as an interactive Supervisor in a disposable
+    // workspace; no model, provider, or user task is involved.
+    use arcana_core::agent::tool_trait::{Tool, ToolContext};
+    let context = ToolContext {
+        session_id: "p4-21-ide-receipt".into(),
+        working_dir: workspace.to_string_lossy().into_owned(),
+        call_id: "p4-21-ide-write".into(),
+        run_id: None,
+        run_token_budget: None,
+        task_id: None,
+        permission_mode: arcana_core::agent::permission::PermissionMode::Autonomous,
+        depth: 0,
+        agent_role: "supervisor".into(),
+    };
+    let written = arcana_core::agent::builtin_tools::write_file::WriteFileTool
+        .execute(
+            serde_json::json!({"path":"src/main.rs","content":"fn main() { println!(\"P4_21_IDE_RUN_OK\"); }\n"}),
+            &context,
+        )
+        .await;
+    if written.is_error || !workspace.join("src/main.rs").is_file() {
+        return Err(ArcanaError::Agent(
+            "agent file tool did not produce the fixed IDE artifact".into(),
+        ));
+    }
     let date = chrono::Local::now().format("%Y-%m-%d").to_string();
     let mut timer = arcana_core::observability::timing::OperationTimer::start(OPERATION)
         .with_run_id(RUN_ID)
@@ -201,7 +229,7 @@ pub fn begin_e2e_ipc_receipt() -> Result<ReceiptFixture> {
 /// profile. No caller-supplied path is accepted.
 #[tauri::command]
 pub fn finish_e2e_ipc_receipt(app: tauri::AppHandle, renderer_receipt: String) -> Result<()> {
-    let (_, export_path, receipt_path) = fixture_paths()?;
+    let (workspace, export_path, receipt_path) = fixture_paths()?;
     if renderer_receipt.len() > MAX_RECEIPT_BYTES {
         return Err(ArcanaError::Agent(
             "renderer receipt exceeds the size limit".into(),
@@ -223,10 +251,19 @@ pub fn finish_e2e_ipc_receipt(app: tauri::AppHandle, renderer_receipt: String) -
         claims.trace_visible,
         claims.metrics_visible,
         claims.export_ipc_returned,
+        claims.ide_navigation_opened,
+        claims.ide_run_output_visible,
     ];
     if all_claims.iter().any(|claim| !claim) || renderer_receipt.contains(PRIVATE_CANARY) {
         return Err(ArcanaError::Agent(
             "renderer receipt is incomplete or contains private fixture input".into(),
+        ));
+    }
+    if std::fs::read_to_string(workspace.join("src/main.rs"))?
+        != "fn main() { println!(\"P4_21_IDE_RUN_OK\"); }\n"
+    {
+        return Err(ArcanaError::Agent(
+            "agent-produced IDE artifact differs from the fixed probe".into(),
         ));
     }
 
@@ -298,6 +335,8 @@ pub fn fail_e2e_ipc_receipt(app: tauri::AppHandle, stage: String, reason: String
         "logs_structured",
         "logs_trace_metrics",
         "export",
+        "ide_navigation",
+        "ide_run",
     ];
     if !STAGES.contains(&stage.as_str()) {
         return Err(ArcanaError::Agent("unknown receipt probe stage".into()));
