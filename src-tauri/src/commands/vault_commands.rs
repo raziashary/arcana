@@ -33,6 +33,7 @@ const PROBED_PROVIDERS: &[&str] = &[
     "anthropic",
     "openai",
     "google",
+    "groq",
     // Retired or alternate spellings — probed so orphaned keys stay findable.
     "ollama",
     "gemini",
@@ -122,7 +123,7 @@ fn masked_last4(secret: &str) -> String {
 /// Whether a provider id is one Arcana currently supports.
 #[cfg(not(feature = "e2e-ipc-receipt"))]
 fn is_supported_provider(id: &str) -> bool {
-    matches!(id, "anthropic" | "openai" | "google")
+    matches!(id, "anthropic" | "openai" | "google" | "groq")
 }
 
 // ── Provider keys ────────────────────────────────────────────────────────────
@@ -157,47 +158,47 @@ pub async fn set_provider_key(provider: String, api_key: String) -> Result<Vault
 
     #[cfg(not(feature = "e2e-ipc-receipt"))]
     {
-    let trimmed = api_key.trim().to_string();
-    if trimmed.is_empty() {
-        return Err(crate::errors::ArcanaError::Vault(
-            "Refusing to store an empty API key.".into(),
-        ));
-    }
-
-    // Built from the shared factory rather than a fourth copy of the provider
-    // match. An unknown id is refused here rather than stored: a key for a
-    // provider we cannot construct is a key we can never use.
-    let candidate = arcana_core::provider::factory::build(&provider, trimmed.clone())?;
-
-    match super::settings_commands::check_provider_metadata_connection(candidate.as_ref(), true)
-        .await
-    {
-        Ok(arcana_core::provider::ProviderStatus::Connected) => {}
-        Ok(arcana_core::provider::ProviderStatus::Error(why)) => {
-            return Err(crate::errors::ArcanaError::Vault(format!(
-                "That key was not accepted by {provider}, so it has NOT been saved: {why}"
-            )));
+        let trimmed = api_key.trim().to_string();
+        if trimmed.is_empty() {
+            return Err(crate::errors::ArcanaError::Vault(
+                "Refusing to store an empty API key.".into(),
+            ));
         }
-        Ok(other) => {
-            return Err(crate::errors::ArcanaError::Vault(format!(
-                "{provider} did not confirm the key ({other:?}); it has NOT been saved."
-            )));
-        }
-        Err(_) => {
-            // A network failure is not a bad key, and refusing to store on a
-            // transient error would leave a user offline unable to configure
-            // the app at all. Stored, with the uncertainty stated.
-            tracing::warn!(
-                "Could not reach the provider to validate the key; storing it unvalidated."
-            );
-        }
-    }
 
-    VaultManager::store(&provider_key(&provider), &trimmed)?;
-    Ok(VaultWriteResult {
-        ok: true,
-        masked_last4: masked_last4(&trimmed),
-    })
+        // Built from the shared factory rather than a fourth copy of the provider
+        // match. An unknown id is refused here rather than stored: a key for a
+        // provider we cannot construct is a key we can never use.
+        let candidate = arcana_core::provider::factory::build(&provider, trimmed.clone())?;
+
+        match super::settings_commands::check_provider_metadata_connection(candidate.as_ref(), true)
+            .await
+        {
+            Ok(arcana_core::provider::ProviderStatus::Connected) => {}
+            Ok(arcana_core::provider::ProviderStatus::Error(why)) => {
+                return Err(crate::errors::ArcanaError::Vault(format!(
+                    "That key was not accepted by {provider}, so it has NOT been saved: {why}"
+                )));
+            }
+            Ok(other) => {
+                return Err(crate::errors::ArcanaError::Vault(format!(
+                    "{provider} did not confirm the key ({other:?}); it has NOT been saved."
+                )));
+            }
+            Err(_) => {
+                // A network failure is not a bad key, and refusing to store on a
+                // transient error would leave a user offline unable to configure
+                // the app at all. Stored, with the uncertainty stated.
+                tracing::warn!(
+                    "Could not reach the provider to validate the key; storing it unvalidated."
+                );
+            }
+        }
+
+        VaultManager::store(&provider_key(&provider), &trimmed)?;
+        Ok(VaultWriteResult {
+            ok: true,
+            masked_last4: masked_last4(&trimmed),
+        })
     }
 }
 
@@ -244,17 +245,17 @@ pub fn set_github_pat(pat: String) -> Result<VaultWriteResult> {
 
     #[cfg(not(feature = "e2e-ipc-receipt"))]
     {
-    let trimmed = pat.trim();
-    if trimmed.is_empty() {
-        return Err(crate::errors::ArcanaError::Vault(
-            "Refusing to store an empty GitHub PAT.".into(),
-        ));
-    }
-    VaultManager::store(&github_pat_key(), trimmed)?;
-    Ok(VaultWriteResult {
-        ok: true,
-        masked_last4: masked_last4(trimmed),
-    })
+        let trimmed = pat.trim();
+        if trimmed.is_empty() {
+            return Err(crate::errors::ArcanaError::Vault(
+                "Refusing to store an empty GitHub PAT.".into(),
+            ));
+        }
+        VaultManager::store(&github_pat_key(), trimmed)?;
+        Ok(VaultWriteResult {
+            ok: true,
+            masked_last4: masked_last4(trimmed),
+        })
     }
 }
 

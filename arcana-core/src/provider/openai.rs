@@ -67,93 +67,122 @@ impl OpenAIProvider {
     }
 
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> serde_json::Value {
-        let mut messages: Vec<serde_json::Value> = Vec::new();
+        // OpenAI caches automatically — the only steering it accepts is the
+        // prefix-affinity hint (P2-16). Groq serves the same wire shape but
+        // documents no such field for its models, so the hint is a parameter:
+        // OpenAI passes it, Groq passes `None` rather than sending a field its
+        // API does not list.
+        let affinity = match req.cache {
+            CachePolicy::Automatic { ref affinity_key } => Some(affinity_key.as_str()),
+            _ => None,
+        };
+        build_chat_completions_body(req, stream, affinity)
+    }
+}
 
-        // Add system prompt as first message if present
-        if let Some(sys) = &req.system {
-            messages.push(json!({
-                "role": "system",
-                "content": sys
-            }));
-        }
+/// The shared OpenAI-compatible chat-completions request body.
+///
+/// Groq serves the same wire format at `https://api.groq.com/openai/v1`, so
+/// both adapters build their request with this one function — a conformance
+/// fix here has to reach both vendors, and a vendor-specific divergence has to
+/// be visible as a parameter rather than as a copied function that drifts.
+///
+/// `cache_affinity` is `Some` only for vendors that actually document
+/// `prompt_cache_key` (OpenAI). Groq is called with `None`: sending an
+/// undocumented field to an OpenAI-compatible vendor risks a 400 for the sake
+/// of an affinity hint it never reads.
+pub(crate) fn build_chat_completions_body(
+    req: &CompletionRequest,
+    stream: bool,
+    cache_affinity: Option<&str>,
+) -> serde_json::Value {
+    let mut messages: Vec<serde_json::Value> = Vec::new();
 
-        // Convert messages - OpenAI format differs from Anthropic
-        for m in &req.messages {
-            if m.role == "user" {
-                // User messages with tool results become "tool" role messages in OpenAI
-                let tool_results: Vec<&MessageContent> = m
-                    .content
-                    .iter()
-                    .filter(|c| matches!(c, MessageContent::ToolResult { .. }))
-                    .collect();
+    // Add system prompt as first message if present
+    if let Some(sys) = &req.system {
+        messages.push(json!({
+            "role": "system",
+            "content": sys
+        }));
+    }
 
-                // P2-39. This used to be `if !tool_results.is_empty() { ... }
-                // else { text }`, so any Text sharing a message with tool
-                // results was **dropped entirely** — the model's own commentary
-                // silently vanished from its history.
-                if !tool_results.is_empty() {
-                    // Add tool result messages (role: "tool")
-                    for tr in tool_results {
-                        if let MessageContent::ToolResult {
-                            tool_use_id,
-                            name: _,
-                            content,
-                            is_error,
-                        } = tr
-                        {
-                            // P2-38. OpenAI's `tool` message carries no error
-                            // flag, so failure has to be in the payload.
-                            // Discarding it made a failed tool look identical
-                            // to a successful one on two of three providers,
-                            // and the model builds on a result that never
-                            // happened.
-                            let body = if *is_error {
-                                format!("ERROR: {content}")
-                            } else {
-                                content.clone()
-                            };
-                            messages.push(json!({
-                                "role": "tool",
-                                "tool_call_id": tool_use_id,
-                                "content": body,
-                            }));
-                        }
-                    }
-                }
+    // Convert messages - OpenAI format differs from Anthropic
+    for m in &req.messages {
+        if m.role == "user" {
+            // User messages with tool results become "tool" role messages in OpenAI
+            let tool_results: Vec<&MessageContent> = m
+                .content
+                .iter()
+                .filter(|c| matches!(c, MessageContent::ToolResult { .. }))
+                .collect();
 
-                // Text in the same message is emitted regardless of whether
-                // tool results were present.
-                {
-                    // Regular user text message
-                    let text = m
-                        .content
-                        .iter()
-                        .filter_map(|c| match c {
-                            MessageContent::Text { text } => Some(text.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-
-                    if !text.is_empty() {
+            // P2-39. This used to be `if !tool_results.is_empty() { ... }
+            // else { text }`, so any Text sharing a message with tool
+            // results was **dropped entirely** — the model's own commentary
+            // silently vanished from its history.
+            if !tool_results.is_empty() {
+                // Add tool result messages (role: "tool")
+                for tr in tool_results {
+                    if let MessageContent::ToolResult {
+                        tool_use_id,
+                        name: _,
+                        content,
+                        is_error,
+                    } = tr
+                    {
+                        // P2-38. OpenAI's `tool` message carries no error
+                        // flag, so failure has to be in the payload.
+                        // Discarding it made a failed tool look identical
+                        // to a successful one on two of three providers,
+                        // and the model builds on a result that never
+                        // happened.
+                        let body = if *is_error {
+                            format!("ERROR: {content}")
+                        } else {
+                            content.clone()
+                        };
                         messages.push(json!({
-                            "role": "user",
-                            "content": text,
+                            "role": "tool",
+                            "tool_call_id": tool_use_id,
+                            "content": body,
                         }));
                     }
                 }
-            } else if m.role == "assistant" {
-                // Assistant messages: separate text and tool_calls
-                let text_parts: Vec<String> = m
+            }
+
+            // Text in the same message is emitted regardless of whether
+            // tool results were present.
+            {
+                // Regular user text message
+                let text = m
                     .content
                     .iter()
                     .filter_map(|c| match c {
                         MessageContent::Text { text } => Some(text.clone()),
                         _ => None,
                     })
-                    .collect();
+                    .collect::<Vec<_>>()
+                    .join("\n");
 
-                let tool_calls: Vec<serde_json::Value> = m.content.iter()
+                if !text.is_empty() {
+                    messages.push(json!({
+                        "role": "user",
+                        "content": text,
+                    }));
+                }
+            }
+        } else if m.role == "assistant" {
+            // Assistant messages: separate text and tool_calls
+            let text_parts: Vec<String> = m
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    MessageContent::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect();
+
+            let tool_calls: Vec<serde_json::Value> = m.content.iter()
                     .enumerate()
                     .filter_map(|(_idx, c)| match c {
                         MessageContent::ToolUse { id, name, input, .. } => Some(json!({
@@ -168,105 +197,104 @@ impl OpenAIProvider {
                     })
                     .collect();
 
-                let mut msg = json!({
-                    "role": "assistant",
-                    "content": if text_parts.is_empty() { json!(null) } else { json!(text_parts.join("\n")) },
-                });
+            let mut msg = json!({
+                "role": "assistant",
+                "content": if text_parts.is_empty() { json!(null) } else { json!(text_parts.join("\n")) },
+            });
 
-                if !tool_calls.is_empty() {
-                    msg["tool_calls"] = json!(tool_calls);
-                }
+            if !tool_calls.is_empty() {
+                msg["tool_calls"] = json!(tool_calls);
+            }
 
-                messages.push(msg);
-            } else {
-                // P2-40. There was no `else` at all, so a message with any
-                // other role **vanished silently** — while Google coerced the
-                // same message to `user`. Two adapters, two different silent
-                // behaviours for identical input. Both now coerce and log.
-                tracing::warn!(
-                    "OpenAI has no role '{}'; sending it as 'user'. The content \
+            messages.push(msg);
+        } else {
+            // P2-40. There was no `else` at all, so a message with any
+            // other role **vanished silently** — while Google coerced the
+            // same message to `user`. Two adapters, two different silent
+            // behaviours for identical input. Both now coerce and log.
+            tracing::warn!(
+                "OpenAI has no role '{}'; sending it as 'user'. The content \
                      is preserved, the attribution is not.",
-                    m.role
-                );
-                let text = m
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        MessageContent::Text { text } => Some(text.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                if !text.is_empty() {
-                    messages.push(json!({ "role": "user", "content": text }));
-                }
+                m.role
+            );
+            let text = m
+                .content
+                .iter()
+                .filter_map(|c| match c {
+                    MessageContent::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !text.is_empty() {
+                messages.push(json!({ "role": "user", "content": text }));
             }
         }
-
-        let tools: Vec<serde_json::Value> = req
-            .tools
-            .iter()
-            .map(|t| {
-                json!({
-                    "type": "function",
-                    "function": {
-                        "name":        t.name,
-                        "description": t.description,
-                        "parameters":  t.input_schema,
-                    }
-                })
-            })
-            .collect();
-
-        let mut body = json!({
-            "model":    req.model,
-            "messages": messages,
-        });
-        if !tools.is_empty() {
-            body["tools"] = json!(tools);
-            body["tool_choice"] = json!("auto");
-        }
-        if let Some(temp) = req.temperature {
-            body["temperature"] = json!(temp);
-        }
-        if let Some(top_p) = req.top_p {
-            body["top_p"] = json!(top_p);
-        }
-        // reasoning_effort for o-series models (o1, o3, o4-mini)
-        if let Some(ref effort) = req.reasoning_effort {
-            body["reasoning_effort"] = json!(effort);
-        }
-        // P2-08/P2-45. `max_tokens` was read only by the Anthropic adapter;
-        // OpenAI and Google never sent it, so the engine's ceiling silently
-        // applied to one provider of three and truncation could not be
-        // requested, let alone detected.
-        //
-        // `max_completion_tokens` is the current field name; `max_tokens` is
-        // deprecated and rejected outright by the reasoning models.
-        body["max_completion_tokens"] = json!(req.max_tokens);
-
-        // P2-16. OpenAI caches automatically — there is no breakpoint to place
-        // and nothing to switch on. What it does accept is a routing hint:
-        // identical prefixes cache per backend node, so requests that share a
-        // prefix have to land on the same node to hit it.
-        //
-        // `Explicit` is deliberately NOT approximated here. There is no field
-        // to express it, and sending something adjacent would make a request
-        // that reports as cached-by-request while caching by luck.
-        if let CachePolicy::Automatic { ref affinity_key } = req.cache {
-            body["prompt_cache_key"] = json!(affinity_key);
-        }
-
-        if stream {
-            body["stream"] = json!(true);
-            // P2-42. Without this OpenAI sends no `usage` object on a stream at
-            // all, so `parse_openai_sse_line`'s usage branch was a guard that
-            // could never fire — token counts AND the stop reason were both
-            // structurally zero for every streaming call.
-            body["stream_options"] = json!({ "include_usage": true });
-        }
-        body
     }
+
+    let tools: Vec<serde_json::Value> = req
+        .tools
+        .iter()
+        .map(|t| {
+            json!({
+                "type": "function",
+                "function": {
+                    "name":        t.name,
+                    "description": t.description,
+                    "parameters":  t.input_schema,
+                }
+            })
+        })
+        .collect();
+
+    let mut body = json!({
+        "model":    req.model,
+        "messages": messages,
+    });
+    if !tools.is_empty() {
+        body["tools"] = json!(tools);
+        body["tool_choice"] = json!("auto");
+    }
+    if let Some(temp) = req.temperature {
+        body["temperature"] = json!(temp);
+    }
+    if let Some(top_p) = req.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    // reasoning_effort for o-series models (o1, o3, o4-mini)
+    if let Some(ref effort) = req.reasoning_effort {
+        body["reasoning_effort"] = json!(effort);
+    }
+    // P2-08/P2-45. `max_tokens` was read only by the Anthropic adapter;
+    // OpenAI and Google never sent it, so the engine's ceiling silently
+    // applied to one provider of three and truncation could not be
+    // requested, let alone detected.
+    //
+    // `max_completion_tokens` is the current field name; `max_tokens` is
+    // deprecated and rejected outright by the reasoning models.
+    body["max_completion_tokens"] = json!(req.max_tokens);
+
+    // P2-16. OpenAI caches automatically — there is no breakpoint to place
+    // and nothing to switch on. What it does accept is a routing hint:
+    // identical prefixes cache per backend node, so requests that share a
+    // prefix have to land on the same node to hit it.
+    //
+    // `Explicit` is deliberately NOT approximated here. There is no field
+    // to express it, and sending something adjacent would make a request
+    // that reports as cached-by-request while caching by luck.
+    if let Some(affinity_key) = cache_affinity {
+        body["prompt_cache_key"] = json!(affinity_key);
+    }
+
+    if stream {
+        body["stream"] = json!(true);
+        // P2-42. Without this OpenAI sends no `usage` object on a stream at
+        // all, so `parse_openai_sse_line`'s usage branch was a guard that
+        // could never fire — token counts AND the stop reason were both
+        // structurally zero for every streaming call.
+        body["stream_options"] = json!({ "include_usage": true });
+    }
+    body
 }
 
 #[async_trait]
@@ -416,7 +444,12 @@ pub fn parse_openai_sse_line_for_test(line: &str) -> Result<Vec<StreamChunk>> {
     parse_openai_sse_line(line)
 }
 
-fn parse_openai_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
+/// One SSE frame in the OpenAI-compatible stream format.
+///
+/// `pub(crate)` because Groq serves the same wire format and feeds it through
+/// this parser rather than keeping a drifted copy — the same reason the body
+/// builder is shared.
+pub(crate) fn parse_openai_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
     let line = line.trim();
     if line.is_empty() || line.starts_with(':') {
         return Ok(Vec::new());
@@ -436,6 +469,39 @@ fn parse_openai_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
     }
 }
 
+/// The usage object of one SSE frame, whichever spelling the vendor used.
+///
+/// Groq documents the same OpenAI-compatible end-of-stream usage frame, but
+/// its SSE schema puts the statistics under `x_groq.usage` (the OpenAI-
+/// compatible top-level `usage` can be null on that frame; its schema allows
+/// `null` on intermediate chunks). Reading either spelling keeps the shared
+/// parser honest for both wires: OpenAI never sends `x_groq`, and OpenAI's
+/// top-level `usage` is read first whenever it is present and an object.
+/// Absent usage still returns a value that fails the caller's `is_object()`
+/// check, so the behaviour for "no usage on this frame" is unchanged.
+fn frame_usage(v: &serde_json::Value) -> &serde_json::Value {
+    if v["usage"].is_object() || !v["x_groq"]["usage"].is_object() {
+        &v["usage"]
+    } else {
+        &v["x_groq"]["usage"]
+    }
+}
+
+/// Reasoning text on one stream delta, under both spellings the OpenAI-
+/// compatible ecosystem uses.
+///
+/// DeepSeek-style vendors spell it `reasoning_content` (OpenAI's own
+/// reasoning models picked that up); Groq documents `reasoning` for its Qwen
+/// thinking models when `reasoning_format` is `parsed`. Checking both keeps
+/// one parser honest across both wires; a vendor that sends neither simply
+/// fails both lookups and produces the plain text delta as before.
+fn reasoning_delta_of(delta: &serde_json::Value) -> Option<&str> {
+    ["reasoning_content", "reasoning"]
+        .iter()
+        .find_map(|key| delta[*key].as_str())
+        .filter(|text| !text.is_empty())
+}
+
 /// Parse one OpenAI SSE frame into **every** chunk it carries.
 ///
 /// ── Why this returns a Vec (F-7, P2 post-phase audit) ────────────────────────
@@ -452,7 +518,7 @@ fn parse_openai_sse_line(line: &str) -> Result<Vec<StreamChunk>> {
 /// The engine's `assemble_in_wire_order` is keyed by block index precisely so
 /// several blocks can arrive together; a parser that can only ever return one
 /// makes that machinery unreachable.
-fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
+pub(crate) fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
     let mut out = Vec::new();
 
     let choices = match v["choices"].as_array() {
@@ -465,7 +531,7 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
     // `stream_options` alone would still have produced nothing — two edits were
     // required, and a fix that made only one would have looked complete.
     if choices.is_empty() {
-        let u = &v["usage"];
+        let u = frame_usage(v);
         if u.is_object() {
             let prompt_total = u["prompt_tokens"].as_u64().unwrap_or(0) as u32;
             let cached_read = u["prompt_tokens_details"]["cached_tokens"]
@@ -488,13 +554,9 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
 
     let delta = &choices[0]["delta"];
 
-    let has_reasoning = delta["reasoning_content"]
-        .as_str()
-        .is_some_and(|s| !s.is_empty());
-    if let Some(reasoning) = delta["reasoning_content"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-    {
+    let reasoning_text = reasoning_delta_of(delta);
+    let has_reasoning = reasoning_text.is_some();
+    if let Some(reasoning) = reasoning_text {
         out.push(StreamChunk::ThinkingDelta {
             text: reasoning.to_string(),
             block_index: 0,
@@ -550,7 +612,7 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
     // never reached that comparison, so the check was inert.
     if let Some(finish_reason) = choices[0]["finish_reason"].as_str() {
         if !finish_reason.is_empty() {
-            let u = &v["usage"];
+            let u = frame_usage(v);
             let usage = if u.is_object() {
                 let prompt_total = u["prompt_tokens"].as_u64().unwrap_or(0) as u32;
                 let cached_read = u["prompt_tokens_details"]["cached_tokens"]
@@ -576,7 +638,7 @@ fn parse_openai_chunk(v: &serde_json::Value) -> Result<Vec<StreamChunk>> {
     Ok(out)
 }
 
-fn parse_completion_response(data: serde_json::Value) -> Result<CompletionResponse> {
+pub(crate) fn parse_completion_response(data: serde_json::Value) -> Result<CompletionResponse> {
     let message_id = data["id"].as_str().unwrap_or("").to_string();
     let model = data["model"].as_str().unwrap_or("").to_string();
     // INCLUSIVE vendor — see the streaming path above.
@@ -605,13 +667,21 @@ fn parse_completion_response(data: serde_json::Value) -> Result<CompletionRespon
 
     let message = choices.get(0).and_then(|c| c.get("message"));
     let mut content = Vec::new();
-    if let Some(reasoning) = data["choices"][0]["message"]["reasoning_content"].as_str() {
-        if !reasoning.is_empty() {
-            content.push(MessageContent::Thinking {
-                text: reasoning.to_string(),
-                signature: None,
-            });
-        }
+    // Both reasoning spellings again — see `reasoning_delta_of` in the stream
+    // path. This branch predates that helper and OpenAI's own non-stream
+    // payload spells it `reasoning_content`; Groq documents `reasoning`.
+    let reasoning = message
+        .and_then(|m| {
+            ["reasoning_content", "reasoning"]
+                .iter()
+                .find_map(|key| m[*key].as_str())
+        })
+        .filter(|text| !text.is_empty());
+    if let Some(reasoning) = reasoning {
+        content.push(MessageContent::Thinking {
+            text: reasoning.to_string(),
+            signature: None,
+        });
     }
 
     if let Some(msg) = message {

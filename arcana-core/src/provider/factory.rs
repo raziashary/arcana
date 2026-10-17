@@ -39,10 +39,11 @@ pub fn build(provider_id: &str, api_key: String) -> Result<Arc<dyn Provider>> {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
         "google" => Arc::new(GoogleProvider::new(api_key)),
+        "groq" => Arc::new(super::groq::GroqProvider::new(api_key)),
         other => {
             return Err(ArcanaError::Provider(format!(
-                "Unknown provider '{other}'. Arcana supports anthropic, openai and google."
-            )))
+                "Unknown provider '{other}'. Arcana supports anthropic, openai, google and groq."
+            )));
         }
     };
     Ok(super::capped::CappedProvider::wrap_global(inner))
@@ -86,8 +87,13 @@ mod tests {
     }
 
     #[test]
-    fn the_supported_set_is_exactly_the_three_shipped_providers() {
-        assert_eq!(supported_ids(), vec!["anthropic", "google", "openai"]);
+    fn the_supported_set_is_exactly_the_shipped_providers() {
+        // Groq joined 2026-10-17 (razi-ruled): `qwen/qwen3.8-27b`, the model
+        // Groq documents as the successor to the deprecated qwen3.6-27b.
+        assert_eq!(
+            supported_ids(),
+            vec!["anthropic", "google", "groq", "openai"]
+        );
     }
 
     #[test]

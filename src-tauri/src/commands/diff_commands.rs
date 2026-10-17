@@ -41,6 +41,7 @@ fn build_analyzer(
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
         "google" => Arc::new(GoogleProvider::new(api_key)),
+        "groq" => Arc::new(arcana_core::provider::groq::GroqProvider::new(api_key)),
         other => return Err(ArcanaError::Agent(format!("Unknown provider: {other}"))),
     };
     // Every call passes the daily ceiling (P2-21).

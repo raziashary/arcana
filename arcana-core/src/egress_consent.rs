@@ -138,7 +138,9 @@ pub fn mcp_destination(connector_id: &str) -> Result<String> {
 
 fn validate_destination(destination: &str) -> Result<String> {
     match destination {
-        "provider:anthropic" | "provider:google" | "provider:openai" => Ok(destination.to_string()),
+        "provider:anthropic" | "provider:google" | "provider:openai" | "provider:groq" => {
+            Ok(destination.to_string())
+        }
         "mcp:github-mcp" => Ok(destination.to_string()),
         _ => Err(ArcanaError::Agent(format!(
             "unsupported egress destination '{destination}'"

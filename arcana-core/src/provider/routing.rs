@@ -25,6 +25,11 @@ pub fn provider_for_model(model: &str) -> Option<&'static str> {
         Some("openai")
     } else if model.starts_with("gemini") {
         Some("google")
+    } else if model.starts_with("qwen/") {
+        // The slash is load-bearing: groq's wire ids are vendored
+        // (`qwen/qwen3.8-27b`), and the bare `qwen3-max` id that once tracked
+        // a dropped provider must keep NOT routing.
+        Some("groq")
     } else {
         None
     }
@@ -52,6 +57,7 @@ mod tests {
         for m in [
             "gemini-3.1-pro-preview",
             "gemini-3.7-flash",
+            "gemini-3.8-flash",
             "claude-opus-5",
             "claude-sonnet-5",
             "claude-fable-5",
@@ -60,6 +66,7 @@ mod tests {
             "gpt-5.4",
             "gpt-5.4-mini",
             "gpt-5.4-nano",
+            "qwen/qwen3.8-27b",
         ] {
             assert!(provider_for_model(m).is_some(), "{m} does not route");
         }
@@ -76,6 +83,8 @@ mod tests {
 
     #[test]
     fn a_dropped_provider_does_not_route() {
+        // The slash distinction is the point and why it is tested: a bare
+        // `qwen3-` id is NOT the groq wire id, which is vendored `qwen/…`.
         for m in [
             "grok-3-mini-beta",
             "llama-3.3-70b",

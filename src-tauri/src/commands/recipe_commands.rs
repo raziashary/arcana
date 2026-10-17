@@ -263,10 +263,11 @@ pub async fn generate_recipe_yaml(
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
         "google" => Arc::new(GoogleProvider::new(api_key)),
+        "groq" => Arc::new(crate::provider::groq::GroqProvider::new(api_key)),
         _ => {
             return Err(ArcanaError::Agent(format!(
                 "Unsupported provider: {provider_id}"
-            )))
+            )));
         }
     };
     // Every call passes the daily ceiling (P2-21).

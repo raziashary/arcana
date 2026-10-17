@@ -40,6 +40,7 @@ use arcana_core::cache::{CacheMonitor, CacheVerdict};
 use arcana_core::provider::anthropic::AnthropicProvider;
 use arcana_core::provider::catalogue;
 use arcana_core::provider::google::GoogleProvider;
+use arcana_core::provider::groq::GroqProvider;
 use arcana_core::provider::openai::OpenAIProvider;
 use arcana_core::provider::types::{CompletionRequest, MessageContent, RequestMessage};
 use arcana_core::provider::usage::{CachePolicy, CacheSupport, CacheTtl};
@@ -153,6 +154,75 @@ async fn google_stream_with_transient_retry(
         }
     }
     unreachable!("the retry loop always returns or panics")
+}
+
+/// ── The Groq live smoke · free endpoints ONLY ────────────────────────────────
+///
+/// ⚠ **No paid completions here.** The standing P4 checkpoint authorizes no
+/// paid provider run beyond the existing ones, so this smoke deliberately
+/// exercises exactly what `test_connection` exercises in production — the
+/// models list — plus the vendor-side existence of the one id the catalogue
+/// serves. Nothing in this test generates tokens.
+///
+/// The vendor-side existence check is the drift net a fixture can never cast
+/// (`L-22` / the google `-preview` 404 lesson): a renamed or withdrawn wire id
+/// fails HERE, visibly, instead of on the first real agent run weeks later.
+#[tokio::test]
+async fn p4_groq_models_list_is_live_and_the_catalogued_served_model_exists() {
+    use arcana_core::provider::ProviderStatus;
+    use zeroize::Zeroizing;
+
+    let key = Zeroizing::new(require_key!("GROQ_API_KEY"));
+    let provider = GroqProvider::new((*key).clone());
+
+    // 1 · Key validation via the adapter itself, identical to what the
+    //     Settings UI drives. Busy vendor is skip, bad key is a clear panic.
+    match provider.test_connection().await {
+        Ok(ProviderStatus::Connected) => {}
+        Ok(ProviderStatus::Error(why)) => panic!("Groq key was NOT accepted: {why}"),
+        Ok(other) => panic!("Groq test_connection returned {other:?}"),
+        Err(e) if is_transient(&e) => {
+            eprintln!("  ⚠ groq SKIPPED — connection check is transient ({e})");
+            return;
+        }
+        Err(e) => panic!("Groq connection check failed: {e}"),
+    }
+
+    // 2 · The catalogued id must be among the vendor's own served models.
+    //     The request carries no URL credentials; the key is a header.
+    let catalogued_id = catalogue::models_for("groq")
+        .first()
+        .map(|m| m.id.clone())
+        .expect("the catalogue must serve at least one Groq model");
+    let resp = reqwest::Client::new()
+        .get("https://api.groq.com/openai/v1/models")
+        .header("Authorization", format!("Bearer {}", &*key))
+        .send()
+        .await
+        .expect("Groq models transport");
+    let status = resp.status();
+    assert!(
+        status.is_success(),
+        "Groq models endpoint returned {status}"
+    );
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .expect("Groq models response decodes as JSON");
+    let served: Vec<String> = data["data"]
+        .as_array()
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|m| m["id"].as_str().map(str::to_string))
+                .collect()
+        })
+        .expect("Groq models response carries a data array");
+    assert!(
+        served.iter().any(|id| *id == catalogued_id),
+        "catalogued id '{catalogued_id}' is NOT served by Groq — the vendor \
+         renamed or withdrew it; fix the catalogue id before shipping"
+    );
 }
 
 /// Skip the current provider when it is merely busy, with a visible note.

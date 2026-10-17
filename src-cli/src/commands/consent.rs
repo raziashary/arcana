@@ -27,7 +27,7 @@ pub struct ConsentArgs {
     workspace: PathBuf,
 
     /// Provider destination or configured MCP connector covered by the grant.
-    #[arg(long, value_parser = ["google", "openai", "anthropic", "mcp:github-mcp"])]
+    #[arg(long, value_parser = ["google", "openai", "anthropic", "groq", "mcp:github-mcp"])]
     provider: String,
 }
 

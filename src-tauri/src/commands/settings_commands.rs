@@ -2,10 +2,10 @@
 
 use crate::agent::context::ContextBuilder;
 use crate::errors::{ArcanaError, Result};
-use crate::provider::types::{ModelInfo, ProviderStatus};
-use crate::state::AppState;
 #[cfg(not(feature = "e2e-ipc-receipt"))]
 use crate::provider::traits::Provider;
+use crate::provider::types::{ModelInfo, ProviderStatus};
+use crate::state::AppState;
 #[cfg(not(feature = "e2e-ipc-receipt"))]
 use crate::vault::keychain::{provider_key, VaultManager};
 use arcana_core::state::lock::LockTolerant;
@@ -45,10 +45,11 @@ fn supported_provider_labels() -> Result<Vec<(&'static str, &'static str)>> {
                 "anthropic" => "Anthropic",
                 "openai" => "OpenAI",
                 "google" => "Google",
+                "groq" => "Groq",
                 other => {
                     return Err(ArcanaError::Provider(format!(
                         "Settings has no display label for supported provider '{other}'"
-                    )))
+                    )));
                 }
             };
             Ok((id, name))
@@ -90,11 +91,11 @@ pub async fn test_provider_connection(provider: String) -> Result<ProviderStatus
 
     #[cfg(not(feature = "e2e-ipc-receipt"))]
     {
-    let key = VaultManager::get(&provider_key(&provider))?
-        .ok_or_else(|| ArcanaError::Provider("No API key stored for provider".into()))?;
+        let key = VaultManager::get(&provider_key(&provider))?
+            .ok_or_else(|| ArcanaError::Provider("No API key stored for provider".into()))?;
 
-    let candidate = arcana_core::provider::factory::build(&provider, key)?;
-    check_provider_metadata_connection(candidate.as_ref(), false).await
+        let candidate = arcana_core::provider::factory::build(&provider, key)?;
+        check_provider_metadata_connection(candidate.as_ref(), false).await
     }
 }
 
@@ -119,6 +120,7 @@ pub(super) async fn check_provider_metadata_connection(
         "google" => "provider:google",
         "anthropic" => "provider:anthropic",
         "openai" => "provider:openai",
+        "groq" => "provider:groq",
         _ => "unsupported",
     };
     tracing::info!(
@@ -306,6 +308,7 @@ mod provider_list_tests {
             vec![
                 ("anthropic", "Anthropic"),
                 ("google", "Google"),
+                ("groq", "Groq"),
                 ("openai", "OpenAI"),
             ]
         );

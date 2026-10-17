@@ -13,19 +13,22 @@
 // 2026, and the picker was still offering them. Selecting one is not a
 // degraded experience, it is a call that cannot succeed.
 //
-// ── Scope (razi-ruled, 2026-09-01) ───────────────────────────────────────────
+// ── Scope (razi-ruled, 2026-09-01; Groq added 2026-10-17) ────────────────────
 //
-// Three providers: **Anthropic, OpenAI, Google.** xAI/Grok was removed, and the
-// DeepSeek / Moonshot / Groq / SeaLion / Dashscope / NVIDIA groups are gone with
+// Four providers: **Anthropic, OpenAI, Google, Groq.** xAI/Grok was removed, and
+// the DeepSeek / Moonshot / SeaLion / Dashscope / NVIDIA groups are gone with
 // it — a worker could not run any of them, because `is_supported_provider` only
-// accepts these three and there is nowhere to store a key for the others.
+// accepts the ids below and there is nowhere to store a key for the others.
 // Offering a model no key can authenticate is a dead end dressed as a choice.
+// Groq is back in with ONE model (`qwen/qwen3.8-27b`, razi-ruled 2026-10-17):
+// priced at a verified rate and served by a real adapter, so it is not the
+// dead-end group this comment once excised.
 //
 // Gemini is the **primary** provider for the first rollout.
 
 export interface ModelGroup {
   /** Provider id, matching `is_supported_provider` in `vault_commands.rs`. */
-  provider: 'anthropic' | 'openai' | 'google'
+  provider: 'anthropic' | 'openai' | 'google' | 'groq'
   label: string
   models: string[]
 }
@@ -60,6 +63,15 @@ export const MODEL_GROUPS: readonly ModelGroup[] = [
     // at $0 — which makes its spend invisible to the daily cap and lets it run
     // uncapped. They return when a price does.
     models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini', 'gpt-5.4-nano'],
+  },
+  {
+    provider: 'groq',
+    label: 'Groq Qwen',
+    // Verified 2026-10-17: `qwen/qwen3.8-27b` is the only self-serve Qwen 3.8
+    // id on Groq (its 3.6 predecessor was deprecated 2026-09-14), priced at
+    // $0.80/$4.00 per 1M. Must stay equal to `CATALOGUE` in
+    // `arcana-core/src/provider/catalogue.rs` (TG-P2-05).
+    models: ['qwen/qwen3.8-27b'],
   },
 ] as const
 

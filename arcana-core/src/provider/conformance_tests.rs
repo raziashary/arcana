@@ -13,6 +13,7 @@
 
 use super::anthropic::AnthropicProvider;
 use super::google::GoogleProvider;
+use super::groq::GroqProvider;
 use super::openai::OpenAIProvider;
 use super::types::{CompletionRequest, MessageContent, RequestMessage, ToolDefinition};
 
@@ -102,6 +103,16 @@ fn every_adapter_sends_an_output_ceiling() {
     assert_eq!(
         g["generationConfig"]["maxOutputTokens"], 4096,
         "google — `maxOutputTokens` appeared nowhere in the tree"
+    );
+
+    // Groq rides the shared OpenAI-compatible builder, so the ceiling arrives
+    // as `max_completion_tokens` there too. Asserting it ON the Groq adapter
+    // (not only on OpenAI's) keeps the shared-facade refactor honest: a
+    // regression in the builder must fail this test through BOTH consumers.
+    let gq = GroqProvider::new(String::new()).build_body_for_test(&req(), false);
+    assert_eq!(
+        gq["max_completion_tokens"], 4096,
+        "groq — shared chat-completions builder, same ceiling field"
     );
 }
 
@@ -483,13 +494,28 @@ fn every_shipped_model_that_claims_parallel_tools_actually_gets_them() {
     // and every model fell to the conservative default — which reports
     // `parallel_tools: false`. The agent would have serialised calls the model
     // was perfectly capable of running at once.
+    //
+    // The invariant is about CLAIMED capability: a catalogue row whose
+    // `parallel_tools` is genuinely unmeasured (ADRed, 2026-10-17:
+    // `qwen/qwen3.8-27b` documents tool use but not parallel-call
+    // coordination) is allowed to be conservative — the conservative default
+    // is the honest answer, not a regression of this test. What stays
+    // mandatory for EVERY row: tools and streaming.
     for e in crate::provider::catalogue::CATALOGUE {
         let caps = crate::provider::catalogue::capabilities_for(e.id);
-        assert!(
-            caps.parallel_tools,
-            "{} does not report parallel tool support",
-            e.id
-        );
+        if e.parallel_tools {
+            assert!(
+                caps.parallel_tools,
+                "{} claims parallel tool support but does not report it",
+                e.id
+            );
+        } else {
+            assert!(
+                !caps.parallel_tools,
+                "{} declares itself conservative but reports parallel tools",
+                e.id
+            );
+        }
         assert!(
             caps.tools && caps.streaming,
             "{} lost a base capability",

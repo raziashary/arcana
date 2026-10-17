@@ -222,6 +222,32 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
         parallel_tools: true,
         cache: CacheSupport::Automatic { min_tokens: 1_024 },
     },
+    // ── Groq ─────────────────────────────────────────────────────────────────
+    //
+    // Verified 2026-10-17 against Groq's docs: the one self-serve Qwen 3.8 id,
+    // the successor to `qwen/qwen3.6-27b` (deprecated 2026-09-14).
+    //
+    // `parallel_tools` is deliberately FALSE until measured, not pessimism:
+    // Groq's model page documents tool use (a single `tool_choice: "auto"`
+    // call) but no parallel-call field, and a capability claim made without a
+    // measurement is the exact shape §0.2L-2 names. Enabling it without proof
+    // is how a silently-dropped second call becomes invisible; refusing it
+    // only costs some latency on parallel requests.
+    //
+    // `cache` is likewise `None` until Groq documents a cached-token rate for
+    // this model — the catalogue must not claim a cache that has no published
+    // price backing it.
+    CatalogueEntry {
+        id: "qwen/qwen3.8-27b",
+        display_name: "Qwen 3.8 27B",
+        provider: "groq",
+        context_window: 131_072,
+        max_output: 16_384,
+        vision: true,
+        reasoning: true,
+        parallel_tools: false,
+        cache: CacheSupport::None,
+    },
 ];
 
 /// Models offered without a verified price.
@@ -497,9 +523,12 @@ mod tests {
         // 2026-09-02 because no verified price existed for them, and an
         // unpriced model runs invisible to the daily spend cap.
         assert_eq!(models_for("openai").len(), 4);
+        // One: `qwen/qwen3.8-27b` is the only self-serve Qwen 3.8 id Groq
+        // lists, and it is the successor to the deprecated qwen3.6-27b.
+        assert_eq!(models_for("groq").len(), 1);
         assert_eq!(models_for("nonexistent").len(), 0);
         // And every ModelInfo carries a real window, not a zero.
-        for p in ["google", "anthropic", "openai"] {
+        for p in ["google", "anthropic", "openai", "groq"] {
             for m in models_for(p) {
                 assert!(m.context_window > 0, "{} has no context window", m.id);
                 assert!(!m.name.is_empty(), "{} has no display name", m.id);

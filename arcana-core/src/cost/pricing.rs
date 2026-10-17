@@ -259,6 +259,25 @@ const PRICES: &[(&str, ModelPrice)] = &[
             changes_on: None,
         },
     ),
+    // Groq — verified 2026-10-17 against console.groq.com/docs/models, which
+    // lists Qwen/Qwen3.8-27B in its catalog at $0.80 input / $4.00 output per
+    // 1M tokens (450 T/s; the price was published 2026-08-27 when the model
+    // joined the self-serve catalog). Groq documents no cached-token discount
+    // for this model, so `cached_read` is billed at the full input rate
+    // rather than inventing a 0.1× discount no source supports; if the
+    // adapter ever reports cached reads, an unbillable discount deficit is
+    // the safe direction (reported spend exceeds actual).
+    (
+        "qwen/qwen3.8-27b",
+        ModelPrice {
+            input: 0.80,
+            output: 4.00,
+            cached_read: 0.80,
+            cache_write: 0.0,
+            tier: None,
+            changes_on: None,
+        },
+    ),
 ];
 
 /// The price for a model, or an error naming it.
@@ -472,10 +491,36 @@ mod tests {
         // changes.
         for m in priced_models() {
             assert!(
-                m.starts_with("gemini-") || m.starts_with("claude-") || m.starts_with("gpt-"),
+                m.starts_with("gemini-")
+                    || m.starts_with("claude-")
+                    || m.starts_with("gpt-")
+                    // Groq's id space is vendored `qwen/…`; the bare `qwen3-`
+                    // prefix deliberately stays excluded (it must not route).
+                    || m.starts_with("qwen/"),
                 "{m} is not from a supported provider"
             );
         }
+    }
+
+    #[test]
+    fn groq_pricing_matches_the_published_rate() {
+        // $0.80 in / $4.00 out per 1M — 1M tokens at each rate must price to
+        // the published figures, and reasoning tokens (billable at the output
+        // rate) must not be folded into input.
+        let u = usage(1_000_000, 0, 0, 0);
+        assert!((cost_usd("qwen/qwen3.8-27b", &u).unwrap() - 0.80).abs() < 1e-9);
+
+        let mut u = usage(0, 0, 0, 1_000_000);
+        assert!((cost_usd("qwen/qwen3.8-27b", &u).unwrap() - 4.00).abs() < 1e-9);
+        u.reasoning = 1_000_000;
+        assert!(
+            (cost_usd("qwen/qwen3.8-27b", &u).unwrap() - 8.00).abs() < 1e-9,
+            "reasoning tokens bill at the output rate"
+        );
+
+        // And a cached read (should it ever occur) is billed at the full
+        // input rate, because Groq publishes no cached-token discount.
+        assert_eq!(price_for("qwen/qwen3.8-27b").unwrap().cached_read, 0.80);
     }
     #[test]
     fn a_scheduled_price_change_has_not_silently_passed() {
