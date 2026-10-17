@@ -147,7 +147,7 @@ fn begin_operation_journal(
         | "project_command"
         | "create_task"
         | "assign_task"
-        | "assign_tasks_batch"
+        | "assign_tasks"
         | "claim_task"
         | "update_task_status"
         | "send_worker_message"

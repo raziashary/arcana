@@ -749,4 +749,60 @@ mod p4_51_board_matrix_tests {
             );
         }
     }
+
+    #[tokio::test]
+    async fn batch_assignment_intents_journal_the_registered_tool_identity() {
+        let home = tempfile::tempdir().expect("isolated Arcana home and workspace");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workers = WorkersDb::open().expect("open isolated workers DB");
+        let worker_id = workers
+            .create(
+                "Journal identity worker",
+                "worker-journal-identity",
+                "backend",
+                "fixture-model",
+                &[],
+                120,
+                None,
+            )
+            .expect("create implementation worker");
+        workers
+            .update_status(worker_id, WorkerStatus::Idle)
+            .expect("mark fixture worker runnable");
+        let runs = RunsDb::open().expect("open isolated runs DB");
+        let run_id = runs
+            .begin_worker_tick("worker-journal-identity", SESSION)
+            .expect("create correlated worker run");
+        let tasks = TasksDb::open().expect("open isolated tasks DB");
+        let task = fixture_task(&tasks, "Journal identity assignment");
+        let registry = live_registry();
+        let mut supervisor = executor(home.path(), AgentIdentity::supervisor(), &run_id, None);
+
+        let batch = invoke(
+            &mut supervisor,
+            &registry,
+            "assign_tasks",
+            json!({"assignments":[{
+                "task_id":task.id,
+                "worker_slug":"worker-journal-identity",
+                "override_reason":"isolated journal identity check"
+            }]}),
+            "assign-journal-identity",
+        )
+        .await;
+        assert!(!batch.is_error, "batch assignment: {}", batch.output);
+
+        let journal = runs
+            .operation_journal_page(&run_id, 0, 10)
+            .expect("read run-scoped operation journal");
+        assert_eq!(
+            journal.entries.len(),
+            1,
+            "one journaled side effect for the batch assignment"
+        );
+        assert_eq!(
+            journal.entries[0].operation, "assign_tasks",
+            "batch assignments journal the registered tool name, not a retired alias"
+        );
+    }
 }

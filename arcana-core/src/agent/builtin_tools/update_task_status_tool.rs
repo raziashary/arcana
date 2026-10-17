@@ -581,6 +581,72 @@ mod qc_gate_tests {
         );
     }
 
+    /// TG4-30 boundary: a worker cannot release another worker's dependents.
+    /// Completing a task is the only worker route into `unblock_ready_tasks`,
+    /// and that route is owner-checked; the dependent survives a denied
+    /// cross-worker completion untouched.
+    #[tokio::test]
+    async fn worker_cannot_release_another_workers_dependency_chain() {
+        let sandbox = tempfile::tempdir().expect("create isolated Arcana home");
+        let _home = crate::db::test_support::with_home(sandbox.path());
+        let db = TasksDb::open().expect("open isolated tasks DB");
+        let task_a = create_test_task(&db, "worker A prerequisite");
+        let epic = db
+            .create_epic("cross-worker release guard", None, "test")
+            .unwrap();
+        let dependent_id = db
+            .create_phased_task(crate::db::tasks::CreatePhasedTaskInput {
+                epic_id: epic.id.to_string(),
+                phase: "next".into(),
+                phase_order: 1,
+                title: "stays blocked when the completion is denied".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "ready only after worker A completes".into(),
+                blocked_by: vec![task_a.to_string()],
+                milestone: None,
+                created_by: Some("tg4-30-test".into()),
+            })
+            .unwrap()
+            .id;
+        db.update_status(task_a, "assigned", Some("worker-a"))
+            .unwrap();
+        db.claim_task_with_pid(task_a, "worker-a", 811).unwrap();
+        let task_b = create_test_task(&db, "worker B task");
+        db.update_status(task_b, "assigned", Some("worker-b"))
+            .unwrap();
+        db.claim_task_with_pid(task_b, "worker-b", 812).unwrap();
+
+        let context = ToolContext {
+            session_id: "cross-worker-release-test".into(),
+            working_dir: sandbox.path().to_string_lossy().into_owned(),
+            call_id: "cross-worker-release-call".into(),
+            run_id: None,
+            task_id: Some(task_b),
+            permission_mode: PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "worker-b".into(),
+
+            run_token_budget: None,
+        };
+        let result = UpdateTaskStatusTool
+            .execute(json!({ "id": task_a, "status": "done" }), &context)
+            .await;
+
+        assert!(result.is_error, "worker B cannot complete worker A's task");
+        assert_eq!(
+            db.get_by_id(task_a).unwrap().unwrap().status.as_str(),
+            "in_progress",
+            "the prerequisite stays claimed and uncompleted"
+        );
+        assert_eq!(
+            db.get_by_id(dependent_id).unwrap().unwrap().status.as_str(),
+            "needs_info",
+            "the denied completion must not release the dependent"
+        );
+    }
+
     #[tokio::test]
     async fn autonomous_completion_closes_only_the_current_owners_routing_row() {
         let sandbox = tempfile::tempdir().expect("create isolated Arcana home");

@@ -338,6 +338,108 @@ mod workspace_tests {
     }
 
     #[tokio::test]
+    async fn production_tool_executor_refuses_worker_writes_without_a_current_claim() {
+        use crate::agent::permission::{new_pending_permissions, PermissionMode};
+        use crate::agent::tool_executor::ToolExecutor;
+        use crate::agent::tool_registry::ToolRegistry;
+        use std::sync::Arc;
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        let tasks = crate::db::tasks::TasksDb::open().expect("open isolated TasksDb");
+        let foreign_task = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "unclaimed write boundary fixture".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "a write without the claim must not run".into(),
+                created_by: Some("test".into()),
+            })
+            .expect("create isolated fixture task");
+        drop(tasks);
+
+        let mut registry = ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        let tool = registry
+            .get("write_file")
+            .expect("FastDevelopment registers write_file");
+
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            "unclaimed-write-session".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker("worker-unclaimed-write"),
+        );
+        // A worker on no task at all.
+        let unclaimed = executor
+            .execute_batch(vec![(
+                tool.clone(),
+                serde_json::json!({
+                    "path": "claimed/unclaimed.rs",
+                    "content": "must not be written"
+                }),
+                "unclaimed-write-call".into(),
+            )])
+            .await
+            .expect("executor returns a structured result");
+        let refused = unclaimed.into_iter().next().expect("one result").1;
+        assert!(refused.is_error, "unclaimed write must be refused");
+        let envelope: serde_json::Value =
+            serde_json::from_str(&refused.output).expect("versioned JSON failure envelope");
+        assert_eq!(envelope["schema_version"], 1);
+        assert_eq!(
+            envelope["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Worker mutations require a task claim"),
+            true,
+            "refusal names the missing task claim: {}",
+            refused.output
+        );
+        assert!(
+            !workspace.path().join("claimed").exists(),
+            "no parent directory may be created before the claim gate"
+        );
+
+        // A worker whose task context names a task not assigned to it.
+        executor.set_task_id(Some(foreign_task.id));
+        let foreign = executor
+            .execute_batch(vec![(
+                tool,
+                serde_json::json!({
+                    "path": "claimed/foreign.rs",
+                    "content": "must not be written"
+                }),
+                "foreign-write-call".into(),
+            )])
+            .await
+            .expect("executor returns a structured result");
+        let foreign_refused = foreign.into_iter().next().expect("one result").1;
+        assert!(foreign_refused.is_error, "foreign claim must be refused");
+        let foreign_envelope: serde_json::Value =
+            serde_json::from_str(&foreign_refused.output).expect("versioned JSON failure envelope");
+        assert_eq!(foreign_envelope["schema_version"], 1);
+        assert!(
+            foreign_envelope["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("no longer owns the in-progress task"),
+            "refusal names the stale ownership: {}",
+            foreign_refused.output
+        );
+        assert!(
+            !workspace.path().join("claimed/foreign.rs").exists(),
+            "no file may be written under a foreign task context"
+        );
+    }
+
+    #[tokio::test]
     async fn production_tool_executor_claim_identity_blocks_write_after_checkpoint_failure() {
         use crate::agent::permission::{new_pending_permissions, PermissionMode};
         use crate::agent::tool_executor::ToolExecutor;

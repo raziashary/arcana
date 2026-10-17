@@ -6,7 +6,7 @@
 > sequence are preserved in [the historical design programme](HISTORICAL_DESIGN_PROGRAMME.md).
 > The owner approved PD0 contract retirement and fresh Arcana state in ADR-0043.
 
-> **Current register (2026-10-13):** the current active register has 406 explicit checkbox rows, 96 open. P4 is 45/59 checked and TG4 is 23/33
+> **Current register (2026-10-17):** the current active register has 459 explicit checkbox rows, 109 open. P4 is 49/59 checked and TG4 is 24/33
 > passing; Windows-first scope and P7/P9 transfers are in ADR0391. This is a
 > checklist count, not a phase-ready claim.
 
