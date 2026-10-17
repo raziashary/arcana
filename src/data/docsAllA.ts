@@ -76,7 +76,7 @@ export const A_SECTIONS: DocSection[] = [
 │  Zustand stores      │   agent/    tools, prompts, permissions   │
 │    ↕ invoke          │   recipes/  YAML + cron scheduler        │
 │    ↕ events          │   memory/   episodic, semantic, proc.    │
-│                      │   provider/ Anthropic · OpenAI · Google   │
+│                      │   provider/ Anthropic·OpenAI·Google·Groq  │
 │                      │   mcp/      client for your MCP servers   │
 │                      │   git/      git2-rs                       │
 │                      │   graph/    knowledge graph               │
