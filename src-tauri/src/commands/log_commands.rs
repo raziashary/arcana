@@ -2515,6 +2515,811 @@ mod tests {
         assert!(metrics.by_event["mcp_call"].result_bytes_total > 0);
     }
 
+    /// A fixture provider implementing the production `Provider` trait, so the
+    /// real compaction producer emits its bounded `provider_call` telemetry
+    /// without network access. `fail=true` drives the production failure
+    /// fallback branch; usage fields drive the persisted token categories.
+    struct LogsProviderFixture {
+        fail: bool,
+        input_tokens: u32,
+        output_tokens: u32,
+        reasoning_tokens: u32,
+    }
+
+    #[async_trait::async_trait]
+    impl arcana_core::provider::Provider for LogsProviderFixture {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "logs-fixture"
+        }
+
+        fn models(&self) -> Vec<arcana_core::provider::types::ModelInfo> {
+            Vec::new()
+        }
+
+        async fn complete(
+            &self,
+            _request: arcana_core::provider::types::CompletionRequest,
+        ) -> crate::errors::Result<arcana_core::provider::types::CompletionResponse> {
+            if self.fail {
+                return Err(crate::errors::ArcanaError::Provider(
+                    "private-provider-error-canary".into(),
+                ));
+            }
+            Ok(arcana_core::provider::types::CompletionResponse {
+                message_id: "logs-provider-fixture".into(),
+                content: vec![arcana_core::provider::types::MessageContent::Text {
+                    text: "logs fixture summary".into(),
+                }],
+                stop_reason: "STOP".into(),
+                usage: arcana_core::provider::usage::Usage {
+                    input: self.input_tokens,
+                    output: self.output_tokens,
+                    reasoning: self.reasoning_tokens,
+                    ..Default::default()
+                },
+                model: "gemini-3.8-flash".into(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            _request: arcana_core::provider::types::CompletionRequest,
+        ) -> crate::errors::Result<arcana_core::provider::traits::StreamResult> {
+            Err(crate::errors::ArcanaError::Agent(
+                "logs fixture does not stream".into(),
+            ))
+        }
+
+        async fn test_connection(
+            &self,
+        ) -> crate::errors::Result<arcana_core::provider::types::ProviderStatus> {
+            Ok(arcana_core::provider::types::ProviderStatus::Connected)
+        }
+    }
+
+    const TELEMETRY_TARGET_FILTER: fn(&tracing::Metadata<'_>) -> bool =
+        |metadata: &tracing::Metadata<'_>| {
+            metadata.target() == "arcana::telemetry"
+                || metadata.target().starts_with("arcana::telemetry::")
+        };
+
+    /// Fixture spanning 12 messages so the production compaction path reaches
+    /// its summarisation request. The middle messages carry a privacy canary
+    /// that must never reach the persisted JSONL.
+    fn logs_compaction_messages() -> Vec<arcana_core::provider::types::RequestMessage> {
+        use arcana_core::provider::types::{MessageContent, RequestMessage};
+
+        (0..12)
+            .map(|index| RequestMessage {
+                role: if index % 2 == 0 { "user" } else { "assistant" }.into(),
+                content: vec![MessageContent::Text {
+                    text: if index == 3 {
+                        "private-compaction-transcript-canary".into()
+                    } else {
+                        format!("message {index}")
+                    },
+                }],
+            })
+            .collect()
+    }
+
+    /// TG4-24 provider family: the production compaction provider-call
+    /// producer and the production retry policy persist provider_call and
+    /// provider_retry events with success / retrying / stopped / error
+    /// classifications, and the Tauri structured-events reader plus the
+    /// summarise command read every classification back. Bounded provider
+    /// metadata only: planted transcript and provider-error text must stay out.
+    #[test]
+    fn production_provider_call_retry_and_failure_events_persist_and_read_through_tauri_logs() {
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let log_dir = home.path().join(".arcana").join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create isolated structured log directory");
+
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let log_path = log_dir.join(format!("arcana-events.{date}.jsonl"));
+        let file = std::fs::File::create(&log_path).expect("create production structured log");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_target(true)
+            .with_ansi(false)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(writer)
+            .with_filter(filter_fn(TELEMETRY_TARGET_FILTER));
+        let subscriber = Registry::default().with(layer);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create isolated provider runtime");
+        tracing::subscriber::with_default(subscriber, || {
+            // Deterministic success: the production compaction path makes one
+            // real provider call and emits provider_call with usage/outcome.
+            runtime
+                .block_on(async {
+                    arcana_core::agent::compaction::CompactionEngine::compact_with_summary(
+                        logs_compaction_messages(),
+                        &LogsProviderFixture {
+                            fail: false,
+                            input_tokens: 31,
+                            output_tokens: 7,
+                            reasoning_tokens: 0,
+                        },
+                        "gemini-3.8-flash",
+                    )
+                    .await
+                })
+                .0;
+
+            // Retry success: one classified-retryable failure is retried once
+            // through the production retry policy, emitting provider_retry
+            // outcome=retrying, then the operation succeeds.
+            let mut attempts = 0_u32;
+            let retried = runtime
+                .block_on(arcana_core::provider::retry::with_retry(
+                    || {
+                        attempts += 1;
+                        let attempt = attempts;
+                        async move {
+                            if attempt == 1 {
+                                Err::<(), crate::errors::ArcanaError>(
+                                    crate::errors::ArcanaError::Provider(
+                                        "private-provider-retry-error-canary [Retryable]".into(),
+                                    ),
+                                )
+                            } else {
+                                Ok(())
+                            }
+                        }
+                    },
+                    |_: &crate::errors::ArcanaError| {
+                        arcana_core::provider::usage::ErrorClass::Retryable
+                    },
+                ))
+                .is_ok();
+            assert!(retried, "second production retry attempt must succeed");
+
+            // Failure: a compaction call that errors emits provider_call
+            // outcome=error, and a quota-exhausted call stops without a
+            // further attempt, emitting provider_retry outcome=stopped.
+            runtime
+                .block_on(async {
+                    arcana_core::agent::compaction::CompactionEngine::compact_with_summary(
+                        logs_compaction_messages(),
+                        &LogsProviderFixture {
+                            fail: true,
+                            input_tokens: 0,
+                            output_tokens: 0,
+                            reasoning_tokens: 0,
+                        },
+                        "gemini-3.8-flash",
+                    )
+                    .await
+                })
+                .0;
+
+            // A quota-exhausted call stops without a further attempt,
+            // emitting provider_retry outcome=stopped with no backoff delay.
+            let quota_error = runtime
+                .block_on(arcana_core::provider::retry::with_retry(
+                    || async {
+                        Err::<(), crate::errors::ArcanaError>(crate::errors::ArcanaError::Provider(
+                            "private-provider-quota-canary".into(),
+                        ))
+                    },
+                    |_: &crate::errors::ArcanaError| {
+                        arcana_core::provider::usage::ErrorClass::QuotaExhausted
+                    },
+                ))
+                .expect_err("quota-exhausted calls must fail closed")
+                .to_string();
+            assert!(quota_error.contains("Provider error"));
+        });
+        drop(guard);
+
+        let persisted = super::read_structured_events(date.clone(), Some(50), None)
+            .expect("production Tauri Logs command reads provider telemetry");
+        let events = persisted
+            .content
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid event JSON"))
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 4, "{events:#?}");
+
+        let success = events
+            .iter()
+            .find(|event| {
+                event["fields"]["event_type"] == "provider_call"
+                    && event["fields"]["outcome"] == "success"
+            })
+            .expect("produced successful provider call is visible in Logs");
+        assert_eq!(success["fields"]["provider"], "google");
+        assert_eq!(success["fields"]["model"], "gemini-3.8-flash");
+        assert_eq!(success["fields"]["input_tokens"], 31);
+        assert_eq!(success["fields"]["output_tokens"], 7);
+        assert_eq!(success["fields"]["attempts"], 1);
+        assert_eq!(success["fields"]["result_blocks"], 0);
+        assert!(success["fields"]["duration_ns"].as_u64().is_some());
+
+        let failure = events
+            .iter()
+            .find(|event| {
+                event["fields"]["event_type"] == "provider_call"
+                    && event["fields"]["outcome"] == "error"
+            })
+            .expect("produced failing provider call is visible in Logs");
+        assert_eq!(failure["fields"]["provider"], "google");
+        assert_eq!(failure["fields"]["input_tokens"], 0);
+
+        let retrying = events
+            .iter()
+            .find(|event| {
+                event["fields"]["event_type"] == "provider_retry"
+                    && event["fields"]["outcome"] == "retrying"
+            })
+            .expect("produced retry decision is visible in Logs");
+        assert_eq!(retrying["fields"]["attempt"], 1);
+        assert!(retrying["fields"]["duration_ns"].as_u64().is_some());
+
+        let stopped = events
+            .iter()
+            .find(|event| {
+                event["fields"]["event_type"] == "provider_retry"
+                    && event["fields"]["outcome"] == "stopped"
+            })
+            .expect("produced terminal retry stop is visible in Logs");
+        assert!(stopped["fields"]["duration_ns"].as_u64().is_some());
+
+        // Privacy: no transcript text, no provider error body, no argument
+        // reflection in any persisted record.
+        assert!(!persisted
+            .content
+            .contains("private-compaction-transcript-canary"));
+        assert!(!persisted.content.contains("private-provider-error-canary"));
+        assert!(!persisted
+            .content
+            .contains("private-provider-retry-error-canary"));
+        assert!(!persisted.content.contains("logs fixture summary"));
+
+        let metrics = super::summarize_observability_events(date, None)
+            .expect("production Tauri Logs summarise command aggregates provider telemetry");
+        assert_eq!(metrics.total_events, 4);
+        assert_eq!(metrics.provider_calls, 2);
+        // provider_attempt events are emitted on the engine streaming path,
+        // which this compaction/retry exercise does not reach; the attempt
+        // count must therefore stay at zero rather than being inflated by
+        // provider_retry records.
+        assert_eq!(metrics.provider_attempts, 0);
+        let calls = &metrics.by_event["provider_call"];
+        assert_eq!(calls.count, 2);
+        assert_eq!(calls.failures, 1);
+        assert_eq!(calls.duration_count, 2);
+        let retries = &metrics.by_event["provider_retry"];
+        assert_eq!(retries.count, 2);
+        assert_eq!(retries.failures, 1, "stopped is classified as failure");
+        assert_eq!(metrics.outcomes.get("success"), Some(&1));
+        assert_eq!(metrics.outcomes.get("error"), Some(&1));
+        assert_eq!(metrics.outcomes.get("retrying"), Some(&1));
+        assert_eq!(metrics.outcomes.get("stopped"), Some(&1));
+        assert_eq!(metrics.input_tokens, 31);
+        assert_eq!(metrics.output_tokens, 7);
+        let provider_model = &metrics.by_provider_model["google/gemini-3.8-flash"];
+        assert_eq!(provider_model.calls, 2);
+        assert_eq!(provider_model.failures, 1);
+        assert_eq!(provider_model.input_tokens, 31);
+        assert_eq!(provider_model.output_tokens, 7);
+    }
+
+    /// TG4-24 statement-level timing family: a migrated isolated TasksDb whose
+    /// connection carries the production SQLite profiler persists
+    /// database_statement events through the structured sink; the Tauri
+    /// reader and summarise command read them back with normalized `tasks`
+    /// identity, duration and `duration_observed` outcome while SQL text and
+    /// bound values stay out — the persisted-JSONL half of
+    /// `production_profile_emits_structured_identity_and_duration_without_sql_or_values`.
+    /// DEBUG-level statement events persist because the production structured
+    /// stream adds the `arcana::telemetry=debug` directive its filter carves
+    /// out explicitly (`observability/logging.rs` structured_filter).
+    #[test]
+    fn production_database_statement_events_persist_and_read_through_tauri_logs() {
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let log_dir = home.path().join(".arcana").join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create isolated structured log directory");
+
+        // Open the production TasksDb before the capture scope: its migration
+        // ladder also takes a pre-run backup snapshot on its own connection,
+        // and this test scopes capture to the steady-state workload below.
+        let tasks =
+            arcana_core::db::tasks::TasksDb::open().expect("open migrated isolated Tasks database");
+
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let log_path = log_dir.join(format!("arcana-events.{date}.jsonl"));
+        let file = std::fs::File::create(&log_path).expect("create production structured log");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_target(true)
+            .with_ansi(false)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(writer)
+            .with_filter(filter_fn(TELEMETRY_TARGET_FILTER));
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            // The open path installed the profile callback through the shared
+            // `open_tuned` route, so every workload statement persists
+            // through the production profiler while the sink is attached.
+            tasks
+                .create(arcana_core::db::tasks::CreateTaskInput {
+                    title: "private-task-title-canary-logs-board".into(),
+                    description: None,
+                    priority: "p2".into(),
+                    task_type: "feature".into(),
+                    acceptance_criteria: "private-task-criteria-canary-logs".into(),
+                    created_by: Some("tg4-24-database-statement-test".into()),
+                })
+                .expect("create a task through the production repository");
+        });
+        drop(guard);
+
+        let persisted = super::read_structured_events(date.clone(), Some(500), None)
+            .expect("production Tauri Logs command reads SQLite statement telemetry");
+        let events = persisted
+            .content
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid event JSON"))
+            .collect::<Vec<_>>();
+        let statements = events
+            .iter()
+            .filter(|event| event["fields"]["event_type"] == "database_statement")
+            .collect::<Vec<_>>();
+        assert!(
+            !statements.is_empty(),
+            "production profile events must reach the persisted sink: {events:#?}"
+        );
+        for statement in &statements {
+            let fields = &statement["fields"];
+            assert_eq!(fields["database"], "tasks");
+            assert!(
+                [
+                    "read",
+                    "insert",
+                    "update",
+                    "delete",
+                    "schema",
+                    "pragma",
+                    "transaction",
+                    "other"
+                ]
+                .contains(&fields["operation"].as_str().unwrap_or_default()),
+                "statement operation must be a fixed category, not SQL text"
+            );
+            assert_eq!(fields["outcome"], "duration_observed");
+            assert!(fields["duration_ns"].as_u64().is_some());
+        }
+
+        // Privacy: no task text and no expanded SQL reach the JSONL, through
+        // the raw file or the actual reader command result.
+        let raw = std::fs::read_to_string(&log_path).expect("read raw persisted JSONL");
+        for surface in [persisted.content.as_str(), raw.as_str()] {
+            assert!(!surface.contains("private-task-title-canary-logs-board"));
+            assert!(!surface.contains("private-task-criteria-canary-logs"));
+            assert!(!surface.contains("INSERT INTO"));
+            assert!(!surface.contains("SELECT"));
+        }
+
+        let mut metrics = MetricsAccumulator::default();
+        let metrics = refresh_metrics_from_file_for_correlation(&log_path, &mut metrics, None)
+            .expect("production Logs metrics reader counts SQLite statements");
+        let statement_aggregate = &metrics.by_event["database_statement"];
+        assert_eq!(metrics.database_statements, statement_aggregate.count);
+        assert!(metrics.database_statements >= 1);
+        // SQLite's legacy profile hook reports elapsed time with whole-second
+        // granularity (`invokeProfileCallback` in sqlite3.c computes
+        // `iElapse = (iNow - p->startTime) * 1000000` from the second-grained
+        // `sqlite3OsCurrentTimeInt64`), so a sub-second statement legitimately
+        // observes 0 ns — that is what `duration_zero_count` exists for and
+        // what `measure_profile_callback_overhead_and_duration_resolution`
+        // measures directly. The reader must therefore account for every
+        // observed statement in exactly one duration bucket, and its split
+        // must match the nonzero durations actually persisted here.
+        assert_eq!(
+            statement_aggregate.duration_count + statement_aggregate.duration_zero_count,
+            statement_aggregate.count
+        );
+        let persisted_nonzero = statements
+            .iter()
+            .filter(|statement| statement["fields"]["duration_ns"].as_u64() > Some(0))
+            .count() as u64;
+        assert_eq!(statement_aggregate.duration_count, persisted_nonzero);
+    }
+
+    /// TG4-24 worker/task lifecycle family: the production RunsDb ledger
+    /// persists worker tick begin, run-phase update and recorded progress as
+    /// correlated operation timing in `runs`, and the Tauri correlation
+    /// reader plus metrics reader read the whole lifecycle back under the one
+    /// run id the producer attached.
+    #[test]
+    fn production_worker_tick_lifecycle_events_persist_and_read_through_tauri_logs() {
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let log_dir = home.path().join(".arcana").join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create isolated structured log directory");
+
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let file_path = log_dir.join(format!("arcana-events.{date}.jsonl"));
+        let file = std::fs::File::create(&file_path).expect("create production structured log");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_target(true)
+            .with_ansi(false)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(writer)
+            .with_filter(filter_fn(TELEMETRY_TARGET_FILTER));
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let runs = arcana_core::db::runs::RunsDb::open()
+                .expect("open migrated isolated runs database");
+            let run_id = runs
+                .begin_worker_tick("worker-tick-logs-proof", "session-worker-tick-logs-proof")
+                .expect("begin a production worker tick");
+            runs.update_worker_tick_phase(&run_id, "running", Some(42), None)
+                .expect("record the worker run phase");
+            runs.record_worker_progress(&run_id, Some(42), "tool_batch_completed_ok")
+                .expect("record bounded worker progress");
+        });
+        drop(guard);
+
+        let raw = std::fs::read_to_string(&file_path).expect("read persisted lifecycle JSONL");
+        let begin = raw.contains("database_worker_tick_begin");
+        let phase = raw.contains("database_worker_tick_phase_update");
+        let progress = raw.contains("database_worker_progress_record");
+        assert!(
+            begin && phase && progress,
+            "missing lifecycle producer in {raw}"
+        );
+
+        let run_id = raw
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find_map(|event| {
+                (event["fields"]["operation"] == "database_worker_tick_begin").then(|| {
+                    event["fields"]["run_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+            })
+            .filter(|run_id| !run_id.is_empty())
+            .expect("the producer attaches its run id");
+
+        let persisted = super::read_structured_events(date, Some(20), Some(run_id.clone()))
+            .expect("production Tauri Logs command reads correlated worker lifecycle");
+        let events = persisted
+            .content
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid event JSON"))
+            .collect::<Vec<_>>();
+        assert_eq!(events.len(), 3, "{events:#?}");
+        let fields_by_operation = events
+            .iter()
+            .map(|event| {
+                (
+                    event["fields"]["operation"].as_str().unwrap_or_default(),
+                    event,
+                )
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+        let begin = fields_by_operation
+            .get("database_worker_tick_begin")
+            .expect("tick begin persisted");
+        assert_eq!(begin["fields"]["database"], "runs");
+        assert_eq!(begin["fields"]["worker"], "worker-tick-logs-proof");
+        assert_eq!(
+            begin["fields"]["session_id"],
+            "session-worker-tick-logs-proof"
+        );
+        assert_eq!(begin["fields"]["outcome"], "success");
+        assert_eq!(begin["fields"]["run_id"], run_id);
+        let phase = fields_by_operation
+            .get("database_worker_tick_phase_update")
+            .expect("run-phase update persisted");
+        assert_eq!(phase["fields"]["database"], "runs");
+        assert_eq!(phase["fields"]["task_id"], "42");
+        assert_eq!(phase["fields"]["outcome"], "success");
+        let progress = fields_by_operation
+            .get("database_worker_progress_record")
+            .expect("bounded progress persisted");
+        assert_eq!(progress["fields"]["database"], "runs");
+        assert_eq!(progress["fields"]["task_id"], "42");
+        assert_eq!(progress["fields"]["outcome"], "success");
+        for persisted_event in [&begin, &phase, &progress] {
+            assert!(persisted_event["fields"]["duration_ns"].as_u64().is_some());
+        }
+
+        let mut metrics = MetricsAccumulator::default();
+        let metrics =
+            refresh_metrics_from_file_for_correlation(&file_path, &mut metrics, Some(&run_id))
+                .expect("production Logs metrics reader scopes the worker lifecycle");
+        assert_eq!(metrics.total_events, 3);
+        let lifecycle = &metrics.by_event["operation_timing"];
+        assert_eq!(lifecycle.count, 3);
+        assert_eq!(lifecycle.failures, 0);
+        assert_eq!(lifecycle.duration_count, 3);
+        assert_eq!(metrics.outcomes.get("success"), Some(&3));
+    }
+
+    /// TG4-24 trace view: one parent operation and two child operations built
+    /// by the real `OperationTimer` producer share a trace id, and the Tauri
+    /// correlation reader returns all three as one persisted trace while a
+    /// run-id query returns only the parent record.
+    #[test]
+    fn production_trace_correlation_links_parent_and_children_through_tauri_reader() {
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let log_dir = home.path().join(".arcana").join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create isolated structured log directory");
+
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let log_path = log_dir.join(format!("arcana-events.{date}.jsonl"));
+        let file = std::fs::File::create(&log_path).expect("create production structured log");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_target(true)
+            .with_ansi(false)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(writer)
+            .with_filter(filter_fn(TELEMETRY_TARGET_FILTER));
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let mut parent =
+                arcana_core::observability::timing::OperationTimer::start("logs_correlated_parent")
+                    .with_trace_id("trace-logs-correlation-proof")
+                    .with_run_id("run-logs-correlation-proof");
+            parent.succeed();
+            for operation in [
+                "logs_correlated_child_first",
+                "logs_correlated_child_second",
+            ] {
+                let mut child =
+                    arcana_core::observability::timing::OperationTimer::start(operation)
+                        .with_trace_id("trace-logs-correlation-proof");
+                child.succeed();
+            }
+        });
+        drop(guard);
+
+        let trace = super::read_structured_events(
+            date.clone(),
+            Some(20),
+            Some("trace-logs-correlation-proof".into()),
+        )
+        .expect("production Tauri Logs command reads the correlated trace");
+        let events = trace
+            .content
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid event JSON"))
+            .collect::<Vec<_>>();
+        assert_eq!(trace.total_lines, 3);
+        let operations: std::collections::BTreeSet<&str> = events
+            .iter()
+            .map(|event| event["fields"]["operation"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            operations,
+            std::collections::BTreeSet::from([
+                "logs_correlated_parent",
+                "logs_correlated_child_first",
+                "logs_correlated_child_second",
+            ]),
+            "{events:#?}"
+        );
+        for event in &events {
+            assert_eq!(event["fields"]["trace_id"], "trace-logs-correlation-proof");
+            assert_eq!(event["fields"]["outcome"], "success");
+            assert!(event["fields"]["duration_ns"].as_u64().unwrap_or_default() > 0);
+        }
+
+        // The run id is parent-level correlation only: the children did not
+        // carry it, so the same reader must not group them into the run.
+        let scoped_to_run = super::read_structured_events(
+            date,
+            Some(20),
+            Some("run-logs-correlation-proof".into()),
+        )
+        .expect("production Tauri Logs command scopes by run id");
+        assert_eq!(scoped_to_run.total_lines, 1);
+        let parent: serde_json::Value =
+            serde_json::from_str(scoped_to_run.content.trim()).expect("valid persisted event JSON");
+        assert_eq!(parent["fields"]["operation"], "logs_correlated_parent");
+
+        let mut trace_metrics = MetricsAccumulator::default();
+        let trace_metrics = refresh_metrics_from_file_for_correlation(
+            &log_path,
+            &mut trace_metrics,
+            Some("trace-logs-correlation-proof"),
+        )
+        .expect("metrics consumer scopes the trace");
+        assert_eq!(trace_metrics.total_events, 3);
+        assert_eq!(trace_metrics.by_event["operation_timing"].duration_count, 3);
+        assert_eq!(trace_metrics.outcomes.get("success"), Some(&3));
+
+        let mut run_metrics = MetricsAccumulator::default();
+        let run_metrics = refresh_metrics_from_file_for_correlation(
+            &log_path,
+            &mut run_metrics,
+            Some("run-logs-correlation-proof"),
+        )
+        .expect("metrics consumer scopes by run id");
+        assert_eq!(run_metrics.total_events, 1);
+        assert_eq!(run_metrics.by_event["operation_timing"].count, 1);
+    }
+
+    /// TG4-24 token reconciliation: the same uncached provider-reported usage
+    /// feeds the structured JSONL through the real compaction producer and the
+    /// analytics `token_usage` rows through the production collector writer,
+    /// and the Logs summariser and the AnalyticsDb per-session reader (the
+    /// consumer the dashboard uses) must agree per statistics category for the
+    /// same session id: JSONL `input_tokens` ⇔ `prompt_tokens`
+    /// (`total_input()` when no cache activity is present), `output_tokens` ⇔
+    /// `completion_tokens`, `reasoning_tokens` ⇔ `thinking_tokens`.
+    #[test]
+    fn jsonl_provider_tokens_reconcile_with_analytics_db_session_totals() {
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
+        let root = tempfile::tempdir().expect("isolated reconciliation root");
+        let home = root.path().join("home");
+        let _home = crate::test_support::isolate_home(&home);
+        let log_dir = home.join(".arcana").join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create isolated structured log directory");
+
+        const SESSION: &str = "session-logs-analytics-reconciliation";
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("create isolated reconciliation runtime");
+
+        // Seed the analytics side first: two token_usage rows written through
+        // the production collector, matching the usage the JSONL producer
+        // will report. Uncached usage keeps prompt_tokens equal to the
+        // provider `input` category the JSONL event carries. Seeding happens
+        // before any subscriber is active, so analytics statement samples do
+        // not leak into the fixture JSONL stream.
+        let db = runtime
+            .block_on(arcana_core::analytics::db::AnalyticsDb::new_at(
+                &root.path().join("analytics.db"),
+            ))
+            .expect("open isolated production analytics database");
+        let db = std::sync::Arc::new(db);
+        let collector = arcana_core::analytics::collector::AnalyticsCollector::new(db.clone());
+        for _ in 0..2 {
+            collector
+                .record_token_usage(
+                    SESSION.into(),
+                    "mode1_agent".into(),
+                    "google".into(),
+                    "gemini-3.8-flash".into(),
+                    31,
+                    7,
+                    Some(5),
+                    0.0,
+                    "agent_session".into(),
+                )
+                .expect("record production token usage row");
+        }
+
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let log_path = log_dir.join(format!("arcana-events.{date}.jsonl"));
+        let file = std::fs::File::create(&log_path).expect("create production structured log");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_target(true)
+            .with_ansi(false)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(writer)
+            .with_filter(filter_fn(TELEMETRY_TARGET_FILTER));
+        let subscriber = Registry::default().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            // Production provider calls run inside the agent's run/session
+            // scope; attribute the persisted provider_call records to the
+            // session the way production spans do. The span carries the
+            // telemetry target so the structured layer registers it — the
+            // production filtering drops span metadata for foreign targets.
+            let span = tracing::info_span!(target: "arcana::telemetry", "agent_turn", session_id = SESSION);
+            let _span_guard = span.enter();
+            let fixture = LogsProviderFixture {
+                fail: false,
+                input_tokens: 31,
+                output_tokens: 7,
+                reasoning_tokens: 5,
+            };
+            for _ in 0..2 {
+                runtime
+                    .block_on(async {
+                        arcana_core::agent::compaction::CompactionEngine::compact_with_summary(
+                            logs_compaction_messages(),
+                            &fixture,
+                            "gemini-3.8-flash",
+                        )
+                        .await
+                    })
+                    .0;
+            }
+        });
+        drop(guard);
+
+        let persisted = super::read_structured_events(date.clone(), Some(50), Some(SESSION.into()))
+            .expect("production Tauri Logs command reads session-scoped provider calls");
+        assert_eq!(persisted.total_lines, 2, "{persisted:#?}");
+        for line in persisted.content.lines() {
+            let event: serde_json::Value = serde_json::from_str(line).expect("valid event JSON");
+            assert_eq!(event["fields"]["event_type"], "provider_call");
+            assert!(event["spans"].as_array().is_some_and(|spans| {
+                spans.iter().any(|span| {
+                    // Tracing's flattened span shape carries the recorded
+                    // context field directly on the span object.
+                    span["session_id"] == SESSION || span["fields"]["session_id"] == SESSION
+                })
+            }));
+        }
+        assert!(!persisted
+            .content
+            .contains("private-compaction-transcript-canary"));
+
+        let metrics = super::summarize_observability_events(date, Some(SESSION.into()))
+            .expect("production Tauri Logs summarise command scopes session tokens");
+        assert_eq!(metrics.total_events, 2);
+        assert_eq!(metrics.provider_calls, 2);
+        assert_eq!(metrics.input_tokens, 62);
+        assert_eq!(metrics.output_tokens, 14);
+        assert_eq!(metrics.reasoning_tokens, 10);
+        let provider_model = &metrics.by_provider_model["google/gemini-3.8-flash"];
+        assert_eq!(provider_model.input_tokens, 62);
+        assert_eq!(provider_model.output_tokens, 14);
+
+        // The AnalyticsDb per-session reader is the dashboard's consumer; the
+        // two systems must reconcile per category, in both directions.
+        let summary = db
+            .get_token_usage_for_session(SESSION)
+            .expect("read the seeding session back through the production reader");
+        assert_eq!(
+            summary.request_count,
+            i64::try_from(metrics.provider_calls).expect("bounded provider call counts")
+        );
+        assert_eq!(
+            summary.prompt_tokens,
+            i64::try_from(metrics.input_tokens).expect("bounded token totals")
+        );
+        assert_eq!(
+            summary.completion_tokens,
+            i64::try_from(metrics.output_tokens).expect("bounded token totals")
+        );
+        assert_eq!(
+            summary.thinking_tokens,
+            Some(i64::try_from(metrics.reasoning_tokens).expect("bounded token totals"))
+        );
+    }
+
     #[test]
     fn measure_metrics_refresh_tail_and_full_export_on_reproducible_jsonl() {
         use std::io::BufWriter;
