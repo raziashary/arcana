@@ -855,4 +855,421 @@ mod tests {
         runs.finish_worker_tick(&replacement_run, "interrupted", "interrupted", None)
             .unwrap();
     }
+
+    // ── TG4-27 / P4-53 conflict-refusal boundary ────────────────────────────
+    // A manual continuation must be refused when the workspace Git state
+    // changed between interruption and handoff. `RecoverySnapshot::verify_state`
+    // (recovery_snapshot.rs) compares the captured git head / branch digest /
+    // index digest (`GitSnapshot`), and the reconcile tool maps every snapshot
+    // refusal to the `recovery_conflict` envelope
+    // (`operation_reconciliation_rejected` / `recovery_conflict`) at
+    // reconcile_worker_operation.rs::execute.
+    struct ConflictFixture {
+        workspace: tempfile::TempDir,
+        repo: git2::Repository,
+        seed_head: git2::Oid,
+        task_id: i64,
+        run: String,
+        cursor: i64,
+        content: &'static str,
+    }
+
+    /// Commit one root file with the libgit2 path used by the shipped
+    /// `git2::Repository::init` fixtures in this module.
+    fn commit_file(
+        repo: &git2::Repository,
+        name: &str,
+        message: &str,
+        parent: Option<git2::Oid>,
+    ) -> git2::Oid {
+        let signature = git2::Signature::now("arcana tests", "arcana@test.local").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new(name)).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        match parent {
+            Some(parent) => {
+                let parent = repo.find_commit(parent).unwrap();
+                repo.commit(
+                    Some("HEAD"),
+                    &signature,
+                    &signature,
+                    message,
+                    &tree,
+                    &[&parent],
+                )
+                .unwrap()
+            }
+            None => repo
+                .commit(Some("HEAD"), &signature, &signature, message, &tree, &[])
+                .unwrap(),
+        }
+    }
+
+    fn conflict_fixture(session: &str) -> ConflictFixture {
+        use crate::db::tasks::{CreateTaskInput, TasksDb};
+        let workspace = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(workspace.path()).unwrap();
+        std::fs::write(workspace.path().join("seed.txt"), b"seed content").unwrap();
+        let seed_head = commit_file(&repo, "seed.txt", "seed commit", None);
+        let tasks = TasksDb::open().unwrap();
+        let task = tasks
+            .create(CreateTaskInput {
+                title: "conflict refusal".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "refuse a changed workspace".into(),
+                created_by: None,
+            })
+            .unwrap();
+        tasks
+            .update_status(task.id, "assigned", Some("worker-backend"))
+            .unwrap();
+        tasks
+            .claim_task_with_pid(task.id, "worker-backend", std::process::id())
+            .unwrap();
+        let runs = RunsDb::open().unwrap();
+        let run = runs.begin_worker_tick("worker-backend", session).unwrap();
+        // The same pre-state path the executor's begin_function uses: the
+        // snapshot captures the live Git state (head, branch digest, index
+        // digest) before the intent is journalled.
+        let content = "recovered canary content";
+        let snapshot = crate::agent::recovery_snapshot::RecoverySnapshot::capture(
+            task.id,
+            session,
+            workspace.path(),
+            Some((
+                "target/generated.txt",
+                &crate::agent::recovery_snapshot::RecoverySnapshot::file_expectation(content),
+                false,
+            )),
+        )
+        .unwrap();
+        let cursor = runs
+            .record_operation_intent_with_snapshot(
+                &run,
+                Some(task.id),
+                "uncertain-write",
+                "write_file",
+                "Write",
+                &["target/generated.txt".to_owned()],
+                Some(&snapshot),
+                None,
+            )
+            .unwrap();
+        // Interruption handoff: the tick ends `interrupted` and the task is
+        // held in `needs_info` with no live claim — exactly the lifecycle
+        // `verify_state` accepts for a manual continuation.
+        tasks
+            .update_status_for_worker_claim(
+                task.id,
+                "worker-backend",
+                "needs_info",
+                Some("worker-backend"),
+                Some("interrupted"),
+            )
+            .unwrap();
+        runs.finish_worker_tick(&run, "interrupted", "interrupted", None)
+            .unwrap();
+        ConflictFixture {
+            workspace,
+            repo,
+            seed_head,
+            task_id: task.id,
+            run,
+            cursor,
+            content,
+        }
+    }
+
+    fn supervisor_working(dir: &std::path::Path) -> ToolContext {
+        let mut ctx = context("supervisor");
+        ctx.working_dir = dir.to_string_lossy().into_owned();
+        ctx
+    }
+
+    fn error_envelope(result: &ToolResult) -> Value {
+        serde_json::from_str(&result.output)
+            .unwrap_or_else(|error| panic!("tool result is not a structured envelope: {error}"))
+    }
+
+    #[tokio::test]
+    async fn git_state_change_between_intent_and_handoff_refuses_reconciliation() {
+        use crate::agent::builtin_tools;
+        use crate::agent::permission;
+        use crate::agent::tool_executor::ToolExecutor;
+        use crate::agent::tool_registry::ToolRegistry;
+        use crate::agent::tool_trait::AgentIdentity;
+        let home = tempfile::tempdir().unwrap();
+        let _home = crate::db::test_support::with_home(home.path());
+        let f = conflict_fixture("conflict-session");
+        let reconciled_request = json!({
+            "run_id": f.run,
+            "intent_cursor": f.cursor,
+            "decision": "reconciled",
+            "reason_code": "effect_verified_complete"
+        });
+        let retry_request = json!({
+            "run_id": f.run,
+            "intent_cursor": f.cursor,
+            "decision": "retry_safe",
+            "reason_code": "idempotent_retry_verified"
+        });
+
+        // Tamper: advance HEAD past the snapshot's Git state.
+        std::fs::write(f.workspace.path().join("tamper.txt"), b"head tamper").unwrap();
+        let tamper_head = commit_file(&f.repo, "tamper.txt", "tamper commit", Some(f.seed_head));
+        assert_ne!(tamper_head, f.seed_head);
+
+        for request in [&reconciled_request, &retry_request] {
+            let refused = ReconcileWorkerOperationTool
+                .execute(request.clone(), &supervisor_working(f.workspace.path()))
+                .await;
+            assert!(
+                refused.is_error,
+                "changed Git state must refuse: {refused:?}"
+            );
+            let envelope = error_envelope(&refused);
+            assert_eq!(
+                envelope["error"]["code"],
+                json!("operation_reconciliation_rejected")
+            );
+            assert_eq!(envelope["error"]["category"], json!("recovery_conflict"));
+        }
+
+        // The unknown intent stays unresolved; the journal record is untouched.
+        let runs = RunsDb::open().unwrap();
+        let page = runs.operation_journal_page(&f.run, 0, 10).unwrap();
+        assert_eq!(page.entries.len(), 1);
+        assert!(page.entries[0].before_snapshot.is_some());
+        assert_eq!(
+            page.entries[0].reconciliation,
+            OperationReconciliation::Unresolved
+        );
+        assert_eq!(page.entries[0].reconciliation_actor.as_deref(), None);
+        assert_eq!(page.entries[0].reconciliation_reason.as_deref(), None);
+        assert_eq!(
+            runs.unresolved_task_side_effect(f.task_id)
+                .unwrap()
+                .unwrap()
+                .2,
+            f.cursor
+        );
+
+        // The one-use retry barrier still blocks a same-task write.
+        let mut registry = ToolRegistry::new();
+        builtin_tools::register_for_mode(&mut registry, crate::agent::PAMode::FastDevelopment);
+        let write_tool = registry.get("write_file").unwrap();
+        let replacement_run = runs
+            .begin_worker_tick("worker-backend", "barrier-session")
+            .unwrap();
+        let mut plain_executor = ToolExecutor::new(
+            permission::PermissionMode::Autonomous,
+            permission::new_pending_permissions(),
+            "barrier-session".into(),
+            f.workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker("worker-backend"),
+        )
+        .with_run_id(Some(replacement_run.clone()));
+        plain_executor.set_task_id(Some(f.task_id));
+        let plain = plain_executor
+            .execute_batch(vec![(
+                write_tool.clone(),
+                json!({"path":"barrier.txt", "content":"blocked fixture"}),
+                "barrier-write".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(
+            plain[0].1.is_error,
+            "unresolved intent must block: {:#?}",
+            plain[0].1.output
+        );
+        let envelope = error_envelope(&plain[0].1);
+        assert_eq!(
+            envelope["error"]["code"],
+            json!("operation_reconciliation_required")
+        );
+        assert_eq!(
+            envelope["error"]["category"],
+            json!("reconciliation_required")
+        );
+        assert!(!f.workspace.path().join("barrier.txt").exists());
+        assert_eq!(
+            runs.operation_journal_page(&replacement_run, 0, 10)
+                .unwrap()
+                .entries
+                .len(),
+            0,
+            "refused writes append no mutation intent"
+        );
+
+        // The same barrier holds when the cursor itself is produced: the
+        // refused reconcile never issued a retry grant, so the exact cursor is
+        // unusable. The write still must not run. No reconcile decision
+        // succeeded, so the actual refusal is the grant-absent
+        // `operation_intent_unavailable` envelope, not the journal barrier
+        // (`operation_reconciliation_required`).
+        let mut cursor_executor = ToolExecutor::new(
+            permission::PermissionMode::Autonomous,
+            permission::new_pending_permissions(),
+            "cursor-barrier-session".into(),
+            f.workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker("worker-backend"),
+        )
+        .with_run_id(Some(replacement_run.clone()));
+        cursor_executor.set_task_id(Some(f.task_id));
+        let cursor_refused = cursor_executor
+            .execute_batch(vec![(
+                write_tool.clone(),
+                json!({
+                    "path": "target/generated.txt",
+                    "content": f.content,
+                    "recovery_intent_cursor": f.cursor
+                }),
+                "cursor-barrier-write".into(),
+            )])
+            .await
+            .unwrap();
+        assert!(
+            cursor_refused[0].1.is_error,
+            "an unresolved intent with no issued grant must not run: {:#?}",
+            cursor_refused[0].1.output
+        );
+        let envelope = error_envelope(&cursor_refused[0].1);
+        assert_eq!(
+            envelope["error"]["code"],
+            json!("operation_intent_unavailable")
+        );
+        assert_eq!(envelope["error"]["category"], json!("durability"));
+        assert!(!f.workspace.path().join("target/generated.txt").exists());
+        assert_eq!(
+            runs.operation_journal_page(&replacement_run, 0, 10)
+                .unwrap()
+                .entries
+                .len(),
+            0
+        );
+
+        // Benign control inside the same fixture: returning the workspace to
+        // the snapshot's exact Git state clears the conflict. The refusal was
+        // specifically the Git change, not the fixture shape.
+        let snapshot_head = f.repo.revparse_single(&f.seed_head.to_string()).unwrap();
+        f.repo
+            .reset(&snapshot_head, git2::ResetType::Hard, None)
+            .unwrap();
+        let granted = ReconcileWorkerOperationTool
+            .execute(retry_request, &supervisor_working(f.workspace.path()))
+            .await;
+        assert!(
+            !granted.is_error,
+            "restored Git state accepts one explicit host-verified retry: {}",
+            granted.output
+        );
+        let envelope = error_envelope(&granted);
+        assert_eq!(envelope["retry_permitted"], json!(true));
+        assert_eq!(envelope["operation_complete"], json!(false));
+        let granted_page = RunsDb::open()
+            .unwrap()
+            .operation_journal_page(&f.run, 0, 10)
+            .unwrap();
+        assert_eq!(
+            granted_page.entries[0].reconciliation,
+            OperationReconciliation::RetrySafe
+        );
+        assert_eq!(
+            granted_page.entries[0].reconciliation_actor.as_deref(),
+            Some("supervisor")
+        );
+        assert_eq!(
+            granted_page.entries[0].reconciliation_reason.as_deref(),
+            Some("idempotent_retry_verified")
+        );
+        assert!(
+            RunsDb::open()
+                .unwrap()
+                .unresolved_task_side_effect(f.task_id)
+                .unwrap()
+                .is_some(),
+            "a grant authorises one retry; it does not resolve the uncertainty"
+        );
+        assert!(
+            !f.workspace.path().join("target/generated.txt").exists(),
+            "authorization itself must not replay the write"
+        );
+    }
+
+    #[tokio::test]
+    async fn untampered_workspace_accepts_supervisor_verified_reconciled_decision() {
+        let home = tempfile::tempdir().unwrap();
+        let _home = crate::db::test_support::with_home(home.path());
+        let f = conflict_fixture("benign-session");
+        // Benign control: without any Git tampering, the same reconcile flow
+        // behaves as shipped — the Supervisor may resolve the unknown effect
+        // once the verified file actually matches the journalled expectation.
+        std::fs::create_dir_all(f.workspace.path().join("target")).unwrap();
+        std::fs::write(f.workspace.path().join("target/generated.txt"), f.content).unwrap();
+        let reconciled = ReconcileWorkerOperationTool
+            .execute(
+                json!({
+                    "run_id": f.run,
+                    "intent_cursor": f.cursor,
+                    "decision": "reconciled",
+                    "reason_code": "effect_verified_complete"
+                }),
+                &supervisor_working(f.workspace.path()),
+            )
+            .await;
+        assert!(
+            !reconciled.is_error,
+            "untampered state must reconcile: {}",
+            reconciled.output
+        );
+        let envelope = error_envelope(&reconciled);
+        assert_eq!(envelope["operation_complete"], json!(true));
+        assert_eq!(envelope["retry_permitted"], json!(false));
+        let page = RunsDb::open()
+            .unwrap()
+            .operation_journal_page(&f.run, 0, 10)
+            .unwrap();
+        assert_eq!(
+            page.entries[0].reconciliation,
+            OperationReconciliation::Reconciled
+        );
+        assert_eq!(
+            page.entries[0].reconciliation_actor.as_deref(),
+            Some("supervisor")
+        );
+        assert_eq!(
+            page.entries[0].reconciliation_reason.as_deref(),
+            Some("effect_verified_complete")
+        );
+        assert!(RunsDb::open()
+            .unwrap()
+            .unresolved_task_side_effect(f.task_id)
+            .unwrap()
+            .is_none());
+        let duplicate = ReconcileWorkerOperationTool
+            .execute(
+                json!({
+                    "run_id": f.run,
+                    "intent_cursor": f.cursor,
+                    "decision": "reconciled",
+                    "reason_code": "effect_verified_complete"
+                }),
+                &supervisor_working(f.workspace.path()),
+            )
+            .await;
+        assert!(
+            duplicate.is_error,
+            "one durable decision only: {:#?}",
+            duplicate.output
+        );
+        let duplicate_envelope = error_envelope(&duplicate);
+        assert_eq!(
+            duplicate_envelope["error"]["category"],
+            json!("recovery_conflict")
+        );
+    }
 }
