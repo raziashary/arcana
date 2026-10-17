@@ -2690,6 +2690,988 @@ mod production_git_commit_recipe_tests {
     }
 }
 
+// P4-54 / TG4-28 — two-worker failure-class split made Supervisor-visible.
+//
+// One implementation worker fails mid-run AFTER persisting a real mutation
+// through the production write path; another fails during startup retry
+// before any provider dispatch. The test proves, through persisted state and
+// shipped tool results only:
+//   1. both failures are durable worker runs tied to their assigned tasks;
+//   2. the failure classes are distinct, persisted, and read back unchanged
+//      through the real `list_worker_health` tool with the operation journal
+//      and checkpoint state attached;
+//   3. a paused worker holding an assigned task is excluded from automatic
+//      routing and has no run, while staying Supervisor-visible as `paused`;
+//   4. duplicate execution of the mid-run-failed task is refused through the
+//      registered `claim_task` tool while its claim stays quarantined for
+//      Supervisor reconciliation.
+#[cfg(test)]
+mod dual_worker_failure_health_tests {
+    use super::*;
+    use crate::agent::tool_executor::ToolExecutor;
+    use crate::agent::tool_registry::ToolRegistry;
+    use crate::agent::tool_trait::AgentIdentity;
+    use crate::db::tasks::{CreateTaskInput, TasksDb};
+    use crate::provider::traits::{Provider, StreamResult};
+    use crate::provider::types::{
+        CompletionRequest, CompletionResponse, MessageContent, ModelInfo, ProviderStatus,
+        StreamChunk,
+    };
+    use crate::provider::usage::Usage;
+    use async_trait::async_trait;
+    use futures::stream;
+    use serde_json::{json, Value};
+    use std::sync::Mutex;
+
+    /// Mid-run failure fixture: claims the task, performs one real journaled
+    /// write through the production executor, then fails the session with a
+    /// terminal (non-retryable, provider-agnostic) interruption.
+    struct MidRunOverloadProvider {
+        task_id: i64,
+        turn: Mutex<usize>,
+        requests: Mutex<Vec<CompletionRequest>>,
+    }
+
+    impl MidRunOverloadProvider {
+        fn tool_call(id: &str, name: &str, input: Value) -> Vec<StreamChunk> {
+            vec![
+                StreamChunk::ToolUseStart {
+                    id: id.into(),
+                    name: name.into(),
+                    block_index: 0,
+                    opaque: None,
+                },
+                StreamChunk::ToolInputDelta {
+                    block_index: 0,
+                    partial_json: input.to_string(),
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "tool_use".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]
+        }
+    }
+
+    #[async_trait]
+    impl Provider for MidRunOverloadProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "Mid-run failure fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            crate::provider::catalogue::models_for("google")
+        }
+
+        async fn input_token_upper_bound(
+            &self,
+            _request: &CompletionRequest,
+        ) -> crate::errors::Result<u64> {
+            Ok(10)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<CompletionResponse> {
+            unreachable!("RecipeRunner must use AgentEngine streaming")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
+            assert!(request.tools.iter().any(|tool| tool.name == "claim_task"));
+            assert!(request.tools.iter().any(|tool| tool.name == "write_file"));
+            self.requests
+                .lock()
+                .expect("provider request capture")
+                .push(request.clone());
+            let turn = {
+                let mut turn = self.turn.lock().expect("provider turn lock");
+                let current = *turn;
+                *turn += 1;
+                current
+            };
+            let chunks = match turn {
+                0 => Self::tool_call(
+                    "claim-task",
+                    "claim_task",
+                    json!({ "task_id": self.task_id }),
+                ),
+                1 => {
+                    let claim = request
+                        .messages
+                        .iter()
+                        .flat_map(|message| &message.content)
+                        .find_map(|content| match content {
+                            MessageContent::ToolResult { name, is_error, .. }
+                                if name == "claim_task" =>
+                            {
+                                Some(*is_error)
+                            }
+                            _ => None,
+                        })
+                        .expect("worker must receive the claim result");
+                    assert!(!claim, "the assigned worker must claim its task");
+                    Self::tool_call(
+                        "write-midrun",
+                        "write_file",
+                        json!({
+                            "path": "midrun.txt",
+                            "content": "first real mutation\n"
+                        }),
+                    )
+                }
+                2 => {
+                    return Err(ArcanaError::Agent(
+                        "scripted terminal provider interruption after the mid-run write".into(),
+                    ))
+                }
+                _ => panic!("unexpected provider request after scripted mid-run failure"),
+            };
+            Ok(Box::pin(stream::iter(chunks.into_iter().map(Ok))))
+        }
+
+        async fn test_connection(&self) -> crate::errors::Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    /// Startup-failure fixture: startup never completes, so the provider must
+    /// never receive a request. Any request fails the test loudly.
+    struct StartupDeniedProvider {
+        requests: Mutex<Vec<CompletionRequest>>,
+    }
+
+    #[async_trait]
+    impl Provider for StartupDeniedProvider {
+        fn id(&self) -> &str {
+            "google"
+        }
+
+        fn name(&self) -> &str {
+            "Startup failure fixture"
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            crate::provider::catalogue::models_for("google")
+        }
+
+        async fn input_token_upper_bound(
+            &self,
+            _request: &CompletionRequest,
+        ) -> crate::errors::Result<u64> {
+            Ok(10)
+        }
+
+        async fn complete(
+            &self,
+            _request: CompletionRequest,
+        ) -> crate::errors::Result<CompletionResponse> {
+            unreachable!("RecipeRunner must use AgentEngine streaming")
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
+            self.requests
+                .lock()
+                .expect("provider request capture")
+                .push(request);
+            panic!("a startup-failed worker must never dispatch the provider");
+        }
+
+        async fn test_connection(&self) -> crate::errors::Result<ProviderStatus> {
+            Ok(ProviderStatus::Connected)
+        }
+    }
+
+    async fn wait_for_terminal_phase(worker_slug: &str, phase: &str) {
+        tokio::time::timeout(Duration::from_secs(90), async {
+            loop {
+                if crate::db::runs::RunsDb::open()
+                    .expect("open worker run ledger")
+                    .latest_worker_tick(worker_slug)
+                    .expect("read worker tick")
+                    .is_some_and(|run| run.phase == phase && run.outcome.is_some())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("worker must reach its terminal failed phase in time");
+    }
+
+    async fn wait_for_retry_phase(worker_slug: &str) {
+        tokio::time::timeout(Duration::from_secs(90), async {
+            loop {
+                if crate::db::runs::RunsDb::open()
+                    .expect("open worker run ledger")
+                    .latest_worker_tick(worker_slug)
+                    .expect("read worker tick")
+                    .is_some_and(|run| run.phase == "retrying")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the startup retry loop must persist a retrying phase in time");
+    }
+
+    #[tokio::test]
+    async fn dual_worker_failures_persist_distinct_classes_visible_to_supervisor_without_duplicate_dispatch(
+    ) {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let analytics = Arc::new(
+            crate::analytics::AnalyticsManager::new()
+                .await
+                .expect("initialize isolated analytics DB"),
+        );
+        crate::analytics::install_global(analytics);
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        crate::egress_consent::WorkspaceEgressConsentDb::open()
+            .expect("open isolated workspace consent store")
+            .grant(workspace.path(), "provider:google")
+            .expect("grant scripted provider for isolated workspace");
+
+        crate::db::runs::RunsDb::open().expect("initialize isolated run ledger");
+        let tasks = TasksDb::open().expect("open isolated task database");
+
+        // Task A: worker-backend runs it, claims it, writes once, then the
+        // provider fails mid-run.
+        let task_a = tasks
+            .create(CreateTaskInput {
+                title: "Fail mid-run after one persisted write".into(),
+                description: Some("Write one artifact, then the provider fails.".into()),
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "The write persists with its run attribution.".into(),
+                created_by: Some("tg4-28-dual-failure".into()),
+            })
+            .expect("create mid-run task")
+            .id;
+        tasks
+            .update_status(task_a, "assigned", Some("worker-backend"))
+            .expect("assign mid-run task");
+        // Task B: worker-frontend never completes startup, so it can never
+        // claim or dispatch anything.
+        let task_b = tasks
+            .create(CreateTaskInput {
+                title: "Fail during startup retries".into(),
+                description: Some("Startup never completes for this run.".into()),
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "No side effect may occur during startup.".into(),
+                created_by: Some("tg4-28-dual-failure".into()),
+            })
+            .expect("create startup task")
+            .id;
+        tasks
+            .update_status(task_b, "assigned", Some("worker-frontend"))
+            .expect("assign startup task");
+        // Task C: worker-cleanup holds an assigned task while paused, with
+        // routing history that would otherwise prefer it.
+        let task_c = tasks
+            .create(CreateTaskInput {
+                title: "Polish the fleet dashboard wording".into(),
+                description: Some("Assigned to a paused worker.".into()),
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "Paused workers receive no automatic dispatch.".into(),
+                created_by: Some("tg4-28-dual-failure".into()),
+            })
+            .expect("create paused-worker task")
+            .id;
+        tasks
+            .update_status(task_c, "assigned", Some("worker-cleanup"))
+            .expect("assign paused-worker task");
+        let task_c_row = tasks
+            .get_by_id(task_c)
+            .expect("read task c")
+            .expect("task c");
+        for _ in 0..3 {
+            crate::routing::TaskRouter::record_assignment(&task_c_row, "worker-cleanup")
+                .expect("record historical preference for the paused worker");
+        }
+
+        let workers = WorkersDb::open().expect("seed worker roster");
+        let backend = workers
+            .get_by_slug("worker-backend")
+            .expect("read backend worker")
+            .expect("backend worker exists");
+        workers
+            .update_status(backend.id, WorkerStatus::Active)
+            .expect("make backend worker runnable");
+        let frontend = workers
+            .get_by_slug("worker-frontend")
+            .expect("read frontend worker")
+            .expect("frontend worker exists");
+        workers
+            .update_status(frontend.id, WorkerStatus::Active)
+            .expect("make frontend worker runnable");
+        let cleanup = workers
+            .get_by_slug("worker-cleanup")
+            .expect("read cleanup worker")
+            .expect("cleanup worker exists");
+        workers
+            .update_status(cleanup.id, WorkerStatus::Paused)
+            .expect("pause the cleanup worker like the fleet guard does");
+
+        let make_runner = || {
+            RecipeRunner::new_with_workspace_override(
+                Arc::new(Mutex::new(AppState {
+                    active_provider: Some("google".into()),
+                    active_model: Some("gemini-3.8-flash".into()),
+                    ..AppState::default()
+                })),
+                Arc::new(SessionManager::new().expect("open isolated session manager")),
+                crate::agent::permission::new_pending_permissions(),
+                Some(workspace.path().to_string_lossy().into_owned()),
+            )
+        };
+        let recipes_dir = home.path().join(".arcana").join("recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes_dir)
+            .expect("persist the shipped worker recipes");
+
+        // ── Worker A: mid-run provider failure after one journaled write ─────
+        let provider = Arc::new(MidRunOverloadProvider {
+            task_id: task_a,
+            turn: Mutex::new(0),
+            requests: Mutex::new(Vec::new()),
+        });
+        let scheduler = crate::recipes::scheduler::RecipeScheduler::new(Arc::new(
+            make_runner().with_provider_for_test(provider.clone()),
+        ));
+        scheduler.kick_worker("worker-backend");
+        wait_for_terminal_phase("worker-backend", "failed").await;
+        // The shipped run guard quarantines the interrupted claim (needs_info
+        // with a recovery reason) before the scheduler slot frees. Waiting for
+        // that durable quarantine keeps the later assertions race-free.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let quarantined = TasksDb::open()
+                    .expect("reopen isolated task database")
+                    .get_by_id(task_a)
+                    .expect("read mid-run task")
+                    .is_some_and(|task| task.status == crate::db::tasks::TaskStatus::NeedsInfo);
+                if quarantined {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("the scheduler must quarantine the interrupted claim in time");
+        scheduler.shutdown().await;
+
+        let runs = crate::db::runs::RunsDb::open().expect("reopen isolated run ledger");
+        let run_a = runs
+            .latest_worker_tick("worker-backend")
+            .expect("read backend run")
+            .expect("backend run persists");
+        assert_eq!(run_a.task_id, Some(task_a));
+        assert_eq!(run_a.phase, "failed");
+        assert_eq!(run_a.outcome.as_deref(), Some("failed"));
+        assert_eq!(
+            run_a.failure_code.as_deref(),
+            Some("permanent"),
+            "the mid-run terminal interruption must persist its failure class"
+        );
+        assert_eq!(
+            WorkersDb::open()
+                .unwrap()
+                .get_by_slug("worker-backend")
+                .unwrap()
+                .expect("backend worker remains")
+                .status,
+            WorkerStatus::Error,
+            "a mid-run failure marks the worker errored"
+        );
+        let task_a_after_failure = TasksDb::open()
+            .unwrap()
+            .get_by_id(task_a)
+            .unwrap()
+            .expect("mid-run task persists");
+        assert_eq!(
+            task_a_after_failure.status,
+            crate::db::tasks::TaskStatus::NeedsInfo,
+            "the shipped run guard quarantines the interrupted claim"
+        );
+        assert_eq!(
+            task_a_after_failure.assigned_worker.as_deref(),
+            Some("worker-backend"),
+            "the quarantine preserves task ownership"
+        );
+        assert_eq!(
+            task_a_after_failure.rejection_reason.as_deref(),
+            Some(
+                "[worker recovery] interrupted run requires side-effect \
+                 reconciliation before retry"
+            ),
+            "the recovery reason stays auditable"
+        );
+        assert!(
+            task_a_after_failure.claimed_by_pid.is_none()
+                && task_a_after_failure.claim_host.is_none(),
+            "ownership is reconciled before any handoff"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("midrun.txt"))
+                .expect("reopen mid-run mutation"),
+            "first real mutation\n"
+        );
+        let journal_a = runs
+            .operation_journal_page(&run_a.run_id, 0, 20)
+            .expect("read mid-run run journal");
+        let writes: Vec<_> = journal_a
+            .entries
+            .iter()
+            .filter(|entry| entry.operation == "write_file")
+            .collect();
+        assert_eq!(writes.len(), 1, "exactly one journaled mutation");
+        assert_eq!(writes[0].task_id, Some(task_a));
+        assert_eq!(writes[0].target_paths, ["midrun.txt"]);
+        assert_eq!(
+            writes[0].outcome,
+            crate::db::runs::OperationOutcome::Ok,
+            "the acknowledged mutation recorded its outcome"
+        );
+        assert!(!writes[0].changed_paths.is_empty());
+        let checkpoints = crate::git::checkpoint::list(None, Some(&run_a.session_id), Some(task_a))
+            .expect("read mid-run checkpoints");
+        assert_eq!(checkpoints.len(), 1, "each real write has a checkpoint");
+        assert!(provider.requests.lock().expect("provider capture").len() == 3);
+
+        // ── Worker B: startup exhaustion, no provider dispatch, no side effect ──
+        let provider_b = Arc::new(StartupDeniedProvider {
+            requests: Mutex::new(Vec::new()),
+        });
+        let runner_b = make_runner()
+            .with_provider_for_test(provider_b.clone())
+            .with_startup_failures_for_test(STARTUP_MAX_ATTEMPTS as usize);
+        let recipes_for_b = recipes_dir.clone();
+        let spawned = tokio::spawn(async move {
+            let recipe: Recipe = serde_yaml::from_str(
+                &std::fs::read_to_string(recipes_for_b.join("worker-frontend-poll.yaml"))
+                    .expect("read shipped frontend recipe"),
+            )
+            .expect("parse shipped frontend recipe");
+            runner_b.run_recipe(&recipe, "worker-frontend").await
+        });
+        // The startup retry loop persists a `retrying` phase before each
+        // further attempt through the production on-retry writer.
+        wait_for_retry_phase("worker-frontend").await;
+        let b_result = tokio::time::timeout(Duration::from_secs(60), spawned)
+            .await
+            .expect("startup exhaustion must return");
+        let b_result = b_result.expect("frontend run task did not panic");
+        assert!(
+            b_result.is_err(),
+            "exhausted startup retries must fail the run"
+        );
+
+        let run_b = runs
+            .latest_worker_tick("worker-frontend")
+            .expect("read frontend run")
+            .expect("frontend run persists");
+        assert_eq!(run_b.phase, "failed");
+        assert_eq!(run_b.outcome.as_deref(), Some("failed"));
+        assert_eq!(
+            run_b.failure_code.as_deref(),
+            Some("io"),
+            "startup exhaustion persists its own failure class"
+        );
+        assert_ne!(
+            run_a.failure_code.as_deref(),
+            run_b.failure_code.as_deref(),
+            "the two failure classes must remain distinct"
+        );
+        assert!(
+            runs.operation_journal_page(&run_b.run_id, 0, 20)
+                .unwrap()
+                .entries
+                .is_empty(),
+            "startup failure cannot produce side effects"
+        );
+        assert!(
+            provider_b
+                .requests
+                .lock()
+                .expect("provider capture")
+                .is_empty(),
+            "startup failure must happen before provider dispatch"
+        );
+        let task_b_row = TasksDb::open()
+            .unwrap()
+            .get_by_id(task_b)
+            .unwrap()
+            .expect("startup task persists");
+        assert_eq!(
+            task_b_row.status,
+            crate::db::tasks::TaskStatus::Assigned,
+            "the assignment survives startup exhaustion untouched"
+        );
+        assert!(task_b_row.claimed_by_pid.is_none() && task_b_row.claim_host.is_none());
+        assert_ne!(run_a.run_id, run_b.run_id);
+        assert_ne!(
+            run_a.session_id, run_b.session_id,
+            "the two failed runs have independent sessions"
+        );
+
+        // ── Registered tools: routing, health readback, duplicate refusals ──
+        let mut registry = ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        let suggest_tool = registry
+            .get("suggest_worker")
+            .expect("FastDevelopment registers auto-routing");
+        let health_tool = registry
+            .get("list_worker_health")
+            .expect("FastDevelopment registers Supervisor health reader");
+        let claim_tool = registry.get("claim_task").expect("claim tool registered");
+
+        // Paused exclusion: the paused worker holds the task and the only
+        // positive routing history, yet automatic routing must exclude it.
+        let mut supervisor_executor = ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "p4-54-dual-failure-supervisor".into(),
+            home.path().to_string_lossy().into_owned(),
+            AgentIdentity::supervisor(),
+        );
+        let suggestions = supervisor_executor
+            .execute_batch(vec![(
+                suggest_tool,
+                json!({ "task_id": task_c }),
+                "paused-routing-exclusion".into(),
+            )])
+            .await
+            .expect("registered routing tool returns a result");
+        assert!(!suggestions[0].1.is_error, "{}", suggestions[0].1.output);
+        let suggestion: Value =
+            serde_json::from_str(&suggestions[0].1.output).expect("routing result JSON");
+        assert_ne!(
+            suggestion["worker_slug"].as_str(),
+            Some("worker-cleanup"),
+            "a paused worker must be excluded from automatic routing"
+        );
+        assert_ne!(
+            suggestion["worker_slug"].as_str(),
+            Some("supervisor"),
+            "system agents are never routing candidates"
+        );
+        assert_ne!(
+            suggestion["worker_slug"].as_str(),
+            Some("qc-agent"),
+            "system agents are never routing candidates"
+        );
+
+        // Failure-class readback through the real Supervisor health tool.
+        let health_results = supervisor_executor
+            .execute_batch(vec![(
+                health_tool,
+                json!({ "limit": 50, "journal_limit": 50 }),
+                "dual-failure-health".into(),
+            )])
+            .await
+            .expect("registered Supervisor health read returns a result");
+        assert!(
+            !health_results[0].1.is_error,
+            "{}",
+            health_results[0].1.output
+        );
+        let health: Value =
+            serde_json::from_str(&health_results[0].1.output).expect("Supervisor health JSON");
+        let roster = health["workers"].as_array().expect("Supervisor roster");
+        let backend_health = roster
+            .iter()
+            .find(|worker| worker["slug"] == "worker-backend")
+            .expect("Supervisor-visible backend worker");
+        let frontend_health = roster
+            .iter()
+            .find(|worker| worker["slug"] == "worker-frontend")
+            .expect("Supervisor-visible frontend worker");
+        let cleanup_health = roster
+            .iter()
+            .find(|worker| worker["slug"] == "worker-cleanup")
+            .expect("Supervisor-visible cleanup worker");
+        assert_eq!(backend_health["status"], "error");
+        assert_eq!(frontend_health["status"], "error");
+        assert_eq!(
+            cleanup_health["status"], "paused",
+            "the paused worker stays Supervisor-visible with its status"
+        );
+        assert!(
+            cleanup_health["run"].is_null(),
+            "a paused worker must have no dispatched run"
+        );
+        assert!(
+            crate::db::runs::RunsDb::open()
+                .unwrap()
+                .latest_worker_tick("worker-cleanup")
+                .unwrap()
+                .is_none(),
+            "a paused worker must not have gained a run"
+        );
+
+        let supervisor_run_a = &backend_health["run"];
+        assert_eq!(supervisor_run_a["run_id"], run_a.run_id);
+        assert_eq!(supervisor_run_a["phase"], "failed");
+        assert_eq!(supervisor_run_a["failure_code"], "permanent");
+        assert_eq!(supervisor_run_a["outcome"], "failed");
+        assert_eq!(supervisor_run_a["task_id"], task_a);
+        assert_eq!(supervisor_run_a["task"]["state"], "known");
+        assert_eq!(supervisor_run_a["task"]["status"], "needs_info");
+        assert_eq!(
+            supervisor_run_a["task"]["assigned_worker"],
+            "worker-backend"
+        );
+        let supervisor_entries_a = supervisor_run_a["operation_journal"]["entries"]
+            .as_array()
+            .expect("Supervisor-visible mid-run journal");
+        let supervisor_writes: Vec<_> = supervisor_entries_a
+            .iter()
+            .filter(|entry| entry["operation"] == "write_file")
+            .collect();
+        assert_eq!(supervisor_writes.len(), 1);
+        assert_eq!(supervisor_writes[0]["task_id"], task_a);
+        assert_eq!(supervisor_writes[0]["target_paths"][0], "midrun.txt");
+        assert_eq!(supervisor_writes[0]["outcome"], "ok");
+        assert_eq!(supervisor_writes[0]["recovery_required"], false);
+        assert_eq!(
+            supervisor_run_a["checkpoints"]["count"], 1,
+            "checkpoint state stays Supervisor-visible"
+        );
+
+        let supervisor_run_b = &frontend_health["run"];
+        assert_eq!(supervisor_run_b["run_id"], run_b.run_id);
+        assert_eq!(supervisor_run_b["phase"], "failed");
+        assert_eq!(
+            supervisor_run_b["failure_code"],
+            json!(run_b.failure_code),
+            "the persisted startup failure class reads back unchanged"
+        );
+        assert_eq!(supervisor_run_b["outcome"], "failed");
+        assert!(
+            supervisor_run_b["task_id"].is_null(),
+            "startup exhaustion never attached a task to the run"
+        );
+        assert!(
+            supervisor_run_b["operation_journal"]["entries"]
+                .as_array()
+                .expect("Supervisor-visible startup journal")
+                .is_empty(),
+            "the Supervisor must see that startup failure produced no journal"
+        );
+        assert_ne!(
+            supervisor_run_a["failure_code"], supervisor_run_b["failure_code"],
+            "the Supervisor readback must distinguish the failure classes"
+        );
+
+        // Duplicate execution is refused: the failed run's claim is quarantined
+        // behind Supervisor reconciliation, and no other worker identity may
+        // claim another worker's task.
+        let mut owner_executor = ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "duplicate-claim-owner".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker("worker-backend"),
+        );
+        let duplicate_owner = owner_executor
+            .execute_batch(vec![(
+                claim_tool.clone(),
+                json!({ "task_id": task_a }),
+                "duplicate-owner-claim".into(),
+            )])
+            .await
+            .expect("registered claim tool returns a result");
+        assert!(
+            duplicate_owner[0].1.is_error,
+            "a mid-run-failed claim must not be re-claimed before reconciliation: {}",
+            duplicate_owner[0].1.output
+        );
+        assert!(
+            duplicate_owner[0].1.output.contains("not 'assigned'"),
+            "the refusal must name the quarantined state: {}",
+            duplicate_owner[0].1.output
+        );
+        // The ownership gate is refused on a task that is still assigned: a
+        // worker identity other than the assignee cannot claim it.
+        let mut outsider_executor = ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "duplicate-claim-outsider".into(),
+            workspace.path().to_string_lossy().into_owned(),
+            AgentIdentity::worker("worker-backend"),
+        );
+        let duplicate_outsider = outsider_executor
+            .execute_batch(vec![(
+                claim_tool,
+                json!({ "task_id": task_b }),
+                "outsider-claim".into(),
+            )])
+            .await
+            .expect("registered claim tool returns a result");
+        assert!(
+            duplicate_outsider[0].1.is_error,
+            "a worker must not claim another worker's task: {}",
+            duplicate_outsider[0].1.output
+        );
+        assert!(
+            duplicate_outsider[0]
+                .1
+                .output
+                .contains("not the calling worker"),
+            "the refusal must attribute the ownership: {}",
+            duplicate_outsider[0].1.output
+        );
+        let task_b_after = TasksDb::open()
+            .unwrap()
+            .get_by_id(task_b)
+            .unwrap()
+            .expect("startup task remains");
+        assert_eq!(
+            task_b_after.status,
+            crate::db::tasks::TaskStatus::Assigned,
+            "the refused outsider claim leaves the assignment untouched"
+        );
+        assert!(task_b_after.claimed_by_pid.is_none() && task_b_after.claim_host.is_none());
+        let task_a_after = TasksDb::open()
+            .unwrap()
+            .get_by_id(task_a)
+            .unwrap()
+            .expect("mid-run task remains");
+        assert!(task_a_after.claimed_by_pid.is_none() && task_a_after.claim_host.is_none());
+        assert_eq!(
+            task_a_after.status,
+            crate::db::tasks::TaskStatus::NeedsInfo,
+            "refused claims cannot move the quarantined task out of reconciliation"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("midrun.txt")).unwrap(),
+            "first real mutation\n",
+            "no refused claim may re-execute the mutation"
+        );
+        assert_eq!(
+            runs.latest_worker_tick("worker-backend")
+                .unwrap()
+                .expect("backend run remains")
+                .run_id,
+            run_a.run_id,
+            "refusals must not manufacture extra runs"
+        );
+        assert!(
+            provider_b
+                .requests
+                .lock()
+                .expect("provider capture")
+                .is_empty(),
+            "the routing exclusion must hold for dispatch state too"
+        );
+        assert_eq!(
+            provider.requests.lock().expect("provider capture").len(),
+            3,
+            "the refused claims must not call the provider again"
+        );
+    }
+
+    // P4-20 / TG4-23 — task-scoped checkpoint restore through the production
+    // write path. Two workers write attributed artifacts through the real
+    // `write_file` tool; restoring one task's checkpoint returns the
+    // workspace to that task's pre-write state without reverting the other
+    // task's write; and once a second task has checkpointed the same file,
+    // the stale first-task restore is refused instead of silently reverting
+    // later state.
+    #[tokio::test]
+    async fn task_scoped_checkpoints_isolate_restore_between_tasks() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        std::fs::write(
+            workspace.path().join("a-shared.txt"),
+            "baseline owned by task A\n",
+        )
+        .expect("seed task A artifact");
+        std::fs::write(
+            workspace.path().join("b-shared.txt"),
+            "baseline owned by task B\n",
+        )
+        .expect("seed task B artifact");
+        let workspace_path = workspace.path().to_string_lossy().into_owned();
+
+        let tasks = TasksDb::open().expect("open isolated task database");
+        let mut task_ids = [0i64; 2];
+        let worker_slugs = ["worker-backend", "worker-frontend"];
+        for (index, worker_slug) in worker_slugs.iter().enumerate() {
+            let task = tasks
+                .create(CreateTaskInput {
+                    title: format!("Checkpoint-scoped artifact {index}"),
+                    description: None,
+                    priority: "p2".into(),
+                    task_type: "feature".into(),
+                    acceptance_criteria: "The write stays undoable per task.".into(),
+                    created_by: Some("tg4-23-restore-isolation".into()),
+                })
+                .expect("create attributed task")
+                .id;
+            tasks
+                .update_status(task, "assigned", Some(worker_slug))
+                .expect("assign attributed task");
+            tasks
+                .claim_task_with_pid(task, worker_slug, std::process::id())
+                .expect("claim attributed task");
+            task_ids[index] = task;
+        }
+        let [task_a, task_b] = task_ids;
+
+        let mut registry = ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        let write_tool = registry.get("write_file").expect("write tool registered");
+
+        let mut backend_writer = ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "tg4-23-backend-session".into(),
+            workspace_path.clone(),
+            AgentIdentity::worker("worker-backend"),
+        );
+        backend_writer.set_task_id(Some(task_a));
+        let backend_writes = backend_writer
+            .execute_batch(vec![(
+                write_tool.clone(),
+                json!({
+                    "path": "a-shared.txt",
+                    "content": "task A changed\n",
+                    "overwrite": true
+                }),
+                "backend-write".into(),
+            )])
+            .await
+            .expect("registered write tool returns a result");
+        assert!(
+            !backend_writes[0].1.is_error,
+            "{}",
+            backend_writes[0].1.output
+        );
+
+        let mut frontend_writer = ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            "tg4-23-frontend-session".into(),
+            workspace_path.clone(),
+            AgentIdentity::worker("worker-frontend"),
+        );
+        frontend_writer.set_task_id(Some(task_b));
+        let frontend_writes = frontend_writer
+            .execute_batch(vec![(
+                write_tool,
+                json!({
+                    "path": "b-shared.txt",
+                    "content": "task B changed\n",
+                    "overwrite": true
+                }),
+                "frontend-write".into(),
+            )])
+            .await
+            .expect("registered write tool returns a result");
+        assert!(
+            !frontend_writes[0].1.is_error,
+            "{}",
+            frontend_writes[0].1.output
+        );
+
+        // Every write is attributed to its owning task and stays in the one
+        // local checkpoint store the TG1-05 owner persists.
+        let checkpoints = crate::git::checkpoint::list(None, None, None)
+            .expect("read checkpoint store through the public reader");
+        assert_eq!(checkpoints.len(), 2);
+        assert!(checkpoints
+            .iter()
+            .all(|checkpoint| checkpoint.task_id == Some(task_a)
+                || checkpoint.task_id == Some(task_b)));
+        let task_a_checkpoint = checkpoints
+            .iter()
+            .find(|checkpoint| {
+                checkpoint.task_id == Some(task_a) && checkpoint.file_path.ends_with("a-shared.txt")
+            })
+            .expect("task A owns its write checkpoint")
+            .id
+            .clone();
+        assert!(checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.task_id == Some(task_b)
+                && checkpoint.file_path.ends_with("b-shared.txt")));
+
+        // Restoring task A's checkpoint returns only task A's artifact to its
+        // pre-write baseline; task B's write survives untouched.
+        let restored =
+            crate::git::checkpoint::restore_within_workspace(&task_a_checkpoint, &workspace_path)
+                .expect("restore task A's checkpoint within its workspace");
+        assert!(restored.file_path.ends_with("a-shared.txt"));
+        assert!(restored.bytes_written > 0);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("a-shared.txt")).unwrap(),
+            "baseline owned by task A\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("b-shared.txt")).unwrap(),
+            "task B changed\n",
+            "restoring task A's checkpoint must not revert task B's writes"
+        );
+
+        // Task B now rewrote task A's file. The stale first restore is
+        // refused rather than silently reverting task B's later state.
+        let stale_rewrite = frontend_writer
+            .execute_batch(vec![(
+                registry.get("write_file").unwrap(),
+                json!({
+                    "path": "a-shared.txt",
+                    "content": "task B rewrote after restore\n",
+                    "overwrite": true
+                }),
+                "frontend-rewrite".into(),
+            )])
+            .await
+            .expect("registered write tool returns a result");
+        assert!(
+            !stale_rewrite[0].1.is_error,
+            "{}",
+            stale_rewrite[0].1.output
+        );
+        let stale =
+            crate::git::checkpoint::restore_within_workspace(&task_a_checkpoint, &workspace_path);
+        let message = match stale {
+            Err(ArcanaError::Git(message)) => message,
+            Err(other) => panic!("unexpected stale-restore failure: {other}"),
+            Ok(result) => panic!(
+                "stale restore must refuse, wrote {} bytes",
+                result.bytes_written
+            ),
+        };
+        assert!(
+            message.contains("stale: another task or session checkpointed this file afterward"),
+            "the refusal must name the staleness: {message}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("a-shared.txt")).unwrap(),
+            "task B rewrote after restore\n",
+            "a stale restore may not revert later state"
+        );
+    }
+}
+
 #[cfg(test)]
 mod supervisor_build_retry_recipe_tests {
     use super::*;
