@@ -24,12 +24,13 @@ re-verified in the main session by execution before it was acted on.
 | 2 | fleet orchestration / recipes / workers / subagents | complete |
 | 3 | persistence / migrations / schemas | complete |
 | 4 | provider layer / observability / secrets | complete |
-| 5 | platform, sandbox, app shell, hooks, vault, CLI | running |
-| 6 | frontend (React/TS), e2e, tooling, CI | running |
+| 5 | platform, sandbox, app shell, hooks, vault, CLI | complete |
+| 6 | frontend (React/TS), e2e, tooling, CI | complete |
 
-Wave 1 covers audits 1–4. Audits 5–6 will be folded in as wave 2 when they return; their areas
-(UI ↔ command boundary, hooks, sandbox, CI honesty) are expected to add to themes B, D and E
-below rather than introduce a new theme.
+Wave 1 covers audits 1–4; **wave 2 (§3.7)** folds in audits 5–6, which were
+commissioned in parallel. They confirmed the same themes and surfaced two security
+boundaries in the hook layer that no gate covers, plus a P0 tooling hole that was
+already in `AGENTS.md`'s known-red list.
 
 ## 2. Headline finding
 
@@ -126,12 +127,81 @@ work already done, `catalogue.rs` "TG-P2-05 fails the build" when it is a `cargo
 and the project instructions citing `src-shared/src/cost/pricing.rs` where the file is
 `arcana-core/src/cost/pricing.rs`.
 
+### 3.7 Wave 2 (audits 5–6) — app shell / hooks / sandbox, and frontend / tooling / CI
+
+**Security (S1, new, no gate covers it).** `hooks/executor.rs` has two actions that
+sit outside the controls the rest of the product enforces, and I verified both by
+reading the file:
+
+- `HookAction::Http` (`executor.rs:99-147`) builds a `reqwest` client and sends to a
+  template-expanded URL with caller-supplied headers and body. There is **no**
+  `egress_consent` check anywhere in the hook path, while provider and MCP traffic is
+  consent-gated. `substitute()` (`executor.rs:440-463`) expands the whole
+  `HookContext`, which for a `PostFileWrite`/`PostToolUse` hook includes the tool
+  input — so model-derived content can reach the URL.
+  **Verified correction to the audit's wording:** the *body* and *headers* are not
+  substituted (only the URL is, plus `Message` in the Log action), so "POST file
+  contents" is not the mechanism — template expansion into the URL is.
+- `HookAction::Log` (`executor.rs:149-165`) appends to a path from the hook's stored
+  config with no workspace jail, while the sibling Shell action validates its command
+  and working directory (`executor.rs:56-76`) and runs sandboxed. The `file` field is
+  **not** substituted, so the path is user-authored and fixed.
+
+  The severity turns on a trust question I could not settle from the code: hooks are
+  authored through the UI (`hook_commands.rs` → `HooksDb::insert`), and I found no
+  agent tool that creates one, so this is *user-authored* code rather than a
+  model-reachable primitive. That makes it a deliberate-trust model — but the product
+  declares an egress-consent model and this path bypasses it, and `TG4-30` enumerates
+  containment cases without mentioning hooks. **Owner decision** (see §8.6), with my
+  recommendation: route hook HTTP through `egress_consent` under a `hook:<id>`
+  destination, and give Log the same jail as Shell (or document hooks explicitly as
+  fully-trusted and add the gate to `TG4-30`).
+
+**Tooling (S1, fixed today).** `npm run lint` was red on `main` — 95 `no-undef`
+errors in three tracked tooling files — because the ESLint block carrying the globals
+matched only `**/*.{ts,tsx}`. The red was load-bearing: `frontend-checks` → `build-smoke`
+→ `e2e-smoke`, so **the e2e harness never ran on current main**. Fixed at the config
+(`3ce44a5`): each file gets the globals of the context it runs in. The audit also notes
+`e2e-smoke` is Linux-only and that `tsconfig.json` excludes `e2e/**`/`scripts/**` from
+type-checking.
+
+**Frontend drift (S2/S3).** `DEFAULT_MODEL`'s literal is re-hardcoded in five places
+(`Chat.tsx:269`, `settingsStore.ts:88`, `sessionStore.ts:55`, `SessionBar.tsx:21`,
+`AnnotationModal.tsx:83`) — the exact defect class `ci_gate.rs` says it already fixed
+once. `formatBytes` exists five times with inconsistent output, token K/k casing
+disagrees between two components, the cost `toFixed` ladder is byte-identical in
+`TabBar.tsx` and `Sidebar.tsx`, and `Chat.tsx:28-46` carries a 17-entry context-window
+table of which 16 entries are retired models. Dead UI clusters (plan/memory/plugin
+components and stores, city-viz files, four CSS files) and a dead `providerForModel`
+export are enumerated in the audit.
+
+**IPC contract drift.** 255 commands registered, ~200 invoked, exactly **one**
+invoked-but-unregistered: `navigate_to_logs` (`AgentLiveCard.tsx:110`) — a user-visible
+"Open in Logs" affordance that is a logged no-op. The audit explicitly corrected a
+prior audit: `src/types/live.ts` payload types are **not** orphans (they are consumed
+by `agentLiveStore.ts`). Also: `src-shared/` is a Rust crate, not a shared TS layer.
+
+**Gate weakness confirmed independently.** `TG-P2-05` compares only model *ids*
+(`ci_gate.rs:3628-3683`); provider, label, context window, output cap, vision and
+reasoning flags in `catalogue.rs` vs `src/data/models.ts` are compared by nothing. Two
+audits found this from different directions.
+
+**Doc drift found by audit 5 (not yet fixed — needs care, see §8.7).** Three `P4` rows
+carry a proven-sounding token while unchecked (`P4-18` `GATE-PROVEN`,
+`P4-51` `UNIT-PROVEN`, `P4-56` `SECURITY-PROVEN` at `MASTER_DEVELOPMENT_PLAN.md:1469`,
+`:1541`, `:1548`); `_verify/A1-P0-code-audit.md:363` names a command that no longer
+exists (`check_autodev_instructions_exists` → `check_arcana_instructions_exists`); and
+`src-tauri/src/db.rs` plus 26 siblings are one-line `pub use arcana_core::*` veneers
+with no stated retirement condition.
+
 ## 4. Already landed (wave 0) — no approval needed, done at the owning layer
 
-Nine commits, each with its own failing-then-passing evidence:
-`49e87e0` `eea621e` `c00a6f0` `ce909be` **`a2e7aa8`** `1e03e08` **`894bbe0`** `5953f8c` `60c5534`.
-Two of those are production defects: the leaked worker slot (`a2e7aa8`) and the duplicated
-provider dispatch that locked Groq out of the fleet and subagents (`894bbe0`). See
+Eleven commits, each with its own failing-then-passing evidence: `49e87e0` `eea621e`
+`c00a6f0` `ce909be` **`a2e7aa8`** `1e03e08` **`894bbe0`** `5953f8c` `60c5534` `3ce44a5`
+`a875007`. Two of those are production defects: the leaked worker slot (`a2e7aa8`) and the
+duplicated provider dispatch that locked Groq out of the fleet and subagents (`894bbe0`).
+Two clear pre-existing reds: the telemetry-label allow-list on `main`, and `npm run lint`
+(`3ce44a5`, 95 → 0 errors), which had been skipping `build-smoke` and `e2e-smoke`. See
 `_verify/2026-10-18-RED-BASELINE-AND-AUDIT-FIXES.md` and ADR-LOG-RESTRUCT-0397/0398.
 
 ## 5. Proposed workstreams
@@ -147,10 +217,11 @@ an owner decision before work starts.
 | **W4** | Theme-C honesty: distinguish hook infrastructure failure from policy denial (P4-51); add `outcome_unknown` and a "capture failed" journal value (P4-53); surface "no telemetry sink"; decide the fate of `guard_and_validate` | `hooks/`, `agent/`, `observability/`, `recipes/` | M | **Med-High** (visible behaviour) | New negative tests + TG4-24/27/28/30 re-runs | **OD** |
 | **W5** | Test-harness integrity: adopt the guarded once-per-process singleton pattern; make `install_global` return `Result`; derive fixtures from the real ladders | `analytics/`, `recipes/`, `hooks/`, `src-shared/` | M | Med | The previously order-dependent suites run in one process | — |
 | **W6** | Theme-F doc/gate truth, including a generated (not hand-maintained) telemetry label set | docs + `observability/`, `src-tauri/ci_gate.rs` | S–M | Low | Doc no-stale sweep + suite | **OD** for generation |
-| **W7** | Wave 2: fold in audits 5–6 (UI ↔ command contract, hooks/sandbox, CI honesty) | TBD | TBD | TBD | TBD | — |
+| **W7** | Wave 2 (audits 5–6): one `DEFAULT_MODEL`/provider default; one formatter set with a pinned K/M casing contract; retire the stale `MODEL_CONTEXT` table and the retired-family branches in `shortModelName`; delete the dead plan/memory/plugin/city clusters and 4 CSS files after a caller re-check; wire or remove `navigate_to_logs` | `src/**` | M | Low–Med | `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npm run build` | — |
+| **W8** | Hooks/sandbox: consent-gate `HookAction::Http`, jail `HookAction::Log`, distinguish infra failure from denial in `fire`/`fire_with_logs`, add the hook boundary to `TG4-30` | `hooks/`, `egress_consent`, `ci_gate` | M | **Med-High** | New refusal tests + `TG4-30` update | **OD** |
 
-**Sequencing proposal:** W1 → W2 → W6 (all no-behaviour-change) → W3 → W5 → W4. W7 slot in when
-audits 5–6 land. Do **not** run two workstreams that touch the same files concurrently.
+**Sequencing proposal:** W1 → W2 → W6 (all no-behaviour-change) → W3 → W5 → W7 → W4 → W8.
+Do **not** run two workstreams that touch the same files concurrently.
 
 ## 6. Guardrails for any refactor
 
@@ -176,8 +247,8 @@ the untracked session-checkpoint receipts.
 
 1. **Scope of the frozen WIP:** are those uncommitted files part of the refactor surface, or
    frozen inputs I must design around?
-2. **Push approval:** 15 local commits are unpushed on `main`. Approve pushing them (they are all
-   individually validated, none touches `main` history rewrites)?
+2. **Push approval:** 18 local commits are unpushed on `main` (all individually validated; none
+   rewrites history). Approve pushing them?
 3. **Escalations I want a ruling on** (each is a shipped-contract or user-visible change, so I
    stopped): (a) carry `ErrorClass` structurally instead of parsing it back out of the error
    string; (b) generate the telemetry label set instead of hand-maintaining 349 entries;
@@ -185,4 +256,10 @@ the untracked session-checkpoint receipts.
    fate of `guard_and_validate`'s sentinel check (delete, or re-point at the sandboxed build dir).
 4. **Priority:** continue closing the remaining P4 rows alongside the refactor, or pause P4 and
    land W1–W3 first?
-5. **Wave 2:** fold audits 5–6 into W7 as they land, or re-brief them against this plan's themes?
+5. **Hook trust posture (§3.7):** are persisted hooks user-authored **trusted** code, or must
+   their HTTP/file actions obey the same consent and jailing as provider/MCP traffic and the
+   Shell hook action? This decides whether W8 is a security fix or a documentation change.
+6. **`TESTING_GATES.md` / MDP token honesty:** three `P4` rows carry `GATE-PROVEN`/
+   `UNIT-PROVEN`/`SECURITY-PROVEN` while unchecked, and one receipt names a command that no
+   longer exists. May I correct those to the current truth (no checkbox changes), and may the 27
+   `src-tauri` re-export veneers be given a stated retirement condition or removed?

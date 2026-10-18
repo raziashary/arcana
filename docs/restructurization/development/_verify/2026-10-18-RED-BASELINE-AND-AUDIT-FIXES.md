@@ -31,6 +31,8 @@ red on `main`, not a regression from this session's work):
 | `894bbe0` | **Production defect**: one provider construction site (`factory::build_inner`) + a source-scan guard for the drift class | `provider::` 153/153; `provider::factory::tests` 5/5 |
 | `5953f8c` | `memory.db`/`arcana.db` reported `database="other"` in migration telemetry (a TG4-24 identity clause) | `db::migrate` 19/19 |
 | `60c5534` | Delete the dead `mod dirs_next`; correct the db module map | `db::migrate session::storage` 24/24; both crates compile clean |
+| `3ce44a5` | **Pre-existing red**: `npm run lint` — 95 `no-undef` errors in three tracked tooling files because the ESLint globals block matched only `**/*.{ts,tsx}`. Fixed by giving each file the globals of its real context, and by documenting the two deliberate empty `catch` blocks | `npx eslint .` → 0 errors, 40 warnings, exit 0 (was exit 1); `npx tsc --noEmit` exit 0 |
+| `a875007` | One clock and one provider-destination owner: delete `updater/install.rs::iso_now` (a 35-line second RFC3339 implementation writing `:ssZ` where the product's canonical `now_rfc3339` writes `:ss.sssZ`) and route the Settings consent destination through `egress_consent::provider_destination` | `cargo check` clean; `commands::settings_commands` 2/2; `updater` 15/15 |
 
 ## 3. Notable judgements (recorded, not silently taken)
 
