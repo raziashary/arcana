@@ -39,6 +39,8 @@ fn telemetry_database_name(db_name: &str) -> &'static str {
         "runs.db" => "runs",
         "tasks.db" => "tasks",
         "workers.db" => "workers",
+        "memory.db" => "memory",
+        "arcana.db" => "arcana",
         _ => "other",
     }
 }
@@ -348,6 +350,35 @@ fn validate_ladder(db_name: &str, ladder: &[Migration]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every production store must name itself in migration telemetry.
+    ///
+    /// TG4-24 requires a database identity for every production SQLite
+    /// database, and the reader consumes `database = "other"` as a real value:
+    /// `memory.db` and `arcana.db` were both passing through here as "other"
+    /// until 2026-10-18, so the identity was reported wrong rather than absent.
+    /// Adding a store opener therefore means adding it here.
+    #[test]
+    fn every_production_database_reports_its_own_name() {
+        for (db_name, expected) in [
+            ("analytics.db", "analytics"),
+            ("annotations.db", "annotations"),
+            ("config.db", "config"),
+            ("plans.db", "plans"),
+            ("runs.db", "runs"),
+            ("tasks.db", "tasks"),
+            ("workers.db", "workers"),
+            ("memory.db", "memory"),
+            ("arcana.db", "arcana"),
+        ] {
+            assert_eq!(telemetry_database_name(db_name), expected, "{db_name}");
+        }
+        assert_eq!(
+            telemetry_database_name("unrecognized-private-db-marker"),
+            "other",
+            "an unknown name must stay visibly unknown rather than borrowing an identity"
+        );
+    }
 
     #[test]
     fn concurrent_openers_apply_a_destructive_rung_once_and_preserve_its_snapshot() {
