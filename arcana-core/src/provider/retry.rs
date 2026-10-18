@@ -228,7 +228,10 @@ mod tests {
                 let n = calls.fetch_add(1, Ordering::SeqCst);
                 async move {
                     if n == 0 {
-                        Err(ArcanaError::Provider("openai 503 [Overloaded]".into()))
+                        Err(ArcanaError::ProviderClassified {
+                            class: ErrorClass::Overloaded,
+                            message: "openai 503".into(),
+                        })
                     } else {
                         Ok(42)
                     }
@@ -250,7 +253,12 @@ mod tests {
         let out: Result<(), _> = with_retry(
             || {
                 calls.fetch_add(1, Ordering::SeqCst);
-                async { Err(ArcanaError::Provider("429 insufficient_quota".into())) }
+                async {
+                    Err(ArcanaError::ProviderClassified {
+                        class: ErrorClass::QuotaExhausted,
+                        message: "429 insufficient_quota".into(),
+                    })
+                }
             },
             |_| ErrorClass::QuotaExhausted,
         )

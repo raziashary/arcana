@@ -113,9 +113,10 @@ impl Provider for GroqProvider {
             // P2-67/68, same as the other adapters: classify where the body is
             // available, because a 429 from a spend cap and a 429 from a rate
             // limit are the same status and only the body separates them.
-            return Err(ArcanaError::Provider(format!(
-                "Groq {status} [{class:?}]: {summary}"
-            )));
+            return Err(ArcanaError::ProviderClassified {
+                class,
+                message: format!("Groq {status}: {summary}"),
+            });
         }
 
         let data: serde_json::Value = resp
@@ -142,9 +143,10 @@ impl Provider for GroqProvider {
         let status = resp.status();
         if !status.is_success() {
             let (class, summary) = safe_error_response("groq", status, resp).await;
-            return Err(ArcanaError::Provider(format!(
-                "Groq stream {status} [{class:?}]: {summary}"
-            )));
+            return Err(ArcanaError::ProviderClassified {
+                class,
+                message: format!("Groq stream {status}: {summary}"),
+            });
         }
 
         let byte_stream = resp.bytes_stream();

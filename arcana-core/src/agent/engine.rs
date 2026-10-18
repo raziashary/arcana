@@ -1449,10 +1449,11 @@ impl AgentEngine {
         // would re-emit them, which is worse than the failure.
         //
         // The classification comes from the error the adapter attached
-        // (`ErrorClass::classify`), not from matching its text — the whole
-        // defect `P3-09` fixes is that the classification was computed,
-        // stringified and discarded, so any retry loop would have had to parse
-        // `[Retryable]` back out of a message.
+        // (`ErrorClass::classify`), carried as data on
+        // `ArcanaError::ProviderClassified` — the whole defect `P3-09` fixes is
+        // that the classification was computed, stringified and discarded, so a
+        // retry loop had to parse `[Retryable]` back out of a message. It is a
+        // `match` on the variant now; no consumer reads the tag.
         //
         // ⚠ `QuotaExhausted` is never retried: a spend-cap 429 carries no
         // retry-after and never succeeds, so retrying it is a spend loop
@@ -1461,17 +1462,13 @@ impl AgentEngine {
         let mut stream_attempts = 0u32;
         let last_error_class = Arc::new(Mutex::new(None));
         let classify_failure = |e: &ArcanaError| {
-            // Preserve the adapter's existing bounded class tags. Never save
-            // its response text in analytics.
-            let text = e.to_string();
-            let class = if text.contains("[QuotaExhausted]") {
-                crate::provider::usage::ErrorClass::QuotaExhausted
-            } else if text.contains("[Overloaded]") {
-                crate::provider::usage::ErrorClass::Overloaded
-            } else if text.contains("[Retryable]") {
-                crate::provider::usage::ErrorClass::Retryable
-            } else {
-                crate::provider::usage::ErrorClass::Fatal
+            // The class is data on the variant. An error that carries no class
+            // is Fatal rather than Retryable: guessing "retryable" for
+            // something we do not understand is how one failure becomes a
+            // billed loop.
+            let class = match e {
+                ArcanaError::ProviderClassified { class, .. } => *class,
+                _ => crate::provider::usage::ErrorClass::Fatal,
             };
             *last_error_class
                 .lock()
@@ -2665,7 +2662,7 @@ mod procedural_memory_tests {
         provider_id: String,
         requests: Mutex<Vec<CompletionRequest>>,
         responses: Mutex<VecDeque<Vec<StreamChunk>>>,
-        fail_next_attempt: Mutex<Option<String>>,
+        fail_next_attempt: Mutex<Option<ArcanaError>>,
         cancel_on_stream: Option<(Arc<Mutex<crate::state::AppState>>, String)>,
         input_token_bound: Option<u64>,
     }
@@ -2709,7 +2706,7 @@ mod procedural_memory_tests {
                 .expect("scripted failure lock")
                 .take()
             {
-                return Err(ArcanaError::Provider(error));
+                return Err(error);
             }
             let response = self
                 .responses
@@ -3362,9 +3359,10 @@ mod procedural_memory_tests {
             .provider_id = "fixture_retry_success".into();
         Arc::get_mut(&mut provider)
             .expect("provider is uniquely owned")
-            .fail_next_attempt = Mutex::new(Some(
-            "Google 503 [Overloaded]: private provider response body".to_string(),
-        ));
+            .fail_next_attempt = Mutex::new(Some(ArcanaError::ProviderClassified {
+            class: crate::provider::usage::ErrorClass::Overloaded,
+            message: "Google 503: private provider response body".to_string(),
+        }));
         let workspace = tempfile::tempdir().expect("isolated workspace");
         let engine = AgentEngine::new(
             provider,
@@ -3640,9 +3638,10 @@ mod procedural_memory_tests {
         let mut provider = scripted_provider("unused");
         Arc::get_mut(&mut provider)
             .expect("provider is uniquely owned")
-            .fail_next_attempt = Mutex::new(Some(
-            "Google 429 [QuotaExhausted]: private quota response body".to_string(),
-        ));
+            .fail_next_attempt = Mutex::new(Some(ArcanaError::ProviderClassified {
+            class: crate::provider::usage::ErrorClass::QuotaExhausted,
+            message: "Google 429: private quota response body".to_string(),
+        }));
         let workspace = tempfile::tempdir().expect("isolated workspace");
         let engine = AgentEngine::new(
             provider.clone(),
@@ -4272,9 +4271,10 @@ mod procedural_memory_tests {
                 }
                 CancellationWaitPoint::RetryDelay if attempt == 0 => {
                     self.entered.notify_one();
-                    Err(ArcanaError::Provider(
-                        "local fixture 503 [Retryable]".into(),
-                    ))
+                    Err(ArcanaError::ProviderClassified {
+                        class: crate::provider::usage::ErrorClass::Retryable,
+                        message: "local fixture 503".into(),
+                    })
                 }
                 CancellationWaitPoint::Body => Ok(Box::pin(PendingCancellationBody {
                     chunks: VecDeque::from([

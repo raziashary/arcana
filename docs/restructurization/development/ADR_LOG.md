@@ -7609,3 +7609,20 @@ Recurrence is prevented mechanically rather than by review: `provider_dispatch_h
 **Escalated, not decided here:** the adapters encode the error class into the message text (`[QuotaExhausted]`, `[Overloaded]`, `[Retryable]`) and the engine parses those tags back out of the `Display` string (`agent/engine.rs:1466-1474`). That is the re-derivation the typed retry policy (`provider/retry.rs`) was written to remove, and it leaves retry/quota behaviour depending on adapter message wording with no type error to catch a change. Carrying `ErrorClass` structurally means changing `ArcanaError`'s shape (a shipped core type), so it is parked for owner judgment rather than done mid-phase.
 
 **Evidence:** commits `894bbe0` (unification + guard), `5953f8c` (database identity arms), `60c5534` (db hygiene); validation recorded in each commit body — `provider::` 153/153, `provider::factory::tests` 5/5, `db::migrate` 19/19, `cargo check -p arcana-core -p arcana --locked` clean.
+
+## ADR-LOG-RESTRUCT-0399 — Carry the provider error class as data, not as message text
+
+**Decision / 2026-10-18 (owner-approved escalation).** `ErrorClass` is computed by each adapter from a bounded provider body, then written into the message as `[QuotaExhausted]` / `[Overloaded]` / `[Retryable]`, and then **parsed back out of the message text** by two independent consumers:
+
+- `agent/engine.rs`, in `stream_response`'s retry closure — directly under a comment stating that the classification "comes from the error the adapter attached (`ErrorClass::classify`), **not from matching its text**", and naming exactly this text-matching as "the whole defect `P3-09` fixes";
+- `recipes/runner.rs::startup_error_class` — the fleet startup classifier, the same `message.contains("[...]")` chain.
+
+The class is therefore a string property of a Display impl rather than a type: an adapter that reworded a tag, or a new adapter that omitted one, silently changes retry and quota behaviour with no compile error. A spend-cap 429 mis-classified as retryable is a spend loop against a ceiling that already fired — and the code deciding that is `text.contains`.
+
+`ArcanaError` gains a provider-classified variant carrying `{ class: ErrorClass, message: String }`; the adapters construct it and both consumers match on the variant. `Provider(String)` remains for errors that genuinely carry no class. The rendered text keeps the `[Class]` tag **as display only** (`ArcanaError` serialises to a string across the Tauri IPC boundary, where the type cannot survive) — with the standing rule that no Rust consumer may parse it: classification is a `match` on the variant.
+
+**Why not a trait impl on `ArcanaError`:** `with_retry`'s own doc explains that only the producing adapter knows its provider's taxonomy, which is why it takes a classifier. That reasoning still holds; the classifier must read a variant, not a message.
+
+**Scope halt:** carried out as one unit (producers + both consumers + their tests). A partial change leaves one consumer parsing text and re-creates the defect. Tests that constructed a tagged `Provider(String)` to pin the old mechanism are repointed at the variant.
+
+**Evidence:** producer sites `provider/{anthropic,google,groq,openai}.rs` and any `usage.rs` construction; consumers `agent/engine.rs`, `recipes/runner.rs`. Validation is recorded with the implementing commit.

@@ -329,9 +329,10 @@ impl Provider for OpenAIProvider {
             // P2-67/68. Classified here, where the body is available: a 429
             // from a spend cap and a 429 from a rate limit are the same
             // status, and only the body separates them.
-            return Err(ArcanaError::Provider(format!(
-                "OpenAI {status} [{class:?}]: {summary}"
-            )));
+            return Err(ArcanaError::ProviderClassified {
+                class,
+                message: format!("OpenAI {status}: {summary}"),
+            });
         }
 
         let data: serde_json::Value = resp
@@ -358,13 +359,14 @@ impl Provider for OpenAIProvider {
         let status = resp.status();
         if !status.is_success() {
             let (class, summary) = safe_error_response("openai", status, resp).await;
-            // P2-67/68. The class is attached rather than left to be
+            // P2-67/68. The class is carried on the error rather than left to be
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            return Err(ArcanaError::Provider(format!(
-                "OpenAI stream {status} [{class:?}]: {summary}"
-            )));
+            return Err(ArcanaError::ProviderClassified {
+                class,
+                message: format!("OpenAI stream {status}: {summary}"),
+            });
         }
 
         let byte_stream = resp.bytes_stream();

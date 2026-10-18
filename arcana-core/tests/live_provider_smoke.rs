@@ -127,8 +127,10 @@ fn p4_cli_google_credential_matches_the_live_smoke_dotenv_key() {
 /// pattern-matching the message. That also makes `ErrorClass` load-bearing
 /// instead of decorative.
 fn is_transient(err: &arcana_core::errors::ArcanaError) -> bool {
-    let text = err.to_string();
-    text.contains("[Overloaded]") || text.contains("[Retryable]")
+    match err {
+        arcana_core::errors::ArcanaError::ProviderClassified { class, .. } => class.is_retryable(),
+        _ => false,
+    }
 }
 
 /// Retry only transient failures before Gemini opens the streaming response.
@@ -637,8 +639,12 @@ async fn every_catalogued_model_is_actually_callable() {
                 //
                 // Classified rather than pattern-matched on the message, which
                 // is what `ErrorClass` is for — and its first typed consumer.
-                let text = err.to_string();
-                let transient = text.contains("[Overloaded]") || text.contains("[Retryable]");
+                let transient = match &err {
+                    arcana_core::errors::ArcanaError::ProviderClassified { class, .. } => {
+                        class.is_retryable()
+                    }
+                    _ => false,
+                };
 
                 if transient {
                     eprintln!(

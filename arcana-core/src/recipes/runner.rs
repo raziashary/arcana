@@ -128,11 +128,17 @@ fn startup_error_class(error: &ArcanaError) -> &'static str {
         ArcanaError::Io(_) => "io",
         ArcanaError::Database(_) => "database",
         ArcanaError::Vault(_) => "keychain",
-        ArcanaError::Provider(message) if message.contains("[QuotaExhausted]") => {
-            "provider_quota_exhausted"
-        }
-        ArcanaError::Provider(message) if message.contains("[Overloaded]") => "provider_overloaded",
-        ArcanaError::Provider(message) if message.contains("[Retryable]") => "provider_retryable",
+        // The retry class the adapter attached is read from the variant, never
+        // re-derived from the message text (`ADR-LOG-RESTRUCT-0399`). An error
+        // that carries no class — including a bare `Provider(String)` — is
+        // fatal.
+        ArcanaError::ProviderClassified { class, .. } => match class {
+            crate::provider::usage::ErrorClass::QuotaExhausted => "provider_quota_exhausted",
+            crate::provider::usage::ErrorClass::Overloaded => "provider_overloaded",
+            crate::provider::usage::ErrorClass::Retryable => "provider_retryable",
+            crate::provider::usage::ErrorClass::Deferred
+            | crate::provider::usage::ErrorClass::Fatal => "provider_fatal",
+        },
         ArcanaError::Provider(_) => "provider_fatal",
         ArcanaError::Cancelled => "cancelled",
         _ => "permanent",
@@ -143,29 +149,47 @@ fn startup_error_class(error: &ArcanaError) -> &'static str {
 mod provider_failure_class_tests {
     use super::startup_error_class;
     use crate::errors::ArcanaError;
+    use crate::provider::usage::ErrorClass;
+
+    fn classified(class: ErrorClass, message: &str) -> ArcanaError {
+        ArcanaError::ProviderClassified {
+            class,
+            message: message.to_string(),
+        }
+    }
 
     #[test]
     fn provider_failure_records_preserve_the_provider_retry_class() {
+        // Repointed at the structured class (`ADR-LOG-RESTRUCT-0399`): the
+        // runner reads the variant, never a `[Class]` tag in the message.
         assert_eq!(
-            startup_error_class(&ArcanaError::Provider(
-                "Google 503 [Overloaded]: busy".into()
-            )),
+            startup_error_class(&classified(ErrorClass::Overloaded, "Google 503: busy")),
             "provider_overloaded"
         );
         assert_eq!(
-            startup_error_class(&ArcanaError::Provider(
-                "Google 429 [QuotaExhausted]: capped".into()
+            startup_error_class(&classified(
+                ErrorClass::QuotaExhausted,
+                "Google 429: capped"
             )),
             "provider_quota_exhausted"
         );
         assert_eq!(
-            startup_error_class(&ArcanaError::Provider(
-                "Google 500 [Retryable]: unavailable".into()
+            startup_error_class(&classified(
+                ErrorClass::Retryable,
+                "Google 500: unavailable"
             )),
             "provider_retryable"
         );
         assert_eq!(
-            startup_error_class(&ArcanaError::Provider("Google 400 [Fatal]: invalid".into())),
+            startup_error_class(&classified(ErrorClass::Fatal, "Google 400: invalid")),
+            "provider_fatal"
+        );
+        // A tag left in a plain `Provider(String)` is display text only. The
+        // classifier must not read it back (`ADR-LOG-RESTRUCT-0399`).
+        assert_eq!(
+            startup_error_class(&ArcanaError::Provider(
+                "Google 429 [QuotaExhausted]: capped".into()
+            )),
             "provider_fatal"
         );
     }
@@ -191,9 +215,8 @@ fn build_worker_provider(provider_id: &str) -> Result<Arc<dyn Provider>> {
             "No API key stored for provider '{provider_id}' — set it in Settings"
         ))
     })?;
-    crate::provider::factory::build_inner(provider_id, api_key).map_err(|error| {
-        ArcanaError::Agent(format!("Unsupported provider for worker: {error}"))
-    })
+    crate::provider::factory::build_inner(provider_id, api_key)
+        .map_err(|error| ArcanaError::Agent(format!("Unsupported provider for worker: {error}")))
 }
 
 async fn retry_startup_with_state<T, F, R>(

@@ -4218,7 +4218,11 @@ let x = 1;
     ///
     /// Retry policy now consumes the classification. Adapters inspect bounded
     /// response bodies through the safe helper instead of returning provider
-    /// text. Follow that helper chain as well as each complete/stream guard.
+    /// text, and they carry the class on `ArcanaError::ProviderClassified`
+    /// rather than writing a `[Class]` tag into the message
+    /// (`ADR-LOG-RESTRUCT-0399`); the rendered tag is display only and no Rust
+    /// consumer may parse it. Follow that helper chain as well as each
+    /// complete/stream guard.
     #[test]
     fn tg_p2_06_every_provider_http_error_is_classified() {
         let dir = repo_root().join("arcana-core/src/provider");
@@ -4231,7 +4235,27 @@ let x = 1;
         assert!(classifier.contains("ErrorClass::classify("));
         assert!(classifier.contains("unwrap_or(ErrorClass::Fatal)"));
 
-        for adapter in ["anthropic.rs", "openai.rs", "google.rs"] {
+        // Enumerated from the directory, not from a literal: a hand-maintained
+        // list is how `groq.rs` shipped an identical guard while staying outside
+        // this gate — the omission ADR-LOG-RESTRUCT-0395 recorded. Any adapter
+        // with an HTTP error guard is now covered the moment its file exists.
+        let mut adapters: Vec<String> = std::fs::read_dir(&dir)
+            .expect("provider directory is readable")
+            .filter_map(std::result::Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".rs") && !name.ends_with("_tests.rs"))
+            .filter(|name| {
+                std::fs::read_to_string(dir.join(name))
+                    .is_ok_and(|text| text.contains("if !status.is_success()"))
+            })
+            .collect();
+        adapters.sort();
+        assert!(
+            adapters.len() >= 4,
+            "every HTTP adapter must be discovered, found {adapters:?}"
+        );
+
+        for adapter in adapters.iter().map(String::as_str) {
             let text = read_source(&dir.join(adapter));
             let helper = if adapter == "google.rs" {
                 let google_helper = rust_item_body(&text, "async fn safe_google_error_details(");
@@ -4246,14 +4270,33 @@ let x = 1;
                 let error_guard = rust_item_body(body, "if !status.is_success()");
                 if !error_guard.contains(helper)
                     || !error_guard.contains("let (class, summary)")
-                    || !error_guard.contains("return Err(ArcanaError::Provider(format!(")
-                    || !error_guard.contains("[{class:?}]")
+                    || !error_guard.contains("return Err(ArcanaError::ProviderClassified {")
+                    || !error_guard.contains("message: format!(")
+                    || error_guard.contains("[{class:?}]")
                 {
                     offenders.push(format!(
                         "{adapter} {method}: unsuccessful HTTP status must use its \
-                         bounded classification helper and attach the class to the returned error"
+                         bounded classification helper and carry the class on \
+                         ArcanaError::ProviderClassified, never in the message text"
                     ));
                 }
+            }
+        }
+
+        // The two bounded helpers that classify a transport or a decode failure
+        // must carry that class on the error too, not only inside the message.
+        for (helper_name, class) in [
+            ("fn safe_transport_error(", "ErrorClass::Retryable"),
+            ("fn safe_decode_error(", "ErrorClass::Fatal"),
+        ] {
+            let helper_body = rust_item_body(&usage, helper_name);
+            if !helper_body.contains("ArcanaError::ProviderClassified {")
+                || !helper_body.contains(&format!("class: {class}"))
+            {
+                offenders.push(format!(
+                    "{helper_name}: the failure's class must be carried on \
+                     ArcanaError::ProviderClassified"
+                ));
             }
         }
 

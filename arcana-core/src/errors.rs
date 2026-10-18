@@ -14,6 +14,25 @@ pub enum ArcanaError {
     #[error("Provider error: {0}")]
     Provider(String),
 
+    /// A provider failure whose retry class the producing adapter determined from
+    /// a bounded response body. The class is carried as data so no consumer has to
+    /// parse it back out of the message text (ADR-LOG-RESTRUCT-0399).
+    ///
+    /// The `{class:?}` tag in the rendered text is **display only** — it keeps the
+    /// classification legible after `ArcanaError` serialises to a string across
+    /// the Tauri IPC boundary, where the type cannot survive. No Rust consumer may
+    /// read it: consumers `match` on this variant.
+    ///
+    /// `ErrorClass` lives in `provider::usage` and is referenced here
+    /// deliberately: this is intra-crate, the dependence is one-way in effect
+    /// (`usage.rs` already builds `ArcanaError` values), and a separate error
+    /// type per provider taxonomy would buy nothing.
+    #[error("Provider error [{class:?}]: {message}")]
+    ProviderClassified {
+        class: crate::provider::usage::ErrorClass,
+        message: String,
+    },
+
     // Agent / tool execution errors
     #[error("Agent error: {0}")]
     Agent(String),

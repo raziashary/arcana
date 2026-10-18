@@ -408,22 +408,31 @@ async fn adapter_http_failures_keep_class_and_safe_google_summary() {
                     .await
                     .err()
                     .expect("stream HTTP failure response")
-                    .to_string()
             } else {
                 provider
                     .complete(minimal_completion_request())
                     .await
                     .err()
                     .expect("completion HTTP failure response")
-                    .to_string()
             };
 
             let operation = if stream { "Google stream" } else { "Google" };
+            // The class is read from the variant, not the rendered `[Class]`
+            // tag (`ADR-LOG-RESTRUCT-0399`).
+            let ArcanaError::ProviderClassified {
+                class: actual,
+                message,
+            } = &error
+            else {
+                panic!("adapter HTTP failures must carry their class structurally: {error}");
+            };
+            assert_eq!(format!("{actual:?}"), class, "{error}");
             assert_eq!(
-                error,
-                format!("Provider error: {operation} {status} {reason} [{class}]: {summary}")
+                message,
+                &format!("{operation} {status} {reason}: {summary}"),
+                "{error}"
             );
-            assert!(!error.contains("private-"), "{error}");
+            assert!(!message.contains("private-"), "{message}");
             server.await.expect("Google HTTP error fixture");
         }
     }

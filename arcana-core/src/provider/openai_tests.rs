@@ -402,6 +402,7 @@ async fn adapter_http_failures_keep_class_and_fixed_summary() {
     use super::openai::OpenAIProvider;
     use super::traits::Provider;
     use super::usage::{test_completion_request, test_response_server};
+    use crate::errors::ArcanaError;
 
     let cases = [
         (
@@ -452,26 +453,31 @@ async fn adapter_http_failures_keep_class_and_fixed_summary() {
                     .await
                     .err()
                     .expect("stream HTTP failure response")
-                    .to_string()
             } else {
                 provider
                     .complete(test_completion_request())
                     .await
                     .err()
                     .expect("completion HTTP failure response")
-                    .to_string()
             };
 
             let operation = if stream { "OpenAI stream" } else { "OpenAI" };
-            assert!(
-                error.starts_with(&format!("Provider error: {operation} {status} ")),
+            // The class is read from the variant, not the rendered `[Class]`
+            // tag (`ADR-LOG-RESTRUCT-0399`).
+            let ArcanaError::ProviderClassified {
+                class: actual,
+                message,
+            } = &error
+            else {
+                panic!("adapter HTTP failures must carry their class structurally: {error}");
+            };
+            assert_eq!(format!("{actual:?}"), class, "{error}");
+            assert_eq!(
+                message,
+                &format!("{operation} {status} {reason}: provider_error_response"),
                 "{error}"
             );
-            assert!(
-                error.ends_with(&format!("[{class}]: provider_error_response")),
-                "{error}"
-            );
-            assert!(!error.contains("private-"), "{error}");
+            assert!(!message.contains("private-"), "{message}");
             server.await.expect("OpenAI HTTP error fixture");
         }
     }

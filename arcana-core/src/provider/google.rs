@@ -351,9 +351,10 @@ impl Provider for GoogleProvider {
             let status = response.status();
             let (class, summary) = safe_google_error_details(status, response).await;
             timer.set_outcome("error");
-            return Err(ArcanaError::Provider(format!(
-                "Google countTokens {status} [{class:?}]: token preflight failed ({summary})"
-            )));
+            return Err(ArcanaError::ProviderClassified {
+                class,
+                message: format!("Google countTokens {status}: token preflight failed ({summary})"),
+            });
         }
         let mut response_stream = response.bytes_stream();
         let mut bytes = Vec::new();
@@ -412,9 +413,10 @@ impl Provider for GoogleProvider {
             // P2-67/68. Classified here, where the body is available: a 429
             // from a spend cap and a 429 from a rate limit are the same
             // status, and only the body separates them.
-            return Err(ArcanaError::Provider(format!(
-                "Google {status} [{class:?}]: {summary}"
-            )));
+            return Err(ArcanaError::ProviderClassified {
+                class,
+                message: format!("Google {status}: {summary}"),
+            });
         }
 
         let data: serde_json::Value = resp
@@ -447,13 +449,14 @@ impl Provider for GoogleProvider {
         let status = resp.status();
         if !status.is_success() {
             let (class, summary) = safe_google_error_details(status, resp).await;
-            // P2-67/68. The class is attached rather than left to be
+            // P2-67/68. The class is carried on the error rather than left to be
             // re-derived downstream: a 429 from a spend cap and a 429 from a
             // rate limit are the same status and only the body tells them
             // apart, so the one place that has the body is the place to decide.
-            return Err(ArcanaError::Provider(format!(
-                "Google stream {status} [{class:?}]: {summary}"
-            )));
+            return Err(ArcanaError::ProviderClassified {
+                class,
+                message: format!("Google stream {status}: {summary}"),
+            });
         }
 
         let byte_stream = resp.bytes_stream();

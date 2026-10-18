@@ -128,6 +128,24 @@ The adapters still flatten it into the message: `autodev-core/src/provider/anthr
 **Demonstration (comment vs code):** the block comment directly above, at `engine.rs:961-965`, states: *"The classification comes from the error the adapter attached (`ErrorClass::classify`), **not from matching its text** — the whole defect `P3-09` fixes is that the classification was computed, stringified and discarded."* The closure at `:983` is `let text = e.to_string(); if text.contains("[QuotaExhausted]")`. The comment and the code four lines below it assert opposite things.
 **Second defect — the retry never fires for the commonest retryable failure:** a transport-level failure (connection reset, DNS, TLS, read timeout) becomes `AutoDevError::Http` → `"HTTP error: {reqwest}"` (`autodev-core/src/errors.rs:50-51`), which carries **no `[Class]` tag**, so the closure's `else` branch returns `ErrorClass::Fatal` and `decide()` returns `Stop(NotRetryable)`. The policy can only ever retry an HTTP *response* the adapter classified (5xx / non-quota 429) — never a dropped connection.
 **Severity:** high
+**Disposition (2026-10-18) — CLOSED, both halves.** `ArcanaError` gained
+`ProviderClassified { class, message }` (`ADR-LOG-RESTRUCT-0399`). The adapters construct
+it, `safe_transport_error` carries `Retryable` and `safe_decode_error` carries `Fatal`, and
+both consumers — `engine.rs`'s retry closure and `recipes/runner.rs::startup_error_class` —
+`match` on the variant instead of the message text (so the "second defect" above is also
+closed: a dropped connection now carries `Retryable` rather than no tag at all). The
+`[Class]` tag survives in the rendered string for the IPC boundary, as **display only**; the
+remaining `contains("[…]")` uses in the tree are test assertions on that text.
+
+**Closure proof:** gate `TG-P2-06` now enumerates adapters from the directory instead of a
+literal and fails if an adapter embeds the tag again — verified by injecting exactly that
+regression into `groq.rs` (which the old three-name literal had never covered) and watching
+the gate name `groq.rs`; and
+`usage::tests::a_dropped_connection_carries_retryable_and_a_tagged_string_is_not_reclassified`
+asserts the transport class, the decode class, and that a merely-tagged `Provider` string is
+**not** reclassified. Evidence file:
+`_verify/2026-10-18-ADR-0399-PROVIDER-CLASS-STRUCTURAL.md`. This receipt's paths are the
+pre-rename ones (`autodev-core/` → `arcana-core/`).
 
 ## F-14 · P3-14 · OVERSTATED — the gate cannot catch the "new tool" case it claims to
 **Claim:** "Keyed on *declares a path input and touches the disk*, so a **NEW** tool with a path and no jail call fails the build, which is `TG3-27`'s requirement." (The count itself — "**Seven** tools, not six" — is TRUE: commit `d6403db` adds `validate_workspace_path` to `analyze_diff_tool`, `check_file`, `glob`, `grep`, `list_directory`, `read_file`, `write_interface_spec`.)

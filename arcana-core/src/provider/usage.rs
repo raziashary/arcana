@@ -368,22 +368,26 @@ pub(crate) async fn safe_error_response(
 }
 
 /// Convert a provider transport failure to a bounded error without retaining
-/// reqwest's request URL, which may contain user-configured credentials.
+/// reqwest's request URL, which may contain user-configured credentials. The
+/// retry class is carried as data (`ADR-LOG-RESTRUCT-0399`).
 pub(crate) fn safe_transport_error(
     provider: &str,
     stage: &'static str,
 ) -> crate::errors::ArcanaError {
-    crate::errors::ArcanaError::Provider(format!(
-        "{provider} {stage} [Retryable]: provider_transport_failure"
-    ))
+    crate::errors::ArcanaError::ProviderClassified {
+        class: ErrorClass::Retryable,
+        message: format!("{provider} {stage}: provider_transport_failure"),
+    }
 }
 
 /// Convert a successful response that cannot be decoded without exposing the
-/// response body, URL, or parser details to the model and logs.
+/// response body, URL, or parser details to the model and logs. The class is
+/// carried as data (`ADR-LOG-RESTRUCT-0399`).
 pub(crate) fn safe_decode_error(provider: &str, stage: &'static str) -> crate::errors::ArcanaError {
-    crate::errors::ArcanaError::Provider(format!(
-        "{provider} {stage} [Fatal]: provider_response_invalid"
-    ))
+    crate::errors::ArcanaError::ProviderClassified {
+        class: ErrorClass::Fatal,
+        message: format!("{provider} {stage}: provider_response_invalid"),
+    }
 }
 
 impl ErrorClass {
@@ -1004,5 +1008,37 @@ mod tests {
         let c = ErrorClass::classify("openai", 418, "i am a teapot");
         assert_eq!(c, ErrorClass::Fatal);
         assert!(!c.is_retryable());
+    }
+
+    /// F-13 (`_verify/A9-P3-claims-refutation.md`) recorded two defects here: the
+    /// class was re-derived by string-matching the message, and a transport
+    /// failure carried no class at all — so a dropped connection, the commonest
+    /// retryable failure, became `Fatal` and was never retried.
+    #[test]
+    fn a_dropped_connection_carries_retryable_and_a_tagged_string_is_not_reclassified() {
+        use crate::errors::ArcanaError;
+
+        let transport = safe_transport_error("Google", "stream");
+        let ArcanaError::ProviderClassified { class, .. } = &transport else {
+            panic!("a transport failure must carry its class, got {transport:?}");
+        };
+        assert_eq!(*class, ErrorClass::Retryable);
+        assert!(class.is_retryable());
+
+        let decode = safe_decode_error("Google", "complete");
+        let ArcanaError::ProviderClassified { class, .. } = &decode else {
+            panic!("a decode failure must carry its class, got {decode:?}");
+        };
+        assert_eq!(*class, ErrorClass::Fatal);
+        assert!(!class.is_retryable());
+
+        // The rendered text still shows the tag: `ArcanaError` serialises to a
+        // string across the Tauri IPC boundary, where the type cannot survive.
+        // It is display only — no consumer may parse it. A `Provider` string
+        // that merely LOOKS tagged stays unclassified, which is the point.
+        assert!(transport.to_string().contains("[Retryable]"));
+        let legacy =
+            ArcanaError::Provider("Google 429 [QuotaExhausted]: provider_error_response".into());
+        assert!(!matches!(legacy, ArcanaError::ProviderClassified { .. }));
     }
 }

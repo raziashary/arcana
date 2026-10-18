@@ -510,6 +510,7 @@ mod p3_25_wire_tests {
         use super::super::anthropic::AnthropicProvider;
         use super::super::traits::Provider;
         use super::super::usage::{test_completion_request, test_response_server};
+        use crate::errors::ArcanaError;
 
         let cases = [
             (
@@ -566,14 +567,12 @@ mod p3_25_wire_tests {
                         .await
                         .err()
                         .expect("stream HTTP failure response")
-                        .to_string()
                 } else {
                     provider
                         .complete(test_completion_request())
                         .await
                         .err()
                         .expect("completion HTTP failure response")
-                        .to_string()
                 };
 
                 let operation = if stream {
@@ -581,15 +580,26 @@ mod p3_25_wire_tests {
                 } else {
                     "Anthropic"
                 };
+                // The class is read from the variant, not the rendered `[Class]`
+                // tag (`ADR-LOG-RESTRUCT-0399`).
+                let ArcanaError::ProviderClassified {
+                    class: actual,
+                    message,
+                } = &error
+                else {
+                    panic!("adapter HTTP failures must carry their class structurally: {error}");
+                };
+                assert_eq!(format!("{actual:?}"), class, "{error}");
+                // 529 has no canonical reason phrase, so the adapter's
+                // `{status}` renders as `529 <unknown status code>`. Assert the
+                // bounded shape — operation, status, fixed summary — rather
+                // than the reason text.
                 assert!(
-                    error.starts_with(&format!("Provider error: {operation} {status} ")),
+                    message.starts_with(&format!("{operation} {status} ")),
                     "{error}"
                 );
-                assert!(
-                    error.ends_with(&format!("[{class}]: provider_error_response")),
-                    "{error}"
-                );
-                assert!(!error.contains("private-"), "{error}");
+                assert!(message.ends_with(": provider_error_response"), "{error}");
+                assert!(!message.contains("private-"), "{message}");
                 server.await.expect("Anthropic HTTP error fixture");
             }
         }

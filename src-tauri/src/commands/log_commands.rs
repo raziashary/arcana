@@ -2802,9 +2802,10 @@ mod tests {
                         async move {
                             if attempt == 1 {
                                 Err::<(), crate::errors::ArcanaError>(
-                                    crate::errors::ArcanaError::Provider(
-                                        "private-provider-retry-error-canary [Retryable]".into(),
-                                    ),
+                                    crate::errors::ArcanaError::ProviderClassified {
+                                        class: arcana_core::provider::usage::ErrorClass::Retryable,
+                                        message: "private-provider-retry-error-canary".into(),
+                                    },
                                 )
                             } else {
                                 Ok(())
@@ -2842,9 +2843,12 @@ mod tests {
             let quota_error = runtime
                 .block_on(arcana_core::provider::retry::with_retry(
                     || async {
-                        Err::<(), crate::errors::ArcanaError>(crate::errors::ArcanaError::Provider(
-                            "private-provider-quota-canary".into(),
-                        ))
+                        Err::<(), crate::errors::ArcanaError>(
+                            crate::errors::ArcanaError::ProviderClassified {
+                                class: arcana_core::provider::usage::ErrorClass::QuotaExhausted,
+                                message: "private-provider-quota-canary".into(),
+                            },
+                        )
                     },
                     |_: &crate::errors::ArcanaError| {
                         arcana_core::provider::usage::ErrorClass::QuotaExhausted
