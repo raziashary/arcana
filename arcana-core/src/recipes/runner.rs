@@ -31,9 +31,6 @@ use crate::events::{
     WorkerTickEndPayload, WorkerTickStartPayload,
 };
 use crate::hooks::ecosystem::Ecosystem;
-use crate::provider::anthropic::AnthropicProvider;
-use crate::provider::google::GoogleProvider;
-use crate::provider::openai::OpenAIProvider;
 use crate::provider::traits::Provider;
 use crate::recipes::types::Recipe;
 use crate::recipes::types::RecipePermissionMode;
@@ -180,6 +177,23 @@ where
     F: FnMut() -> Result<T>,
 {
     retry_startup_with_state(worker_slug, run_id, &mut prepare, |_| {}).await
+}
+
+/// Build a worker provider from the stored key for `provider_id`.
+///
+/// Construction itself belongs to `provider::factory::build_inner`; this only
+/// adds the worker-specific error wording. The previous copy here hard-coded
+/// three provider ids and therefore refused providers the factory (and the
+/// user's settings) support — `groq` among them.
+fn build_worker_provider(provider_id: &str) -> Result<Arc<dyn Provider>> {
+    let api_key = VaultManager::get(&provider_key(provider_id))?.ok_or_else(|| {
+        ArcanaError::Agent(format!(
+            "No API key stored for provider '{provider_id}' — set it in Settings"
+        ))
+    })?;
+    crate::provider::factory::build_inner(provider_id, api_key).map_err(|error| {
+        ArcanaError::Agent(format!("Unsupported provider for worker: {error}"))
+    })
 }
 
 async fn retry_startup_with_state<T, F, R>(
@@ -580,35 +594,11 @@ impl RecipeRunner {
                 if let Some(provider) = &self.provider_override {
                     provider.clone()
                 } else {
-                    let api_key = VaultManager::get(&provider_key(provider_id))?.ok_or_else(|| {
-                        ArcanaError::Agent(format!(
-                            "No API key stored for provider '{provider_id}' — set it in Settings"
-                        ))
-                    })?;
-                    match provider_id {
-                        "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
-                        "openai" => Arc::new(OpenAIProvider::new(api_key)),
-                        "google" => Arc::new(GoogleProvider::new(api_key)),
-                        other => {
-                            return Err(ArcanaError::Agent(format!("Unsupported provider: {other}")))
-                        }
-                    }
+                    build_worker_provider(provider_id)?
                 }
                 #[cfg(not(any(test, feature = "offline-fleet-test")))]
                 {
-                    let api_key = VaultManager::get(&provider_key(provider_id))?.ok_or_else(|| {
-                        ArcanaError::Agent(format!(
-                            "No API key stored for provider '{provider_id}' — set it in Settings"
-                        ))
-                    })?;
-                    match provider_id {
-                        "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
-                        "openai" => Arc::new(OpenAIProvider::new(api_key)),
-                        "google" => Arc::new(GoogleProvider::new(api_key)),
-                        other => {
-                            return Err(ArcanaError::Agent(format!("Unsupported provider: {other}")))
-                        }
-                    }
+                    build_worker_provider(provider_id)?
                 }
             };
 

@@ -30,9 +30,6 @@ use crate::agent::permission::PendingPermissions;
 use crate::agent::tool_trait::AgentIdentity;
 use crate::agent::PAMode;
 use crate::errors::{ArcanaError, Result};
-use crate::provider::anthropic::AnthropicProvider;
-use crate::provider::google::GoogleProvider;
-use crate::provider::openai::OpenAIProvider;
 use crate::provider::Provider;
 use crate::state::app_state::AppState;
 use crate::vault::keychain::{provider_key, VaultManager};
@@ -394,16 +391,10 @@ fn build_provider(
         ))
     })?;
 
-    let inner: Arc<dyn Provider> = match provider_id {
-        "anthropic" => Arc::new(AnthropicProvider::new(api_key)) as Arc<dyn Provider>,
-        "openai" => Arc::new(OpenAIProvider::new(api_key)),
-        "google" => Arc::new(GoogleProvider::new(api_key)),
-        other => {
-            return Err(ArcanaError::Agent(format!(
-                "Unsupported provider for subagent: {other}"
-            )))
-        }
-    };
+    let inner: Arc<dyn Provider> = crate::provider::factory::build_inner(provider_id, api_key)
+        .map_err(|error| {
+            ArcanaError::Agent(format!("Unsupported provider for subagent: {error}"))
+        })?;
 
     // Every subagent call passes the daily ceiling (P2-21).
     Ok(crate::provider::capped::CappedProvider::wrap(inner, state))

@@ -1,14 +1,20 @@
 // Provider construction, in one place (P2-23, P2-53).
 //
-// The `match provider_id { "anthropic" => ..., "openai" => ..., ... }` was
-// written out at `agent_commands.rs:137`, `diff_commands.rs:37` and
-// `native_runner.rs:246`. Three copies of a dispatch on a string is how
-// `provider_for_model` drifted into three disagreeing versions, one of which
-// filed `o4-mini` under `"unknown"` — so this is the same fix applied before
-// the same divergence happens.
+// This module was written because the `match provider_id { "anthropic" => ... }`
+// dispatch had been copied to three call sites, and `provider_for_model` had
+// already drifted into three disagreeing versions, one of which filed `o4-mini`
+// under `"unknown"`.
+//
+// The copies reappeared anyway. By 2026-10-18 four call sites outside this
+// module each built their own provider, and two of them — the recipe/fleet
+// worker and the native subagent runner — had drifted: they refused `groq`,
+// which the catalogue, Settings and the vault all offer, so a Groq user could
+// not run fleet workers or subagents at all. `build_inner` is now the single
+// construction site, and `provider_dispatch_has_exactly_one_construction_site`
+// enforces it mechanically rather than by review.
 //
 // It also gives key validation (`P2-23`) a provider to validate WITH, without
-// a fourth copy appearing in the vault command.
+// a further copy appearing in the vault command.
 
 use std::sync::Arc;
 
@@ -35,6 +41,24 @@ use crate::errors::{ArcanaError, Result};
 /// validation (`P2-23`) still works when the day's ceiling has already been
 /// reached. A user who is capped must still be able to fix a wrong key.
 pub fn build(provider_id: &str, api_key: String) -> Result<Arc<dyn Provider>> {
+    Ok(super::capped::CappedProvider::wrap_global(build_inner(
+        provider_id, api_key,
+    )?))
+}
+
+/// Build the provider for `provider_id` **without** the daily-spend ceiling.
+///
+/// This is the single construction site for every provider. Callers that must
+/// bind the ceiling to a specific app `state` (the recipe worker and the
+/// subagent runner, whose tests drive an explicit state) wrap the result
+/// themselves with `capped::CappedProvider::wrap`; everything else uses
+/// `build`, which wraps it globally.
+///
+/// It exists because the same `match provider_id` had reappeared at two call
+/// sites after `build` was introduced, and both copies had already drifted:
+/// neither knew about `groq`, so the fleet and subagents refused a provider the
+/// user can select.
+pub fn build_inner(provider_id: &str, api_key: String) -> Result<Arc<dyn Provider>> {
     let inner: Arc<dyn Provider> = match provider_id {
         "anthropic" => Arc::new(AnthropicProvider::new(api_key)),
         "openai" => Arc::new(OpenAIProvider::new(api_key)),
@@ -46,7 +70,7 @@ pub fn build(provider_id: &str, api_key: String) -> Result<Arc<dyn Provider>> {
             )));
         }
     };
-    Ok(super::capped::CappedProvider::wrap_global(inner))
+    Ok(inner)
 }
 
 /// Every provider id the application supports.
@@ -66,11 +90,80 @@ pub fn supported_ids() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn every_supported_id_builds() {
         for id in supported_ids() {
             assert!(build(id, "test-key".into()).is_ok(), "{id} does not build");
+            assert!(
+                build_inner(id, "test-key".into()).is_ok(),
+                "{id} does not build uncapped"
+            );
+        }
+    }
+
+    /// The dispatch was copied out of this module at least four times, and the
+    /// copies drifted: the worker and subagent copies silently omitted `groq`,
+    /// so the fleet refused a provider the user can select. Review did not
+    /// catch it twice, so the single construction site is enforced
+    /// mechanically, the same way `observability::telemetry_labels` enforces
+    /// its registry.
+    ///
+    /// Flagged shape: a provider-id arm that constructs a concrete provider
+    /// on the same line, outside this module. Per-adapter wire tests construct
+    /// their own adapter directly and are not dispatch copies.
+    #[test]
+    fn provider_dispatch_has_exactly_one_construction_site() {
+        const PROVIDER_IDS: [&str; 4] = ["\"anthropic\"", "\"openai\"", "\"google\"", "\"groq\""];
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let mut offenders = Vec::new();
+        let mut files = Vec::new();
+        for directory in [
+            "arcana-core/src",
+            "src-tauri/src",
+            "src-cli/src",
+            "src-shared/src",
+        ] {
+            collect_rust_files(&root.join(directory), &mut files);
+        }
+        assert!(
+            files.len() > 100,
+            "source scan must find real files, found {}",
+            files.len()
+        );
+        for file in files {
+            if file.file_name().and_then(|name| name.to_str()) == Some("factory.rs") {
+                continue;
+            }
+            let Ok(source) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for (index, line) in source.lines().enumerate() {
+                if line.contains("Provider::new(")
+                    && PROVIDER_IDS.iter().any(|id| line.contains(id))
+                {
+                    offenders.push(format!("{}:{}", file.display(), index + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "provider construction must go through factory::build_inner; copies found at {offenders:?}"
+        );
+    }
+
+    fn collect_rust_files(directory: &Path, files: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_rust_files(&path, files);
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+                files.push(path);
+            }
         }
     }
 
