@@ -571,14 +571,16 @@ impl RecipeScheduler {
         let slug = worker_slug.to_string();
         let handle = tokio::spawn(async move {
             // This guard belongs to the spawned future, so Rust drops it on
-            // normal return, panic, abort, or timeout cancellation.
-            let mut run_guard = KickSlotGuard::for_worker_run(slug.clone());
+            // normal return, panic, abort, or timeout cancellation — and its
+            // `Drop` releases the `kick_inflight` slot on every one of those
+            // paths. Success only skips the interrupted-claim recovery.
+            let run_guard = KickSlotGuard::for_worker_run(slug.clone());
             info!(
                 "[RecipeScheduler] kick_worker: firing '{}' immediately (push-based dispatch)",
                 slug
             );
             match tokio::time::timeout(PUSH_RUN_TIMEOUT, runner.run_recipe(&recipe, &slug)).await {
-                Ok(Ok(())) => run_guard.disarm(),
+                Ok(Ok(())) => run_guard.skip_recovery(),
                 Ok(Err(e)) => {
                     error!(
                         "[RecipeScheduler] kick_worker: recipe run failed for '{}': {e}",
@@ -804,6 +806,15 @@ impl KickSlotGuard {
 
     fn disarm(&mut self) {
         self.active = false;
+    }
+
+    /// The run completed successfully, so there is no interrupted claim to
+    /// recover — but the process-wide slot must still be released when this
+    /// guard drops. `disarm()` cannot be used here: it suppresses the slot
+    /// release too, which locks the worker out of every later kick (push or
+    /// periodic tick) for the life of the process.
+    fn skip_recovery(mut self) {
+        self.recovery = None;
     }
 }
 
@@ -1948,6 +1959,12 @@ mod tests {
             "retryable setup failure must keep the original durable run instead of opening a duplicate"
         );
         assert_eq!(qc_runs[0].phase, "completed");
+        assert!(
+            !kick_inflight().lock_tolerant().contains("qc-agent"),
+            "a completed push-kick must release the process-wide worker slot; \
+             otherwise the worker is locked out of both the push path and the \
+             periodic tick for the life of the process"
+        );
 
         scheduler.kick_worker("qc-agent");
         assert!(
@@ -3859,6 +3876,27 @@ mod tests {
         reserve_test_kick(slug);
         drop(KickSlotGuard::new(slug.to_string()));
         assert!(!kick_inflight().lock_tolerant().contains(slug));
+    }
+
+    #[test]
+    fn kick_slot_guard_releases_on_successful_run_but_skips_recovery() {
+        let slug = "p4-guard-success-test";
+        reserve_test_kick(slug);
+        let recovered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = recovered.clone();
+        let guard = KickSlotGuard::with_recovery(slug.to_string(), move |_| {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(Vec::new())
+        });
+        guard.skip_recovery();
+        assert!(
+            !kick_inflight().lock_tolerant().contains(slug),
+            "a completed run must release its process-wide slot"
+        );
+        assert!(
+            !recovered.load(std::sync::atomic::Ordering::SeqCst),
+            "a completed run must not run interrupted-claim recovery"
+        );
     }
 
     #[tokio::test]
