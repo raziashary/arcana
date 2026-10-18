@@ -194,6 +194,59 @@ exists (`check_autodev_instructions_exists` → `check_arcana_instructions_exist
 `src-tauri/src/db.rs` plus 26 siblings are one-line `pub use arcana_core::*` veneers
 with no stated retirement condition.
 
+### 3.8 The project-command / "single strong tool set" thread (grounded 2026-10-18)
+
+**A correction first.** The ruling points at `P4_EXPANDED_GOAL.md` for the project-command
+isolation requirement; a search of that file finds **no** sandbox, project-command or tool-surface
+text. The requirement lives in MDP **P4-61** (`MASTER_DEVELOPMENT_PLAN.md:1556`: *"Treat project
+code, tests, dependencies, build scripts, and all subprocesses as untrusted"*) and in the
+`_verify/P4-61-*.md` receipts. The direction itself is the ruling recorded in §8.1.
+
+**What already exists — the half of the mandate that is built.** The model cannot hand
+`project_command` a command line. Its schema (`project_command.rs:214-246`) accepts only a declared
+intent from a closed set (`install|build|test|lint|run`), an optional toolchain and package, a
+timeout and a project path; the argv is constructed by `platform/command.rs::resolve` from
+`(Toolchain, CommandIntent)`, never parsed from a string; the call is validated against the
+workspace, the detected toolchains and a current task claim (`project_command.rs:287-321`); the
+sandbox is entered at `process_sandbox::spawn` (`mod.rs:266`) with per-platform enforcement; and
+`intent=install` is classified `ToolEffect::HostApproval` (`:198-204`). So "vetted, intent-based,
+sandboxed, approved" is already true of *this* tool.
+
+**What is actually missing, verified:**
+
+1. **Exclusivity — there is a second, untyped path.** `bash.rs` builds `cmd /C` / `sh -c` from raw
+   model-supplied text (`bash.rs:119-151`), enters the same sandbox, and is classified
+   `ToolEffect::FreeformShell` (`:28`). The "single strong tool set" does not exist while the model
+   can also emit a command line.
+2. **No capability object.** `ProcessSpec` (`mod.rs:116-125`) carries program/args/cwd/env/
+   read-only paths — nothing about network or capabilities. Vetting is by effect class and tool
+   *name*, not by what the command is allowed to do.
+3. **A bypass.** `run_ide_project` (`project_command.rs:43` → `:116`) calls the launcher directly,
+   skipping the task claim and build-evidence check, and is Tauri-exposed
+   (`src-tauri/src/commands/ide_commands.rs:32`).
+4. **The CLI's consent model is implicit.** `src-cli/src/commands/fleet.rs:88` sets
+   `host_approval_available: false`, so `Execute` runs unprompted in `Autonomous`
+   (`tool_effect.rs:95`) — a deliberate headless posture that is nowhere declared as one.
+5. **Consent is keyed to the tool's name** (`tool_executor.rs:702,1506`), not to a capability, so a
+   standing allow on one intent cannot be distinguished from a standing allow on another.
+6. **The existing tests pin the internal launcher, not the entry point** — `run_resolved_command*`
+   (`project_command.rs:1145`, `:1153`, callers at `:2526`, `:3137`, `:3182`), which is the gap
+   `_verify/P4-62-NEXT-PROOF-2026-10-09.md` §5 already records.
+
+**A new workstream (W9) is scoped around this**: one vetted command surface, capability-scoped
+consent, and a declared approval model per front end — not a new abstraction layer. That is the
+proposal in §8.7.
+
+**What the receipts leave unproven, so nobody reads them as green:** Windows Cargo Clippy still
+cannot canonicalize the workspace (`OS error 5`) and locked-dependency staging is absent; on Linux
+Landlock confines **writes only, not external reads** (`P4-61-LINUX-NETWORK-BOUNDARY-2026-10-05.md:18`),
+cgroup quotas are proved only as a WSL cost-only candidate
+(`P4-61-DELEGATED-QUOTA-PROOF-2026-10-12.md:78`), and staged copy-back is test-only with no
+production consumer (`P4-61-COPYBACK-APPLY-2026-10-13.md:31,45`); macOS is fail-closed with
+`execution_enabled:false` (`P4-61-MACOS-NATIVE-SLICE-2026-10-09.md:15,33`); the loopback smoke
+runner is unintegrated; and `WorkspaceWriteLease` serializes managed writers only — not
+`Execute`/`FreeformShell`/subprocesses (`P4-61-WRITE-LEASE-REVIEW-2026-10-12.md:30`).
+
 ## 4. Already landed (wave 0) — no approval needed, done at the owning layer
 
 Eleven commits, each with its own failing-then-passing evidence: `49e87e0` `eea621e`
@@ -218,7 +271,8 @@ an owner decision before work starts.
 | **W5** | Test-harness integrity: adopt the guarded once-per-process singleton pattern; make `install_global` return `Result`; derive fixtures from the real ladders | `analytics/`, `recipes/`, `hooks/`, `src-shared/` | M | Med | The previously order-dependent suites run in one process | — |
 | **W6** | Theme-F doc/gate truth, including a generated (not hand-maintained) telemetry label set | docs + `observability/`, `src-tauri/ci_gate.rs` | S–M | Low | Doc no-stale sweep + suite | **OD** for generation |
 | **W7** | Wave 2 (audits 5–6): one `DEFAULT_MODEL`/provider default; one formatter set with a pinned K/M casing contract; retire the stale `MODEL_CONTEXT` table and the retired-family branches in `shortModelName`; delete the dead plan/memory/plugin/city clusters and 4 CSS files after a caller re-check; wire or remove `navigate_to_logs` | `src/**` | M | Low–Med | `npx tsc --noEmit`, `npx eslint .`, `npx vitest run`, `npm run build` | — |
-| **W8** | Hooks/sandbox: consent-gate `HookAction::Http`, jail `HookAction::Log`, distinguish infra failure from denial in `fire`/`fire_with_logs`, add the hook boundary to `TG4-30` | `hooks/`, `egress_consent`, `ci_gate` | M | **Med-High** | New refusal tests + `TG4-30` update | **OD** |
+| **W8** | Hooks/sandbox: consent-gate `HookAction::Http`, jail `HookAction::Log`, distinguish infra failure from denial in `fire`/`fire_with_logs`, add the hook boundary to `TG4-30` | `hooks/`, `egress_consent`, `ci_gate` | M | **Med-High** | New refusal tests + `TG4-30` update | **approved** |
+| **W9** | One vetted command surface (§3.8): make the intent-based tool the model's only way to run a project command; give consent a capability identity instead of a tool name; make `run_ide_project` pass the same claim/evidence check; declare each front end's approval model (desktop consents, CLI headless) instead of implying it | `project_command.rs`, `bash.rs`, `tool_effect.rs`, `tool_executor.rs`, `platform/command.rs`, `src-cli` | **L** | **High** (changes what the model may do) | New refusal tests; `TG4-30`; the intent-based suite re-run through `execute`, not the internal launcher | **OD** (§8.7) |
 
 **Sequencing proposal:** W1 → W2 → W6 (all no-behaviour-change) → W3 → W5 → W7 → W4 → W8.
 Do **not** run two workstreams that touch the same files concurrently.
@@ -271,3 +325,17 @@ the untracked session-checkpoint receipts.
    `UNIT-PROVEN` / `SECURITY-PROVEN` while their rows are unchecked, plus the stale command name in
    `_verify/A1-P0-code-audit.md:363` (no checkbox changes), and may the 27 `src-tauri` `pub use`
    re-export veneers be given a stated retirement condition or removed?
+7. **How the freeform path is retired (§3.8, W9).** The mandate is now clear — one vetted tool set —
+   but the mechanism decides a capability change, so I have not touched it. The options, in my
+   order of preference:
+   1. **Consent-gate + capability-scope the freeform shell** (keep it available, but only through an
+      explicit approval that names what it will be allowed to touch). Least likely to strand an
+      existing workflow; the approval still has to mean something.
+   2. **Remove the freeform tool from the model's set entirely** and route every command need
+      through the intent-based tool, extending the intent set where something real is missing. This
+      is the purest reading of the mandate, and it changes what the agent can do unprompted — hence
+      the ask.
+   3. **Keep both but make the vetted tool the default and record which path ran**, so the split is
+      visible while it is being closed. Weakest, and it leaves the untyped path in the model's
+      reach.
+   Which one — and if (2), which intents must exist first so no real workflow loses its only route?
