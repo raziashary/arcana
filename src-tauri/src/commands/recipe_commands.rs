@@ -256,8 +256,9 @@ pub async fn generate_recipe_yaml(
     let api_key = VaultManager::get(&provider_key(&provider_id))?
         .ok_or_else(|| ArcanaError::Agent(format!("No API key for provider '{provider_id}'")))?;
 
-    let inner: Arc<dyn Provider> = arcana_core::provider::factory::build_inner(&provider_id, api_key)
-        .map_err(|error| ArcanaError::Agent(error.to_string()))?;
+    let inner: Arc<dyn Provider> =
+        arcana_core::provider::factory::build_inner(&provider_id, api_key)
+            .map_err(|error| ArcanaError::Agent(error.to_string()))?;
     // Every call passes the daily ceiling (P2-21).
     let provider =
         arcana_core::provider::capped::CappedProvider::wrap(inner, state.inner().clone());

@@ -42,7 +42,8 @@ use crate::errors::{ArcanaError, Result};
 /// reached. A user who is capped must still be able to fix a wrong key.
 pub fn build(provider_id: &str, api_key: String) -> Result<Arc<dyn Provider>> {
     Ok(super::capped::CappedProvider::wrap_global(build_inner(
-        provider_id, api_key,
+        provider_id,
+        api_key,
     )?))
 }
 

@@ -5,6 +5,8 @@ use std::sync::Arc;
 use tauri::{Emitter, State};
 
 use crate::errors::ArcanaError;
+#[cfg(not(feature = "e2e-ipc-receipt"))]
+use crate::updater::check::UpdateChannel;
 use crate::updater::{
     self,
     check::UpdateInfo,
@@ -13,8 +15,6 @@ use crate::updater::{
     persistence::IntegrityReport,
     UpdaterState,
 };
-#[cfg(not(feature = "e2e-ipc-receipt"))]
-use crate::updater::check::UpdateChannel;
 
 // ─── Check ────────────────────────────────────────────────────────────────────
 
