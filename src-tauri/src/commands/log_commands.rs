@@ -1228,6 +1228,138 @@ mod tests {
         assert!(!destination.exists());
     }
 
+    /// TG4-24 export-failure injection, bundle half: `export_observability_bundle`
+    /// driven at an unwritable destination returns a structured, bounded error
+    /// (the `Failed to write` branch of the command), leaves no partial bundle
+    /// behind, and neither corrupts nor deletes telemetry that was persisted
+    /// before the attempt — the pre-existing JSONL records stay readable through
+    /// the production reader afterwards. The failure is also *surfaced* rather
+    /// than swallowed: the `OperationTimer` the command starts never reaches
+    /// `succeed()`, so its drop persists one `operation_timing` event carrying
+    /// `outcome = "error"`.
+    #[test]
+    fn observability_bundle_export_failure_is_reported_and_keeps_persisted_telemetry_readable() {
+        use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::test_support::isolate_home(home.path());
+        let log_dir = home.path().join(".arcana").join("logs");
+        std::fs::create_dir_all(&log_dir).expect("create isolated structured log directory");
+
+        let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let log_path = log_dir.join(format!("arcana-events.{date}.jsonl"));
+
+        // Persist real telemetry through the production producer first.
+        {
+            let file = std::fs::File::create(&log_path).expect("create production structured log");
+            let (writer, guard) = tracing_appender::non_blocking(file);
+            let subscriber = Registry::default().with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .with_target(true)
+                    .with_ansi(false)
+                    .with_current_span(true)
+                    .with_span_list(true)
+                    .with_writer(writer)
+                    .with_filter(filter_fn(TELEMETRY_TARGET_FILTER)),
+            );
+            tracing::subscriber::with_default(subscriber, || {
+                let mut parent = arcana_core::observability::timing::OperationTimer::start(
+                    "logs_export_isolation_parent",
+                )
+                .with_run_id("run-export-isolation-proof");
+                parent.succeed();
+            });
+            drop(guard);
+        }
+
+        let before = std::fs::read_to_string(&log_path).expect("read pre-export JSONL");
+        assert!(before.contains("logs_export_isolation_parent"));
+
+        // A destination whose parent is a regular file is unwritable on Windows
+        // and on Unix, and it passes the command's own parent-exists pre-check.
+        let parent_file = home.path().join("not-a-directory");
+        std::fs::write(&parent_file, "preserve existing file").expect("create blocking file");
+        let destination = parent_file.join("observability-bundle.json");
+
+        // Keep a sink active so the failed export's own error event persists.
+        let file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&log_path)
+            .expect("reopen production structured log for append");
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let subscriber = Registry::default().with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_target(true)
+                .with_ansi(false)
+                .with_current_span(true)
+                .with_span_list(true)
+                .with_writer(writer)
+                .with_filter(filter_fn(TELEMETRY_TARGET_FILTER)),
+        );
+        let error = tracing::subscriber::with_default(subscriber, || {
+            super::export_observability_bundle(
+                date.clone(),
+                destination.to_string_lossy().into_owned(),
+                None,
+            )
+            .expect_err("an unwritable destination must fail the export")
+        });
+        drop(guard);
+
+        // A bounded, structured error: it names the destination and leaks no
+        // telemetry payload.
+        let message = error.to_string();
+        assert!(message.contains("Failed to write"), "{message}");
+        assert!(message.contains("observability-bundle.json"), "{message}");
+        assert!(
+            !message.contains('\n'),
+            "the export error must stay single-line: {message}"
+        );
+        assert!(
+            !message.contains("logs_export_isolation_parent"),
+            "the export error must not echo telemetry payload: {message}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&parent_file).expect("blocking file survives"),
+            "preserve existing file"
+        );
+        assert!(!destination.exists(), "no partial bundle may be written");
+
+        // Previously persisted telemetry is intact and still readable through
+        // the production reader.
+        let persisted = super::read_structured_events(
+            date.clone(),
+            Some(20),
+            Some("run-export-isolation-proof".into()),
+        )
+        .expect("the failed export must not break the structured reader");
+        assert_eq!(persisted.total_lines, 1);
+        let event: serde_json::Value = serde_json::from_str(persisted.content.trim())
+            .expect("persisted telemetry still parses after a failed export");
+        assert_eq!(event["fields"]["operation"], "logs_export_isolation_parent");
+        assert_eq!(event["fields"]["outcome"], "success");
+
+        let all = super::read_structured_events_full(date)
+            .expect("full structured read after a failed export");
+        for line in all.lines() {
+            serde_json::from_str::<serde_json::Value>(line)
+                .expect("every persisted record is still valid JSON");
+        }
+        assert_eq!(
+            all.lines().count(),
+            before.lines().count() + 1,
+            "the failed export must add exactly its own surfaced error event: {all}"
+        );
+        let failure = all
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("valid JSON"))
+            .find(|event| event["fields"]["operation"] == "observability_bundle_export")
+            .expect("the failed export's operation timing must be persisted");
+        assert_eq!(failure["fields"]["outcome"], "error");
+    }
+
     struct ChunkTrackingReader<R> {
         inner: R,
         max_requested: usize,

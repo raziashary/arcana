@@ -534,6 +534,140 @@ mod tests {
         assert!(health.snapshot().structured_write_failures > 0);
     }
 
+    /// TG4-24 telemetry-failure injection, reader half: the injected structured
+    /// write failure is counted on the **process-global** health handle the
+    /// production initialiser wires into its writer (`PROCESS_HEALTH`, see
+    /// `init_with_filter` → `ObservedWriter { failures: Arc::clone(...) }`), and
+    /// the loss is read back through `process_health_snapshot()` — the exact
+    /// function the Tauri Logs summariser calls. A real production
+    /// `TasksDb::create` still returns its true success result and the row
+    /// survives reopening the database file, so a lost telemetry record cannot
+    /// be confused with a lost task.
+    ///
+    /// The existing `telemetry_writer_failure_is_counted_without_losing_database_work`
+    /// proves the writer-side counter on a *locally* constructed `LoggingHealth`;
+    /// this test proves the reader the Logs UI consumes observes the same handle
+    /// the shipped initialiser installs.
+    #[test]
+    fn process_health_reports_injected_structured_write_failure_and_task_result_survives() {
+        use crate::db::tasks::{CreateTaskInput, TasksDb};
+        use crate::db::test_support::with_home;
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = with_home(home.path());
+
+        let baseline = process_health_snapshot().structured_write_failures;
+
+        // Open through the shipped home-based entry point; the row's durability
+        // below is therefore a property of the production access path.
+        let database = TasksDb::open().expect("open isolated tasks database");
+        let database_path = home.path().join(".arcana").join("tasks.db");
+
+        // Mirror the production structured writer stack exactly, but against
+        // the process-global health handle instead of a private clone.
+        let health = PROCESS_HEALTH.get_or_init(LoggingHealth::default).clone();
+        let writer = ObservedWriter {
+            inner: FailingWriter,
+            failures: Arc::clone(&health.structured_write_failures),
+        };
+        let (writer, guard) = tracing_appender::non_blocking(RedactingJsonWriter {
+            inner: writer,
+            pending: Vec::new(),
+        });
+        let subscriber = Registry::default().with(structured_telemetry_layer(writer));
+
+        let task = tracing::subscriber::with_default(subscriber, || {
+            database
+                .create(CreateTaskInput {
+                    title: "durable task despite process-wide telemetry failure".into(),
+                    description: Some("private-description-canary".into()),
+                    priority: "p2".into(),
+                    task_type: "feature".into(),
+                    acceptance_criteria: "the task result survives telemetry loss".into(),
+                    created_by: Some("tg4-24-telemetry-failure".into()),
+                })
+                .expect("a telemetry write failure must not fail the task operation")
+        });
+        drop(guard);
+
+        // (i) The operation's own result is the true success result.
+        assert!(task.id > 0);
+        assert_eq!(task.status.as_str(), "ready");
+        assert_eq!(
+            task.title,
+            "durable task despite process-wide telemetry failure"
+        );
+
+        // (iv) The authoritative row is persisted: reopen the database file and
+        // read it back without the original connection.
+        drop(database);
+        let reopened = TasksDb::open_at(&database_path).expect("reopen the tasks database");
+        let persisted = reopened
+            .get_by_id(task.id)
+            .expect("read the task back after reopen")
+            .expect("the telemetry failure must not have prevented the insert");
+        assert_eq!(persisted.title, task.title);
+        assert_eq!(persisted.status, task.status);
+        assert_eq!(persisted.id, task.id);
+
+        // (ii)+(iii) The telemetry loss is surfaced through the process-global
+        // health snapshot the Logs reader consumes; nothing above panicked.
+        let after = process_health_snapshot().structured_write_failures;
+        assert!(
+            after > baseline,
+            "process health must expose the injected structured telemetry failure \
+             (baseline {baseline}, after {after})"
+        );
+    }
+
+    /// TG4-24 telemetry-failure injection, no-sink half. This **documents
+    /// current behaviour, it does not endorse it**: when `~/.arcana/logs`
+    /// cannot be prepared as a directory, `resolve_log_dir` returns `None` and
+    /// `init_with_filter` takes its console-only early return, which registers
+    /// **no** writer and therefore no failure counter. The telemetry loss is
+    /// reported only to stderr, and only the raw `None` here makes it visible —
+    /// no structured error reaches a reader. Core task execution and its result
+    /// are unaffected and the row stays durable.
+    #[test]
+    fn unpreparable_log_directory_degrades_to_console_only_without_blocking_core_work() {
+        use crate::db::tasks::{CreateTaskInput, TasksDb};
+        use crate::db::test_support::with_home;
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = with_home(home.path());
+
+        // A file where the log directory must be is the Windows-safe,
+        // in-process way to make directory preparation fail.
+        std::fs::create_dir_all(home.path().join(".arcana")).expect("create arcana directory");
+        std::fs::write(home.path().join(".arcana").join("logs"), "not a directory")
+            .expect("occupy the log directory path with a regular file");
+
+        assert!(
+            resolve_log_dir().is_none(),
+            "an unpreparable log directory must fall back to console-only logging"
+        );
+
+        // Core work proceeds through the shipped home-based entry point and
+        // keeps its real result even though no telemetry sink can be installed.
+        let database = TasksDb::open().expect("core task database still opens");
+        let task = database
+            .create(CreateTaskInput {
+                title: "durable task without any telemetry sink".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "the task result must not depend on the sink".into(),
+                created_by: Some("tg4-24-telemetry-no-sink".into()),
+            })
+            .expect("task execution must not depend on telemetry persistence");
+        assert_eq!(task.status.as_str(), "ready");
+        let readback = database
+            .get_by_id(task.id)
+            .expect("read the task back")
+            .expect("the row must be persisted");
+        assert_eq!(readback.title, task.title);
+    }
+
     #[test]
     fn readable_writer_redacts_credentials_before_emitting_bytes() {
         let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
