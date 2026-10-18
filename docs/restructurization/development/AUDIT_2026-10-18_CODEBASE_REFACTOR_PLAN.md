@@ -243,23 +243,31 @@ Do **not** run two workstreams that touch the same files concurrently.
 `scripts/build-macos-sandbox.sh`, `docs/restructurization/development/P4_EXPANDED_GOAL.md`, and
 the untracked session-checkpoint receipts.
 
-## 8. Open questions for the owner
+## 8. Owner rulings (2026-10-18) and what remains open
 
-1. **Scope of the frozen WIP:** are those uncommitted files part of the refactor surface, or
-   frozen inputs I must design around?
-2. **Push approval:** 18 local commits are unpushed on `main` (all individually validated; none
-   rewrites history). Approve pushing them?
-3. **Escalations I want a ruling on** (each is a shipped-contract or user-visible change, so I
-   stopped): (a) carry `ErrorClass` structurally instead of parsing it back out of the error
-   string; (b) generate the telemetry label set instead of hand-maintaining 349 entries;
-   (c) port the graph store onto the shared migration ladder and version its triggers; (d) the
-   fate of `guard_and_validate`'s sentinel check (delete, or re-point at the sandboxed build dir).
-4. **Priority:** continue closing the remaining P4 rows alongside the refactor, or pause P4 and
-   land W1–W3 first?
-5. **Hook trust posture (§3.7):** are persisted hooks user-authored **trusted** code, or must
-   their HTTP/file actions obey the same consent and jailing as provider/MCP traffic and the
-   Shell hook action? This decides whether W8 is a security fix or a documentation change.
-6. **`TESTING_GATES.md` / MDP token honesty:** three `P4` rows carry `GATE-PROVEN`/
-   `UNIT-PROVEN`/`SECURITY-PROVEN` while unchecked, and one receipt names a command that no
-   longer exists. May I correct those to the current truth (no checkbox changes), and may the 27
-   `src-tauri` re-export veneers be given a stated retirement condition or removed?
+1. **The uncommitted WIP is *in scope*, not frozen.** Ruling: *"they were part of the refactor —
+   most of the work there is trying to create a sandboxed system where every project command is
+   vetted against a system … so rather than an agent running cmd, it's running a single strong
+   tool set."* That is the direction this plan must serve, so the target shape is: `project_command`
+   stops being a general command runner and becomes a **vetted tool**, and the sandbox/capability
+   system is the thing that vets it. Grounding: `P4_EXPANDED_GOAL.md` and MDP **P4-61** (untrusted
+   project code, sandbox, toolchain staging, install approval), with the owner's receipts in the
+   untracked `_verify/P4-61-*.md` set. Consequence for this plan: W5/W6 are re-scoped around that
+   boundary — a capability the code cannot name is a capability the sandbox cannot deny.
+2. **Push: approved and executed.** `6832bc5..4598e1f` is on `main`; `P4_EXPANDED_GOAL.md` §24 also
+   gives standing authorization for verified work. Everything pushed was individually validated,
+   and no push rewrites history.
+3. **All four escalations approved** — now authorized workstream items, not questions:
+   (a) **structural `ErrorClass` — DONE** (`ADR-LOG-RESTRUCT-0399`, commit `ad56120`; it closed
+   `F-13`, a recorded high-severity finding, in `_verify/A9-P3-claims-refutation.md`);
+   (b) generate the telemetry label set instead of hand-maintaining 349 entries; (c) port the graph
+   store onto the shared migration ladder and version its triggers, **with a backup guard**;
+   (d) decide and act on `guard_and_validate`'s sentinel check.
+4. **Priority: continue P4 in parallel** with the no-behaviour-change workstreams.
+5. **Hook trust posture: consent-gate them.** Persisted hooks must obey the same consent and
+   jailing as provider/MCP traffic and the Shell action, so **W8 is a security fix, not a
+   documentation change**.
+6. **Still open (§3.7):** may I correct three `P4` status tokens that read `GATE-PROVEN` /
+   `UNIT-PROVEN` / `SECURITY-PROVEN` while their rows are unchecked, plus the stale command name in
+   `_verify/A1-P0-code-audit.md:363` (no checkbox changes), and may the 27 `src-tauri` `pub use`
+   re-export veneers be given a stated retirement condition or removed?
