@@ -318,10 +318,22 @@ mod workspace_tests {
     #[tokio::test]
     async fn failed_checkpoint_blocks_file_and_parent_directory_creation() {
         let home = tempfile::tempdir().expect("isolated Arcana data root");
-        let arcana_dir = home.path().join(".arcana");
-        std::fs::create_dir_all(arcana_dir.join("config.db"))
-            .expect("make config.db path unusable");
         let _home = crate::db::test_support::with_home(home.path());
+        // Inject the checkpoint failure at the checkpoint's own layer. The
+        // previous injection made `.arcana/config.db` a directory, which no
+        // longer isolates this path: `config.db` is also the hooks store, so
+        // the fail-closed PreToolUse hook reader (ADR-LOG-RESTRUCT-0380) now
+        // refuses first at the executor boundary. A BEFORE INSERT trigger on
+        // `checkpoints` keeps the database healthy and aborts only the snapshot
+        // row, so the refusal still comes from the checkpoint gate.
+        let config = crate::db::config_db::open().expect("open isolated config database");
+        config
+            .execute_batch(
+                "CREATE TRIGGER p4_checkpoint_failure BEFORE INSERT ON checkpoints
+                 BEGIN SELECT RAISE(ABORT, 'injected checkpoint failure'); END;",
+            )
+            .expect("inject isolated checkpoint failure");
+        drop(config);
         let workspace = tempfile::tempdir().expect("workspace");
         let destination = workspace.path().join("new/nested/main.rs");
 
@@ -447,12 +459,23 @@ mod workspace_tests {
         use std::sync::Arc;
 
         let home = tempfile::tempdir().expect("isolated Arcana home");
-        // Prepare failure injection before publishing process-global HOME.
-        // Concurrent tests that persist counters must not win the path first.
-        let arcana_dir = home.path().join(".arcana");
-        std::fs::create_dir_all(arcana_dir.join("config.db"))
-            .expect("make checkpoint database path unusable");
         let _home = crate::db::test_support::with_home(home.path());
+        // Prepare failure injection AFTER publishing the process-global HOME
+        // but at the checkpoint's own layer: a BEFORE INSERT trigger on
+        // `checkpoints` aborts the snapshot row while `config.db` — which is
+        // also the hooks store — stays openable, so the fail-closed PreToolUse
+        // hook reader (ADR-LOG-RESTRUCT-0380) admits the call and the write
+        // reaches the checkpoint gate this test names. The previous injection
+        // made `.arcana/config.db` a directory and now denies at the hook gate
+        // instead, never exercising the checkpoint path.
+        let config = crate::db::config_db::open().expect("open isolated config database");
+        config
+            .execute_batch(
+                "CREATE TRIGGER p4_checkpoint_failure BEFORE INSERT ON checkpoints
+                 BEGIN SELECT RAISE(ABORT, 'injected checkpoint failure'); END;",
+            )
+            .expect("inject isolated checkpoint failure");
+        drop(config);
         let workspace = tempfile::tempdir().expect("isolated selected workspace");
         let worker_slug = "worker-checkpoint-test";
         let tasks = crate::db::tasks::TasksDb::open().expect("open isolated TasksDb");
