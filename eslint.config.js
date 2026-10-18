@@ -86,6 +86,32 @@ export default tseslint.config(
     },
   },
   {
+    // e2e tooling is a Node program (`process`, `Buffer`, `fetch`) that also
+    // evaluates functions inside the browser page (`window`, `document`), so
+    // both global sets apply. Without a block here the globals above never
+    // reached these files — that block matches only `**/*.{ts,tsx}` — and
+    // `no-undef` reported plain `.js`/`.mjs` as broken: 95 errors across three
+    // tracked files made `npm run lint` red on main, which failed
+    // `frontend-checks` and therefore skipped `build-smoke` and `e2e-smoke`.
+    files: ['e2e/**/*.{js,mjs}'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
+  {
+    // Build and receipt scripts are Node programs (and are not type-checked:
+    // `tsconfig.json` includes only `src`). `no-undef` still applies to them,
+    // which is the point — they are plain JS with no compiler behind them.
+    files: ['scripts/**/*.{js,mjs}'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+  },
+  {
     // Test files get the test globals and a looser hand.
     files: ['**/*.test.{ts,tsx}', 'src/test/**'],
     languageOptions: {

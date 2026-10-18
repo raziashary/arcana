@@ -249,7 +249,10 @@ try {
       const failure = JSON.parse(await readFile(failurePath, 'utf8'));
       if (typeof failure.stage === 'string' && /^[a-z_]{1,40}$/.test(failure.stage)) failureStage = failure.stage;
       if (typeof failure.reason === 'string' && /^[a-z_]{1,40}$/.test(failure.reason)) failureReason = failure.reason;
-    } catch {}
+    } catch {
+      // No renderer failure receipt (or an unreadable one). That is a normal
+      // outcome — the fallback message below reports the exit code instead.
+    }
     if (failureStage || result.code !== 0) {
       throw new Error(`Arcana exited with code ${result.code}, signal ${result.signal ?? 'none'}, stage: ${failureStage ?? 'no renderer failure receipt'}, reason: ${failureReason ?? 'unavailable'}.`);
     }
@@ -304,7 +307,9 @@ try {
       await import('node:fs/promises').then(({ access }) => access(fixtureRoot));
       console.error(`Fixture cleanup could not be verified: ${fixtureRoot}`);
       process.exitCode = 1;
-    } catch {}
+    } catch {
+      // `access()` rejecting means the path is gone, i.e. cleanup succeeded.
+    }
   } else {
     console.error(`Fixture preserved because process cleanup is unconfirmed: ${fixtureRoot}`);
     process.exitCode = 1;
