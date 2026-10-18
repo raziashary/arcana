@@ -2329,9 +2329,16 @@ fn main() {
         let workspace = tempfile::tempdir().expect("create native Linux workspace");
         std::fs::create_dir_all(workspace.path().join("src"))
             .expect("create Rust source directory");
+        // The workspace lives under `arcana-core/target/`, i.e. inside the
+        // Arcana cargo workspace, so the manifest must declare its own empty
+        // `[workspace]` table. Without it cargo refuses the build outright
+        // ("current package believes it's in a workspace when it's not"),
+        // which made the child exit non-zero immediately instead of timing
+        // out. The checked-in `tests/fixtures/fx-repo-rust` fixture carries
+        // the same table for the same reason.
         std::fs::write(
             workspace.path().join("Cargo.toml"),
-            "[package]\nname = \"timeout-batch-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n",
+            "[package]\nname = \"timeout-batch-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\nbuild = \"build.rs\"\n\n[workspace]\n",
         )
         .expect("write Cargo manifest");
         std::fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n")
@@ -2842,9 +2849,15 @@ fn main() {
             .expect("canonicalize sandbox-compatible workspace");
         std::fs::create_dir_all(workspace.join("src")).expect("create compiler source tree");
         let _home = crate::db::test_support::with_home(&home);
+        // The workspace lives under `arcana-core/target/`, i.e. inside the
+        // Arcana cargo workspace, so the manifest must declare its own empty
+        // `[workspace]` table. Without it cargo refuses the build outright
+        // ("current package believes it's in a workspace when it's not") and
+        // the diagnostics parser sees no `error[E####]` line, falling back to
+        // BUILD_FAILED instead of the planted E0425.
         std::fs::write(
             workspace.join("Cargo.toml"),
-            "[package]\nname = \"registered-compiler-privacy\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            "[package]\nname = \"registered-compiler-privacy\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
         )
         .expect("write dependency-free Cargo manifest");
         std::fs::write(
@@ -3057,6 +3070,14 @@ fn main() {
         use command::{CommandIntent, Toolchain};
 
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        // Python staging is a process-global cache and must not happen inside a
+        // command timeout: prime it here exactly as the mixed-batch test does,
+        // so this test does not depend on another test in the same process
+        // having staged the runtime first (it failed on a fresh process with
+        // "runtime files were not found").
+        #[cfg(windows)]
+        crate::platform::python_runtime::stage()
+            .expect("pre-stage the signed Python runtime outside the command timeouts");
         let fixtures = [
             (
                 "fx-repo-rust",
@@ -4319,30 +4340,41 @@ fn main() {
         );
     }
 
+    /// Supersedes `windows_batch_package_manager_shim_runs_with_fixed_argv`,
+    /// which asserted pre-guard behaviour: a user-owned `.cmd` shim used to be
+    /// granted to project code and executed. The guard added later refuses
+    /// that, so this test pins the refusal *through the production launcher*
+    /// (the sibling `user_owned_package_manager_shim_requires_explicit_staging`
+    /// pins the guard helper itself). The fixed-argv batch path is still
+    /// covered by the checked-in node corpus, whose `npm.cmd` lives under
+    /// `Program Files` and therefore takes the same `cmd.exe /d /s /c` branch.
     #[cfg(windows)]
     #[tokio::test]
-    async fn windows_batch_package_manager_shim_runs_with_fixed_argv() {
+    async fn user_owned_package_manager_shim_is_refused_by_the_production_launcher() {
         let root = tempfile::Builder::new()
             .prefix("arcana cmd shim ")
             .tempdir()
             .expect("create a temporary directory whose path includes spaces");
         let shim = root.path().join("npm.cmd");
-        std::fs::write(&shim, "@echo off\r\necho %1 %2\r\nexit /b 17\r\n")
+        std::fs::write(&shim, "@echo off\r\nexit /b 0\r\n")
             .expect("write local package-manager shim");
         let resolved = command::ResolvedCommand {
             program: shim.to_string_lossy().into_owned(),
             args: vec!["run".into(), "build".into()],
         };
 
-        let output = run_resolved_command(&resolved, root.path(), root.path())
-            .await
-            .expect("the production process launcher must run a Windows shim");
-        assert_eq!(
-            output.exit_code, 17,
-            "stdout: {}\nstderr: {}",
-            output.stdout, output.stderr
+        let error = match run_resolved_command(&resolved, root.path(), root.path()).await {
+            Ok(output) => panic!(
+                "a user-owned shim must not be granted to project code (exit {})",
+                output.exit_code
+            ),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(
+            error.to_string().contains("stage it explicitly"),
+            "refusal must name the explicit staging path: {error}"
         );
-        assert!(output.stdout.contains("run build"), "{}", output.stdout);
     }
 
     #[tokio::test]
