@@ -2902,20 +2902,21 @@ mod tests {
         let path = temp_db("journal-migration");
         {
             let conn = crate::db::open_tuned(&path).expect("create legacy runs database");
-            conn.execute_batch(
-                "CREATE TABLE runs (
-                    id TEXT PRIMARY KEY, kind TEXT NOT NULL, actor TEXT, started_at TEXT NOT NULL,
-                    ended_at TEXT, outcome TEXT, host TEXT NOT NULL, pid INTEGER NOT NULL,
-                    parent_run_id TEXT REFERENCES runs(id), detail TEXT
-                 );
-                 CREATE TABLE worker_run_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    run_id TEXT NOT NULL REFERENCES runs(id), task_id INTEGER,
-                    event_at TEXT NOT NULL, operation TEXT NOT NULL, outcome TEXT NOT NULL
-                 );
-                 PRAGMA user_version = 3;",
-            )
-            .expect("write v3 schema");
+            // Build the legacy fixture from the real ladder up to the legacy
+            // version instead of hand-writing the rung's tables. The previous
+            // hand-written "v3" schema omitted `worker_run_state` (created by
+            // rung 2), so the journal append below failed with "no such table:
+            // main.worker_run_state" while the database still reported
+            // version 3. Deriving the fixture from `LADDER` means a rung added
+            // between v1 and the legacy version can no longer drift away from
+            // this fixture.
+            crate::db::migrate::run_ladder(&conn, "runs", &LADDER[..3])
+                .expect("apply the real ladder through the legacy version");
+            assert_eq!(
+                crate::db::migrate::user_version(&conn).expect("legacy version"),
+                3,
+                "fixture must represent the real version 3 schema"
+            );
         }
         let db = RunsDb::open_at(&path).expect("upgrade v3 database");
         assert_eq!(db.schema_version().expect("schema version"), 10);
