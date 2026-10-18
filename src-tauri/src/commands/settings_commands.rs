@@ -64,9 +64,11 @@ fn build_provider_info(id: &str, name: &str) -> Result<ProviderInfo> {
     // Settings render, once per provider. `exists` overwrites it instead.
     let has_key = VaultManager::exists(&provider_key(id))?;
 
-    // P2-53/P2-23. The fourth copy of this provider match. An empty key is
-    // fine here: nothing is called, the adapter is constructed only to ask it
-    // which models it serves, and that answer comes from the shared catalogue.
+    // P2-53/P2-23. This used to be a hand-rolled copy of the provider match;
+    // it now goes through the factory (see the comment at the top of
+    // `provider/factory.rs`). An empty key is fine here: nothing is called,
+    // the adapter is constructed only to ask it which models it serves, and
+    // that answer comes from the shared catalogue.
     let models = arcana_core::provider::factory::build(id, String::new())
         .map(|p| p.models())
         .unwrap_or_default();
@@ -116,13 +118,11 @@ pub(super) async fn check_provider_metadata_connection(
         Err(_) => "error",
     };
     timer.set_outcome(outcome);
-    let destination = match provider.id() {
-        "google" => "provider:google",
-        "anthropic" => "provider:anthropic",
-        "openai" => "provider:openai",
-        "groq" => "provider:groq",
-        _ => "unsupported",
-    };
+    // The consent owner also validates the id (it refuses anything that is not
+    // a real provider destination), so this call keeps one list instead of a
+    // second copy that a newly added provider would not reach.
+    let destination = arcana_core::egress_consent::provider_destination(provider.id())
+        .unwrap_or_else(|_| "unsupported".to_string());
     tracing::info!(
         target: "arcana::telemetry",
         event_type = "provider_connection_check",

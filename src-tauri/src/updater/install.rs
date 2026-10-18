@@ -279,7 +279,11 @@ pub fn record_pending_update(version: &str, current_version: &str) -> Result<()>
 
     records.push(UpdateRecord {
         version: version.to_string(),
-        installed_at: iso_now(),
+        // Canonical fixed-millisecond UTC form (`db::timestamps`), like every
+        // other persisted timestamp. `iso_now` used to hand-roll a
+        // second-precision copy of this here, which is the divergence
+        // P4-57/TG4-19 exists to prevent.
+        installed_at: arcana_core::db::timestamps::now_rfc3339(),
         previous_version: current_version.to_string(),
         channel: "stable".to_string(),
     });
@@ -355,49 +359,4 @@ fn skipped_versions_path() -> PathBuf {
     PathBuf::from(home)
         .join(".arcana")
         .join("skipped_versions.json")
-}
-
-fn iso_now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let s = secs % 60;
-    let m = (secs / 60) % 60;
-    let h = (secs / 3600) % 24;
-    let days = secs / 86400;
-    let y400 = days / 146097;
-    let rem = days % 146097;
-    let y100 = rem / 36524;
-    let rem = rem % 36524;
-    let y4 = rem / 1461;
-    let rem = rem % 1461;
-    let y1 = rem / 365;
-    let year = y400 * 400 + y100 * 100 + y4 * 4 + y1 + 1970;
-    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-    let mdays: [u64; 12] = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-    let mut doy = rem % 365 + if y1 == 4 { 365 } else { 0 };
-    let mut mo = 1u64;
-    for md in &mdays {
-        if doy < *md {
-            break;
-        }
-        doy -= md;
-        mo += 1;
-    }
-    let day = doy + 1;
-    format!("{year}-{mo:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
 }
