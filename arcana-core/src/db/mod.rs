@@ -1,12 +1,19 @@
 // Database module — houses all SQLite repositories beyond the session store.
 // Each sub-module manages its own connection and migration.
-// Databases:
-//   ~/.arcana/tasks.db            — Internal task board (Supervisor ↔ Workers)
-//   ~/.arcana/config.db           — ARCANA.md instructions + per-model configs
-//   ~/.arcana/workers.db          — Worker registry (Phase 2.2)
+// Databases, all under `~/.arcana/` unless noted:
+//   tasks.db        — Task board (Supervisor ↔ Workers)
+//   workers.db      — Worker registry (Phase 2.2)
+//   runs.db         — Worker runs, run events, and the operation journal
+//   plans.db        — Plan documents
+//   config.db       — Settings and configuration
+//   annotations.db  — File annotations
+//   analytics.db    — Token/cost telemetry and fleet health
+//   memory.db       — Memory records
+//   arcana.db       — Session store (opened in `session/storage.rs`)
+//   `<project>/.arcana/graph.db` — Per-project code graph (`graph/registry.rs`)
 //
-// Session data lives in ~/.arcana/arcana.db (see session/storage.rs). It was
-// ~/.airs/arcana.db until P1-14 consolidated the two data roots.
+// Session data lives in ~/.arcana/arcana.db. It was ~/.airs/arcana.db until
+// P1-14 consolidated the two data roots.
 
 pub mod annotations;
 pub mod app_settings;

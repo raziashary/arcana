@@ -418,16 +418,6 @@ fn db_path() -> Result<PathBuf> {
     Ok(crate::db::arcana_dir()?.join("arcana.db"))
 }
 
-// Lightweight stub for dirs_next — we can't add a dep mid-build, use std::env
-mod dirs_next {
-    pub fn home_dir() -> Option<std::path::PathBuf> {
-        std::env::var("USERPROFILE")
-            .or_else(|_| std::env::var("HOME"))
-            .ok()
-            .map(std::path::PathBuf::from)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
