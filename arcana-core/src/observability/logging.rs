@@ -15,7 +15,7 @@ use std::{
 };
 
 use tracing::Subscriber;
-use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::non_blocking::{ErrorCounter, WorkerGuard};
 use tracing_subscriber::{
     filter::filter_fn, fmt, layer::SubscriberExt, registry::LookupSpan, util::SubscriberInitExt,
     EnvFilter, Layer,
@@ -37,12 +37,16 @@ pub struct LoggingGuards {
 /// Write failures are counters. Missing sinks are a state: when the home log
 /// directory cannot be prepared, no writer exists to count anything, so without
 /// `file_logging_unavailable` an empty Logs view would be indistinguishable from
-/// a process that simply had nothing to say.
+/// a process that simply had nothing to say. Queue drops are a third kind: the
+/// lossy `NonBlocking` writer discards a fragment at capacity and reports
+/// success, so only its own counter can reveal that telemetry went missing.
 #[derive(Clone, Default)]
 pub struct LoggingHealth {
     readable_write_failures: Arc<AtomicU64>,
     structured_write_failures: Arc<AtomicU64>,
     file_logging_unavailable: Arc<AtomicBool>,
+    readable_dropped: Arc<OnceLock<ErrorCounter>>,
+    structured_dropped: Arc<OnceLock<ErrorCounter>>,
 }
 
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]
@@ -52,6 +56,11 @@ pub struct LoggingHealthSnapshot {
     /// True when this process could not prepare its file log directory, so
     /// every file stream is absent and output is console-only.
     pub file_logging_unavailable: bool,
+    /// Write fragments discarded by the lossy readable queue. These never reach
+    /// the writer, so they cannot appear in `readable_write_failures`.
+    pub readable_dropped_lines: u64,
+    /// Write fragments discarded by the lossy structured queue.
+    pub structured_dropped_lines: u64,
 }
 
 static PROCESS_HEALTH: OnceLock<LoggingHealth> = OnceLock::new();
@@ -69,12 +78,29 @@ impl LoggingHealth {
             readable_write_failures: self.readable_write_failures.load(Ordering::Relaxed),
             structured_write_failures: self.structured_write_failures.load(Ordering::Relaxed),
             file_logging_unavailable: self.file_logging_unavailable.load(Ordering::Relaxed),
+            readable_dropped_lines: dropped_lines(&self.readable_dropped),
+            structured_dropped_lines: dropped_lines(&self.structured_dropped),
         }
+    }
+
+    /// Adopt the queues' own drop counters. Called once, at subscriber
+    /// installation, because the counters live on the `NonBlocking` handles the
+    /// layers own.
+    fn install_drop_counters(&self, readable: ErrorCounter, structured: ErrorCounter) {
+        let _ = self.readable_dropped.set(readable);
+        let _ = self.structured_dropped.set(structured);
     }
 
     fn mark_file_logging_unavailable(&self) {
         self.file_logging_unavailable.store(true, Ordering::Relaxed);
     }
+}
+
+fn dropped_lines(counter: &OnceLock<ErrorCounter>) -> u64 {
+    counter
+        .get()
+        .map(|counter| counter.dropped_lines() as u64)
+        .unwrap_or(0)
 }
 
 impl LoggingGuards {
@@ -134,6 +160,7 @@ pub fn init_with_filter(filter: EnvFilter) -> LoggingGuards {
         pending: Vec::new(),
         overflowed: false,
     });
+    let readable_dropped = readable_writer.error_counter();
     let readable_layer = fmt::layer()
         .with_writer(readable_writer)
         .with_ansi(false)
@@ -149,6 +176,7 @@ pub fn init_with_filter(filter: EnvFilter) -> LoggingGuards {
             },
             pending: Vec::new(),
         });
+    health.install_drop_counters(readable_dropped, structured_writer.error_counter());
     let structured_layer = structured_telemetry_layer(structured_writer);
     // Console/readable verbosity is user-configurable, but the structured
     // stream is the observability contract. Keep sub-10ms SQLite statements
@@ -1068,5 +1096,211 @@ mod tests {
             .path()
             .join(format!("arcana-events.{today}.jsonl"))
             .exists());
+    }
+
+    fn emit_producer_cost_event(index: usize, secret: Option<&str>) {
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "producer_cost_fixture",
+            operation = "fixture_operation",
+            session_id = "producer-cost-session",
+            task_id = (index as u64 % 7) + 1,
+            duration_ns = (index as u64 % 1_000_000) + 1,
+            outcome = "success",
+            api_key = secret.unwrap_or(""),
+            "producer cost fixture"
+        );
+    }
+
+    /// Wait for the asynchronous writer to drain. `WorkerGuard::drop` waits only
+    /// a bounded time, so reading immediately after it can observe a partial
+    /// file and be mistaken for telemetry loss.
+    fn wait_for_jsonl_lines(path: &std::path::Path, expected: usize) -> usize {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            let count = std::fs::read_to_string(path)
+                .map(|jsonl| jsonl.lines().filter(|line| !line.is_empty()).count())
+                .unwrap_or(0);
+            if count >= expected || std::time::Instant::now() >= deadline {
+                return count;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    /// TG4-24 producer-cost measurement, and the large-volume completeness check
+    /// in the same fixture. The gate asks for producer, database instrumentation,
+    /// refresh and export cost on reproducible fixtures; the other three are
+    /// measured by `sqlite::measure_profile_callback_overhead_and_duration_resolution`
+    /// and `log_commands::measure_metrics_refresh_tail_and_full_export_on_reproducible_jsonl`.
+    /// This one measures what a *producer* pays on its own thread to emit through
+    /// the shipped stack, against the same formatting into a discarded sink, and
+    /// confirms a 20k-event burst loses nothing.
+    #[test]
+    fn measure_structured_producer_cost_on_a_reproducible_fixture() {
+        use std::io::BufWriter;
+        use std::time::Instant;
+
+        const EVENTS: usize = 20_000;
+        const SECRET: &str = "sk-abcdefghijklmnopqrstuvwxyz012345";
+
+        // Baseline: identical JSON formatting, discarded. No redaction buffer,
+        // no channel, no file.
+        let sink_subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_current_span(true)
+            .with_span_list(true)
+            .with_writer(std::io::sink)
+            .finish();
+        let sink_started = Instant::now();
+        tracing::subscriber::with_default(sink_subscriber, || {
+            for index in 0..EVENTS {
+                emit_producer_cost_event(index, None);
+            }
+        });
+        let sink_elapsed = sink_started.elapsed();
+
+        // Shipped stack, shipped constructor: RedactingJsonWriter ->
+        // ObservedWriter -> non_blocking -> buffered file. The rolling appender
+        // buffers per file, so the fixture does too; otherwise 20k tiny writes
+        // would measure syscalls.
+        let dir = tempfile::tempdir().expect("temporary log directory");
+        let path = dir.path().join("producer-cost.jsonl");
+        let file = std::fs::File::create(&path).expect("create producer fixture");
+        let health = LoggingHealth::default();
+        let (writer, guard) = tracing_appender::non_blocking(RedactingJsonWriter {
+            inner: ObservedWriter {
+                inner: BufWriter::new(file),
+                failures: Arc::clone(&health.structured_write_failures),
+            },
+            pending: Vec::new(),
+        });
+        let dropped = writer.error_counter();
+        let subscriber = Registry::default().with(structured_telemetry_layer(writer));
+        let producer_started = Instant::now();
+        tracing::subscriber::with_default(subscriber, || {
+            for index in 0..EVENTS {
+                // Every hundredth event carries a planted credential, so the
+                // measured path includes the redaction work it really does.
+                let secret = (index % 100 == 0).then_some(SECRET);
+                emit_producer_cost_event(index, secret);
+            }
+        });
+        let producer_elapsed = producer_started.elapsed();
+        let drain_started = Instant::now();
+        drop(guard);
+        let line_count = wait_for_jsonl_lines(&path, EVENTS);
+        let drain_elapsed = drain_started.elapsed();
+
+        let jsonl = std::fs::read_to_string(&path).expect("read producer fixture");
+        let records = jsonl
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("JSONL record"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            line_count, EVENTS,
+            "the structured writer must not drop events under a 20k burst"
+        );
+        assert_eq!(records.len(), EVENTS);
+        assert!(records
+            .iter()
+            .all(|record| record["fields"]["event_type"] == "producer_cost_fixture"));
+        assert!(
+            !jsonl.contains(SECRET),
+            "the writer boundary must redact planted credentials"
+        );
+        assert_eq!(
+            health.snapshot().structured_write_failures,
+            0,
+            "no write failure may be counted on a healthy fixture"
+        );
+        assert_eq!(
+            dropped.dropped_lines(),
+            0,
+            "a 20k burst must fit the shipped queue; a non-zero drop count here \
+             means the queue was exhausted, not that formatting got slower"
+        );
+
+        let producer_ns_per_event = producer_elapsed.as_nanos() / EVENTS as u128;
+        let sink_ns_per_event = sink_elapsed.as_nanos() / EVENTS as u128;
+        // A synchronous per-event file flush is the regression this catches; the
+        // cap leaves more than an order of magnitude of headroom over formatting.
+        assert!(
+            producer_ns_per_event < 250_000,
+            "producer cost regressed to {producer_ns_per_event} ns/event \
+             (sink baseline {sink_ns_per_event} ns/event)"
+        );
+        eprintln!(
+            "structured_producer_cost events={EVENTS} producer_total_ns={} producer_ns_per_event={producer_ns_per_event} sink_total_ns={} sink_ns_per_event={sink_ns_per_event} drain_ns={} persisted_bytes={} dropped_lines={}",
+            producer_elapsed.as_nanos(),
+            sink_elapsed.as_nanos(),
+            drain_elapsed.as_nanos(),
+            jsonl.len(),
+            dropped.dropped_lines(),
+        );
+    }
+
+    /// TG4-24 loss visibility. `tracing_appender`'s lossy queue discards a write
+    /// fragment at capacity and still reports success, so nothing reaches
+    /// `ObservedWriter` and no write failure is counted. The crate does expose
+    /// the drop count; without wiring it into `LoggingHealth` a reader could not
+    /// tell a complete burst from a truncated one.
+    #[test]
+    fn dropped_telemetry_is_reported_through_the_health_record() {
+        use std::io::Write as _;
+        use std::sync::mpsc;
+
+        struct SlowWriter {
+            /// Released on a separate thread so the worker stays busy long
+            /// enough for the one-slot queue to overflow.
+            _gate: mpsc::Receiver<()>,
+        }
+        impl Write for SlowWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let (_release, gate) = mpsc::channel();
+        let (mut writer, guard) = tracing_appender::non_blocking::NonBlockingBuilder::default()
+            .buffered_lines_limit(1)
+            .finish(SlowWriter { _gate: gate });
+        // Enqueue far more fragments than the one-slot queue plus one in-flight
+        // worker can hold; the rest are dropped by the lossy writer.
+        for index in 0..64 {
+            writer
+                .write_all(format!("fragment {index}\n").as_bytes())
+                .expect("lossy writes report success");
+        }
+        let dropped = writer.error_counter().dropped_lines();
+        assert!(
+            dropped > 0,
+            "the fixture must overflow the queue before this test can prove anything"
+        );
+
+        let health = LoggingHealth::default();
+        health.install_drop_counters(
+            tracing_appender::non_blocking::NonBlockingBuilder::default()
+                .buffered_lines_limit(1)
+                .finish(std::io::sink())
+                .0
+                .error_counter(),
+            writer.error_counter(),
+        );
+        let snapshot = health.snapshot();
+        assert_eq!(snapshot.structured_dropped_lines as usize, dropped);
+        assert_eq!(
+            snapshot.structured_write_failures, 0,
+            "a dropped fragment is not a write failure; conflating them would hide \
+             one behind the other"
+        );
+        drop(guard);
+        let _ = writer; // keep the channel open until the assertions are done
     }
 }

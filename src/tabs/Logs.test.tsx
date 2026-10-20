@@ -663,5 +663,26 @@ describe('Logs tab', () => {
 
     expect(await screen.findByText(/No log files found/)).toBeInTheDocument()
     expect(screen.queryByText(/File logging unavailable/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/telemetry line/)).not.toBeInTheDocument()
+  })
+
+  it('warns that records are missing when the writer queue dropped telemetry', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_log_files') return ['2026-10-20']
+      if (command === 'read_log_file') return { content: '', total_lines: 0, truncated: false, full_size_bytes: 0 }
+      if (command === 'read_structured_events') return { content: '', total_lines: 0, truncated: false, full_size_bytes: 0 }
+      if (command === 'summarize_observability_events') return {
+        total_events: 0, malformed_events: 0, readable_writer_failures: 0,
+        structured_writer_failures: 0, file_logging_unavailable: false,
+        readable_dropped_lines: 2, structured_dropped_lines: 3, by_event: {},
+      }
+      throw new Error(`Unexpected command: ${command}`)
+    })
+
+    render(<LogsTab />)
+
+    // A dropped fragment never reaches the writer, so no failure counter moves;
+    // without this warning the view would report a healthy, quiet host.
+    expect(await screen.findByText(/5 telemetry lines dropped by the writer queue/)).toBeInTheDocument()
   })
 })

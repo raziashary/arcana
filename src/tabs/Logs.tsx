@@ -340,6 +340,11 @@ export default function LogsTab() {
   const traces = structuredRecords.filter(record => record.spans?.length || record.fields?.duration_ns !== undefined)
   const traceTree = buildTraceTree(traces, traceSearch)
   const fullWindowMetrics = metrics ?? {}
+  // Queue drops happen before the writer, so they are invisible in the failure
+  // counters. Summon them into one number the header can warn about.
+  const droppedLines =
+    Number(fullWindowMetrics.readable_dropped_lines ?? 0) +
+    Number(fullWindowMetrics.structured_dropped_lines ?? 0)
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden" style={{ background: 'var(--bg-surface)' }}>
@@ -763,6 +768,11 @@ export default function LogsTab() {
               No log files found — restart the app to generate today's log.
             </span>
           )}
+          {droppedLines > 0 && (
+            <span role="status" style={{ fontFamily: 'monospace', fontSize: 9, color: 'var(--warning)' }}>
+              {`${droppedLines.toLocaleString()} telemetry line${droppedLines === 1 ? '' : 's'} dropped by the writer queue — this view is missing records.`}
+            </span>
+          )}
         </div>
       </div>
 
@@ -907,6 +917,7 @@ export default function LogsTab() {
           <div style={{ padding: '0 12px 12px', color: 'var(--text-4)', fontFamily: 'monospace', fontSize: 9 }}>
             {correlationFilter ? 'Selected-correlation totals' : 'Whole-day totals'} from {Number(fullWindowMetrics.total_events ?? 0).toLocaleString()} structured events
             {' · writer errors are process-lifetime totals'}
+            {droppedLines > 0 && ` · telemetry dropped: ${droppedLines.toLocaleString()} lines`}
             {fullWindowMetrics.file_logging_unavailable === true && ' · file logging unavailable (console only)'}
             {Number(fullWindowMetrics.malformed_events ?? 0) > 0 && ` · ${Number(fullWindowMetrics.malformed_events).toLocaleString()} malformed`}
           {metricsError && <div role="alert" style={{ color: '#FF6363', marginTop: 6 }}>Metrics unavailable: {metricsError}</div>}

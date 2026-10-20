@@ -72,6 +72,10 @@ pub struct ObservabilityMetrics {
     /// directory, so no file stream exists and the panel is console-only. A
     /// zero-event view must not be read as "nothing happened" while this is true.
     pub file_logging_unavailable: bool,
+    /// Write fragments the lossy writer queues discarded. They never reach the
+    /// writer, so they are invisible in the failure counters above.
+    pub readable_dropped_lines: u64,
+    pub structured_dropped_lines: u64,
     pub by_event: BTreeMap<String, EventAggregate>,
     pub outcomes: BTreeMap<String, u64>,
     pub by_provider_model: BTreeMap<String, ProviderModelAggregate>,
@@ -1015,6 +1019,8 @@ fn apply_writer_health(
     metrics.readable_writer_failures = health.readable_write_failures;
     metrics.structured_writer_failures = health.structured_write_failures;
     metrics.file_logging_unavailable = health.file_logging_unavailable;
+    metrics.readable_dropped_lines = health.readable_dropped_lines;
+    metrics.structured_dropped_lines = health.structured_dropped_lines;
 }
 
 #[cfg(test)]
@@ -1773,12 +1779,20 @@ mod tests {
                 readable_write_failures: 4,
                 structured_write_failures: 5,
                 file_logging_unavailable: true,
+                readable_dropped_lines: 6,
+                structured_dropped_lines: 7,
             },
         );
 
         assert_eq!(metrics.readable_writer_failures, 4);
         assert_eq!(metrics.structured_writer_failures, 5);
         assert!(metrics.file_logging_unavailable);
+        assert_eq!(
+            metrics.readable_dropped_lines, 6,
+            "a dropped fragment is telemetry loss and must reach the panel, not \
+             only the failure counters it never touches"
+        );
+        assert_eq!(metrics.structured_dropped_lines, 7);
     }
 
     #[test]

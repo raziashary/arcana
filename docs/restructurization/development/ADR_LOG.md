@@ -7836,3 +7836,53 @@ generation. Where the producer supplies no span id, repeated same-named spans st
 slowest duration per trace node" (23/23 in the tab, 62/62 repo-wide, typecheck and eslint clean);
 falsified by dropping subtree collection and by substituting a duration sum, both reverted.
 Receipt: `_verify/2026-10-20-P4-50-TRACE-AGGREGATION.md`.
+
+---
+
+## ADR-LOG-RESTRUCT-0406 — Producer cost is measured on the shipped stack, and queue drops are health
+
+**Context / 2026-10-20 (P4-50, TG4-24).** The gate asks for "producer, database instrumentation,
+refresh and export cost on reproducible fixtures." Three of those four already had measurements;
+producer cost did not. Writing the fixture produced two findings about how to measure telemetry at
+all.
+
+1. **A partial read is not a drop.** The first fixture read the JSONL immediately after
+   `WorkerGuard::drop` and saw 5,226 of 20,000 lines, which reads as catastrophic silent loss.
+   `WorkerGuard::drop` only waits a bounded time (100 ms to enqueue shutdown, 1 s for the worker),
+   so the read raced the worker. Polling until the file reaches the expected line count showed
+   **20,000/20,000 with `dropped_lines() == 0`**. The fixture now waits for the drain and says so
+   in its own doc comment; any future "we lost telemetry" claim must be checked against the drop
+   counter, not against a single read.
+2. **Drops are counted but were not reported.** `tracing_appender`'s lossy queue discards a write
+   fragment at capacity, returns `Ok(len)`, and increments its own `ErrorCounter`. Arcana never
+   read that counter, so a genuine overflow would look exactly like a quiet period — the same
+   class of ambiguity the missing-sink fix removed.
+
+**Decision.** (a) The producer-cost fixture uses the **shipped** constructor and log path, waits
+for the drain, and asserts complete persistence, redaction, zero write failures and zero dropped
+fragments in the same run, so the cost number and the completeness claim come from one artifact.
+(b) `LoggingHealth` adopts the queues' `ErrorCounter`s at installation
+(`install_drop_counters`) and exposes `readable_dropped_lines` / `structured_dropped_lines` in
+`LoggingHealthSnapshot`. They travel through `ObservabilityMetrics` (process lifetime, like the
+failure counters) and the Logs header warns "N telemetry lines dropped by the writer queue — this
+view is missing records" when nonzero. Drops stay **distinct** from write failures: a dropped
+fragment never reaches the writer, so conflating them would hide one behind the other.
+
+**Consequences.** Cost and completeness are one measurement, not two. Queue loss is visible to the
+same reader that sees failures and the missing sink, and the three remain distinguishable. The
+queue stays lossy, so the logging worker still cannot block application work.
+
+**Not claimed.** These are debug-profile numbers on one Windows host; they are not a production
+latency target and no threshold was tuned from them (the only assertion is a 250 µs/event ceiling
+that exists to catch a synchronous-flush regression, with >9× headroom over the measured
+26.8 µs/event). Queue capacity, backpressure policy and retention are unchanged.
+
+**Evidence.** `observability::logging::tests::measure_structured_producer_cost_on_a_reproducible_fixture`
+(`events=20000 producer_ns_per_event=26756 sink_ns_per_event=24879 drain_ns=5526379500
+dropped_lines=0`), `dropped_telemetry_is_reported_through_the_health_record`,
+`commands::log_commands::tests::metrics_payload_carries_the_missing_file_sink_state`, and
+`src/tabs/Logs.test.tsx` "warns that records are missing when the writer queue dropped telemetry".
+Falsified: uninstalled counters reported 0 against 63 real drops; the transport drop was reverted
+to a literal `0` (test failed, 0 vs 7); the header warning made unconditional failed three tests,
+and removed failed the new one. Receipt:
+`_verify/2026-10-20-P4-50-PRODUCER-COST-AND-DROP-VISIBILITY.md`.
