@@ -41,6 +41,39 @@ interface TraceNode {
   events: StructuredRecord[]
 }
 
+/** Every event in a node's subtree, including the node's own operations. */
+function collectTraceRecords(node: TraceNode): StructuredRecord[] {
+  return [...node.events, ...Array.from(node.children.values()).flatMap(collectTraceRecords)]
+}
+
+interface TraceSummary {
+  operations: number
+  /** Wall-clock distance between the first and last recorded event, when timestamps exist. */
+  windowMs: number | null
+  /** Slowest single measured operation; zero-duration samples stay excluded, like the metrics. */
+  slowestMs: number | null
+}
+
+/**
+ * Aggregate a trace node across its whole subtree. The window is deliberately
+ * wall-clock rather than a sum of durations: a parent span's duration already
+ * covers its children, so summing would double-count nested work.
+ */
+function summarizeTrace(node: TraceNode): TraceSummary {
+  const records = collectTraceRecords(node)
+  const durations = records
+    .map(record => Number(record.fields?.duration_ns))
+    .filter(value => Number.isFinite(value) && value > 0)
+  const times = records
+    .map(record => (record.timestamp ? Date.parse(record.timestamp) : Number.NaN))
+    .filter(value => Number.isFinite(value))
+  return {
+    operations: records.length,
+    windowMs: times.length > 1 ? Math.max(...times) - Math.min(...times) : null,
+    slowestMs: durations.length > 0 ? Math.max(...durations) / 1_000_000 : null,
+  }
+}
+
 function buildTraceTree(records: StructuredRecord[], search = ''): TraceNode[] {
   const roots = new Map<string, TraceNode>()
   for (const [recordIndex, record] of records.entries()) {
@@ -942,9 +975,18 @@ function MetricCard({ label, value }: { label: string; value: string }) {
 }
 
 function TraceTreeNode({ node }: { node: TraceNode }) {
+  const summary = summarizeTrace(node)
+  const aggregate = summary.operations > 1
+    ? [
+        `${summary.operations} ops`,
+        summary.windowMs !== null ? `${summary.windowMs.toFixed(2)} ms window` : null,
+        summary.slowestMs !== null ? `slowest ${summary.slowestMs.toFixed(2)} ms` : null,
+      ].filter(Boolean).join(' · ')
+    : ''
   return <details open style={{ marginLeft: 12, borderLeft: '1px solid var(--border-2)' }}>
     <summary style={{ cursor: 'pointer', padding: '6px 10px', color: 'var(--aqua)', fontFamily: 'monospace', fontSize: 10 }}>
-      {node.name}
+      <span>{node.name}</span>
+      {aggregate && <span style={{ color: 'var(--text-4)' }}>{` · ${aggregate}`}</span>}
     </summary>
     {node.events.map((record, index) => {
       const fields = record.fields ?? {}

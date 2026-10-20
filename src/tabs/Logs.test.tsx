@@ -160,6 +160,47 @@ describe('Logs tab', () => {
     expect(parentDetails).toHaveTextContent('1.25 ms')
   })
 
+  it('aggregates sub-operation count, wall-clock window, and slowest duration per trace node', async () => {
+    const timing = (timestamp: string, spans: Array<Record<string, unknown>>, operation: string, duration_ns: number) => ({
+      timestamp,
+      target: 'arcana::telemetry',
+      fields: { event_type: 'operation_timing', operation, duration_ns, fleet_correlation_id: 'fleet-agg' },
+      spans,
+    })
+    const records = [
+      timing('2026-10-20T10:00:00.100Z', [{ name: 'fleet_tick', span_id: 'tick-1' }, { name: 'worker_run', span_id: 'worker-1' }], 'provider_call', 2_000_000),
+      timing('2026-10-20T10:00:00.500Z', [{ name: 'fleet_tick', span_id: 'tick-1' }, { name: 'worker_run', span_id: 'worker-1' }], 'tool_call', 6_000_000),
+      timing('2026-10-20T10:00:01.100Z', [{ name: 'fleet_tick', span_id: 'tick-1' }], 'database_statement', 1_000_000),
+    ]
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_log_files') return ['2026-10-20']
+      if (command === 'read_log_file') return { content: '', total_lines: 0, truncated: false, full_size_bytes: 0 }
+      if (command === 'read_structured_events') return {
+        content: `${records.map(record => JSON.stringify(record)).join('\n')}\n`,
+        total_lines: records.length,
+        truncated: false,
+        full_size_bytes: 900,
+      }
+      if (command === 'summarize_observability_events') return { total_events: records.length, by_event: {} }
+      throw new Error(`Unexpected command: ${command}`)
+    })
+
+    render(<LogsTab />)
+    fireEvent.click(await screen.findByText(/Traces/))
+
+    const rootDetails = (await screen.findByText('fleet fleet-agg')).closest('details')
+    expect(rootDetails).toHaveTextContent('3 ops')
+    expect(rootDetails).toHaveTextContent('1000.00 ms window')
+    expect(rootDetails).toHaveTextContent('slowest 6.00 ms')
+
+    // The worker subtree aggregates only its own two calls, so a root total is
+    // not silently copied down onto every child.
+    const workerDetails = screen.getByText('worker_run').closest('details')
+    expect(workerDetails).toHaveTextContent('2 ops')
+    expect(workerDetails).toHaveTextContent('400.00 ms window')
+    expect(workerDetails).toHaveTextContent('slowest 6.00 ms')
+  })
+
   it('renders the persisted Memory search operation in Structured Events and Traces', async () => {
     const event = {
       timestamp: '2026-10-04T10:12:14Z',

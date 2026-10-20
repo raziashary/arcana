@@ -7806,3 +7806,33 @@ readback, owner-authorized live-provider milestone) stays open under P4-50.
 exists" and "keeps the restart advice when the log directory exists and is merely empty today".
 Each link was falsified (marker removed, transport field dropped, banner removed, banner made
 unconditional) and reverted. Receipt: `_verify/2026-10-20-P4-50-NO-SINK-VISIBILITY.md`.
+
+---
+
+## ADR-LOG-RESTRUCT-0405 — A trace node's aggregate is a wall-clock window, not a duration sum
+
+**Context / 2026-10-20 (P4-50, TG4-24).** The Traces view listed each timed operation but never
+aggregated a node's subtree, and the gate's 2026-10-18 status named "trace durations aggregated in
+the view" as residue. The obvious roll-up — sum every `duration_ns` in the subtree — is wrong for
+nested spans: a parent span's duration already covers its children, so the sum double-counts the
+work and grows with tree depth rather than with elapsed time.
+
+**Decision.** A node's aggregate is `N ops · X ms window · slowest Y ms`, where **window** is
+`max(timestamp) − min(timestamp)` across the subtree and **slowest** is the maximum single measured
+duration (zero-duration samples excluded, matching the metrics section). Nodes with a single
+operation show no aggregate, because their row already carries the duration. The aggregate is
+computed in the view from the persisted records, so the reader, the CLI and the export bundle keep
+returning raw records and no second, divergent roll-up is persisted.
+
+**Consequences.** A reader can now see a trace's elapsed window and its slowest operation without
+manual addition across rows. The number is honest about nesting: adding a child does not inflate the
+parent's window.
+
+**Not claimed.** No percentile/histogram aggregation, no server-side aggregation, no span-id
+generation. Where the producer supplies no span id, repeated same-named spans stay separate nodes
+(the existing, deliberate behaviour) and their aggregate covers one operation.
+
+**Evidence.** `src/tabs/Logs.test.tsx` "aggregates sub-operation count, wall-clock window, and
+slowest duration per trace node" (23/23 in the tab, 62/62 repo-wide, typecheck and eslint clean);
+falsified by dropping subtree collection and by substituting a duration sum, both reverted.
+Receipt: `_verify/2026-10-20-P4-50-TRACE-AGGREGATION.md`.
