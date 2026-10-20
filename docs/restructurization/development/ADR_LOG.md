@@ -7764,3 +7764,45 @@ copy.
 `shell_mutation_records_a_task_attributed_recovery_boundary`.
 `agent::builtin_tools::project_command::tests::project_command_process_is_refused_before_a_task_claim`.
 Receipt: `_verify/2026-10-20-P4-19-PROCESS-WRITER-BOUNDARY.md`.
+
+---
+
+## ADR-LOG-RESTRUCT-0404 — A missing log sink is process health, not a structured event
+
+**Context / 2026-10-20 (P4-50, TG4-24).** The 2026-10-18 TG4-24 receipt recorded a finding it
+deliberately did not fix: when `~/.arcana/logs` cannot be prepared, `init_with_filter` takes its
+console-only early return, registers **no** writer, and therefore has nothing to count a failure
+and nothing to record that the process has no telemetry sink. The Logs panel then renders an empty
+day, which is indistinguishable from a day in which nothing happened. That ambiguity lands directly
+on P4-49: the owner's acceptance run would read a quiet panel as "the fleet did nothing".
+
+**Decision.** The missing sink is recorded as a **state** on the process-health record
+(`LoggingHealth::file_logging_unavailable`, an `AtomicBool` surfaced as
+`LoggingHealthSnapshot::file_logging_unavailable`), not emitted as a structured event. Emitting an
+event would be circular — the stream that would have to carry "there is no stream" is the stream
+that is missing — and it could not describe the day it belongs to. `console_only_health()` is the
+single place that marks the state, and it is the exact function the console-only early return uses,
+so producer and reader meet on one path: `process_health_snapshot()` is what
+`summarize_observability_events` already reads for its writer-failure counters.
+
+The frontend half had its own defect: `loadLog` (which fetches metrics) runs only once a date is
+selected, so the "no log directory" scenario never fetched host health at all. `loadDates` now
+reads host health when the file list is empty, and the header distinguishes the two states —
+"File logging unavailable in this process — console only" versus "No log files found — restart the
+app to generate today's log".
+
+**Consequences.** The designed distinction is now visible without expanding any section. The state
+is process-lifetime, like the failure counters, and is not scoped to the selected date or
+correlation. A reader can no longer mistake a missing sink for silence.
+
+**Not claimed.** No persisted cross-restart host-health record, no runtime log-level change, no
+retention change, and no new Tauri command. The rest of TG4-24 (injection through a real Fleet run,
+aggregated trace durations, remaining cost-measurement groups, offline CLI memory/lifecycle
+readback, owner-authorized live-provider milestone) stays open under P4-50.
+
+**Evidence.** `observability::logging::tests::console_only_logging_reports_an_unavailable_file_sink_to_the_logs_reader`,
+`commands::log_commands::tests::metrics_payload_carries_the_missing_file_sink_state`,
+`src/tabs/Logs.test.tsx` "reports a missing file sink instead of an empty day when no log file
+exists" and "keeps the restart advice when the log directory exists and is merely empty today".
+Each link was falsified (marker removed, transport field dropped, banner removed, banner made
+unconditional) and reverted. Receipt: `_verify/2026-10-20-P4-50-NO-SINK-VISIBILITY.md`.

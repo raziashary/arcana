@@ -95,6 +95,11 @@ will become a defect; **S3** = maintainability/dead code.
 | When the log directory cannot be prepared, logging degrades to console-only with **no writer and no counter** | TG4-24 receipt (`observability/logging.rs:102-111,169-178`) | "No telemetry sink" is indistinguishable from "no telemetry activity" in the Logs UI |
 | Error class is encoded into the message text and parsed back out of the `Display` string | provider audit (`agent/engine.rs:1466-1474`) | The typed retry policy is bypassed; changing an adapter's wording silently changes retry behaviour |
 
+**Fixed 2026-10-20:** the console-only finding above is closed at the owning layer — a missing
+sink is now process health that the Logs reader and UI surface, so an empty panel no longer means
+"no activity". See `ADR-LOG-RESTRUCT-0404` and
+`_verify/2026-10-20-P4-50-NO-SINK-VISIBILITY.md`.
+
 **Security note (positive):** audit 4 traced every provider-boundary path and found **no
 defect** — bodies are bounded (16 KiB), failures fail closed, keys stay in headers, and no
 adapter echoes a provider body into an error or telemetry. Its one warning is that this safety

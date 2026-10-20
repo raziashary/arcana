@@ -591,4 +591,36 @@ describe('Logs tab', () => {
     expect(screen.getByText('3')).toBeInTheDocument()
     expect(screen.getByText(/writer errors are process-lifetime totals/)).toBeInTheDocument()
   })
+
+  it('reports a missing file sink instead of an empty day when no log file exists', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_log_files') return []
+      if (command === 'summarize_observability_events') return {
+        total_events: 0, malformed_events: 0, readable_writer_failures: 0,
+        structured_writer_failures: 0, file_logging_unavailable: true, by_event: {},
+      }
+      throw new Error(`Unexpected command: ${command}`)
+    })
+
+    render(<LogsTab />)
+
+    expect(await screen.findByRole('status')).toHaveTextContent('File logging unavailable in this process — console only')
+    expect(screen.queryByText(/No log files found/)).not.toBeInTheDocument()
+  })
+
+  it('keeps the restart advice when the log directory exists and is merely empty today', async () => {
+    invoke.mockImplementation(async (command: string) => {
+      if (command === 'list_log_files') return []
+      if (command === 'summarize_observability_events') return {
+        total_events: 0, malformed_events: 0, readable_writer_failures: 0,
+        structured_writer_failures: 0, file_logging_unavailable: false, by_event: {},
+      }
+      throw new Error(`Unexpected command: ${command}`)
+    })
+
+    render(<LogsTab />)
+
+    expect(await screen.findByText(/No log files found/)).toBeInTheDocument()
+    expect(screen.queryByText(/File logging unavailable/)).not.toBeInTheDocument()
+  })
 })

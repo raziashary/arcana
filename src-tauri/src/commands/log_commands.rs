@@ -68,6 +68,10 @@ pub struct ObservabilityMetrics {
     /// These counters are host health, not scoped to the selected date/run.
     pub readable_writer_failures: u64,
     pub structured_writer_failures: u64,
+    /// Process-lifetime state: true when this process could not prepare its log
+    /// directory, so no file stream exists and the panel is console-only. A
+    /// zero-event view must not be read as "nothing happened" while this is true.
+    pub file_logging_unavailable: bool,
     pub by_event: BTreeMap<String, EventAggregate>,
     pub outcomes: BTreeMap<String, u64>,
     pub by_provider_model: BTreeMap<String, ProviderModelAggregate>,
@@ -997,9 +1001,20 @@ pub fn summarize_observability_events(
                 ArcanaError::Agent(format!("Failed to aggregate structured events: {e}"))
             })?;
     let writer_health = arcana_core::observability::logging::process_health_snapshot();
-    metrics.readable_writer_failures = writer_health.readable_write_failures;
-    metrics.structured_writer_failures = writer_health.structured_write_failures;
+    apply_writer_health(&mut metrics, writer_health);
     Ok(metrics)
+}
+
+/// Copy process-lifetime writer health into the metrics payload. Kept as one
+/// function so the reader's transport is testable without installing a live
+/// log directory or a second process-wide subscriber.
+fn apply_writer_health(
+    metrics: &mut ObservabilityMetrics,
+    health: arcana_core::observability::logging::LoggingHealthSnapshot,
+) {
+    metrics.readable_writer_failures = health.readable_write_failures;
+    metrics.structured_writer_failures = health.structured_write_failures;
+    metrics.file_logging_unavailable = health.file_logging_unavailable;
 }
 
 #[cfg(test)]
@@ -1201,11 +1216,12 @@ pub fn export_observability_bundle(
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_event_lines, aggregate_event_lines_for_correlation, cached_line_count,
-        ensure_correlation_index, event_matches_correlation, list_log_dates_from_directory,
-        log_date_from_filename, read_full_log, read_structured_events_for_correlation, read_tail,
-        refresh_metrics_from_file, refresh_metrics_from_file_for_correlation, resolve_log_path,
-        resolve_structured_path, write_log_export, CorrelationOffsetIndex, MetricsAccumulator,
+        aggregate_event_lines, aggregate_event_lines_for_correlation, apply_writer_health,
+        cached_line_count, ensure_correlation_index, event_matches_correlation,
+        list_log_dates_from_directory, log_date_from_filename, read_full_log,
+        read_structured_events_for_correlation, read_tail, refresh_metrics_from_file,
+        refresh_metrics_from_file_for_correlation, resolve_log_path, resolve_structured_path,
+        write_log_export, CorrelationOffsetIndex, MetricsAccumulator, ObservabilityMetrics,
         CORRELATION_OFFSETS, METRICS_READ_CHUNK_BYTES,
     };
     use std::io::{BufReader, Cursor, Read, Write};
@@ -1743,6 +1759,26 @@ mod tests {
         assert_eq!(summary.by_event["provider_retry"].count, 1);
         assert_eq!(summary.by_event["tool_call_result"].failures, 1);
         assert_eq!(summary.outcomes["denied"], 1);
+    }
+
+    /// TG4-24 no-sink visibility: the metrics payload must carry the missing
+    /// file-sink state, otherwise a console-only process renders an empty Logs
+    /// panel that is indistinguishable from a day with no activity.
+    #[test]
+    fn metrics_payload_carries_the_missing_file_sink_state() {
+        let mut metrics = ObservabilityMetrics::default();
+        apply_writer_health(
+            &mut metrics,
+            arcana_core::observability::logging::LoggingHealthSnapshot {
+                readable_write_failures: 4,
+                structured_write_failures: 5,
+                file_logging_unavailable: true,
+            },
+        );
+
+        assert_eq!(metrics.readable_writer_failures, 4);
+        assert_eq!(metrics.structured_writer_failures, 5);
+        assert!(metrics.file_logging_unavailable);
     }
 
     #[test]

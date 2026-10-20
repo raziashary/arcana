@@ -9,7 +9,7 @@ use std::{
     io::Write,
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, OnceLock,
     },
 };
@@ -29,25 +29,34 @@ pub struct LoggingGuards {
     health: LoggingHealth,
 }
 
-/// Process-local counters for failures in Arcana's asynchronous log writers.
+/// Process-local health for Arcana's asynchronous log writers.
 /// The logging worker remains isolated from application operations; the Logs
-/// panel reads these counters through the host instead of relying on that same
+/// panel reads this record through the host instead of relying on that same
 /// writer to report its own failure.
+///
+/// Write failures are counters. Missing sinks are a state: when the home log
+/// directory cannot be prepared, no writer exists to count anything, so without
+/// `file_logging_unavailable` an empty Logs view would be indistinguishable from
+/// a process that simply had nothing to say.
 #[derive(Clone, Default)]
 pub struct LoggingHealth {
     readable_write_failures: Arc<AtomicU64>,
     structured_write_failures: Arc<AtomicU64>,
+    file_logging_unavailable: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Default, Clone, Copy, serde::Serialize)]
 pub struct LoggingHealthSnapshot {
     pub readable_write_failures: u64,
     pub structured_write_failures: u64,
+    /// True when this process could not prepare its file log directory, so
+    /// every file stream is absent and output is console-only.
+    pub file_logging_unavailable: bool,
 }
 
 static PROCESS_HEALTH: OnceLock<LoggingHealth> = OnceLock::new();
 
-/// Read the process-wide writer counters used by the desktop Logs metrics.
+/// Read the process-wide writer health used by the desktop Logs metrics.
 pub fn process_health_snapshot() -> LoggingHealthSnapshot {
     PROCESS_HEALTH
         .get_or_init(LoggingHealth::default)
@@ -59,7 +68,12 @@ impl LoggingHealth {
         LoggingHealthSnapshot {
             readable_write_failures: self.readable_write_failures.load(Ordering::Relaxed),
             structured_write_failures: self.structured_write_failures.load(Ordering::Relaxed),
+            file_logging_unavailable: self.file_logging_unavailable.load(Ordering::Relaxed),
         }
+    }
+
+    fn mark_file_logging_unavailable(&self) {
+        self.file_logging_unavailable.store(true, Ordering::Relaxed);
     }
 }
 
@@ -106,7 +120,7 @@ pub fn init_with_filter(filter: EnvFilter) -> LoggingGuards {
         tracing::info!("Arcana logging initialised — console only (no writable log dir)");
         return LoggingGuards {
             guards: Vec::new(),
-            health: LoggingHealth::default(),
+            health: console_only_health(),
         };
     };
 
@@ -159,6 +173,17 @@ pub fn init_with_filter(filter: EnvFilter) -> LoggingGuards {
         guards: vec![readable_guard, structured_guard],
         health,
     }
+}
+
+/// The console-only fallback's health record.
+///
+/// Taken from the process-wide slot so the Logs metrics reader sees the same
+/// value, and marked unavailable because no file writer will exist to count
+/// failures or to prove that an empty view means "nothing happened".
+fn console_only_health() -> LoggingHealth {
+    let health = PROCESS_HEALTH.get_or_init(LoggingHealth::default).clone();
+    health.mark_file_logging_unavailable();
+    health
 }
 
 fn resolve_log_dir() -> Option<PathBuf> {
@@ -620,14 +645,15 @@ mod tests {
         );
     }
 
-    /// TG4-24 telemetry-failure injection, no-sink half. This **documents
-    /// current behaviour, it does not endorse it**: when `~/.arcana/logs`
+    /// TG4-24 telemetry-failure injection, no-sink half. When `~/.arcana/logs`
     /// cannot be prepared as a directory, `resolve_log_dir` returns `None` and
     /// `init_with_filter` takes its console-only early return, which registers
-    /// **no** writer and therefore no failure counter. The telemetry loss is
-    /// reported only to stderr, and only the raw `None` here makes it visible —
-    /// no structured error reaches a reader. Core task execution and its result
-    /// are unaffected and the row stays durable.
+    /// **no** writer and therefore no failure counter. Core task execution and
+    /// its result are unaffected and the row stays durable; the missing sink is
+    /// reported as process health (see
+    /// `console_only_logging_reports_an_unavailable_file_sink_to_the_logs_reader`)
+    /// rather than as a structured event, because there is no structured sink to
+    /// carry one.
     #[test]
     fn unpreparable_log_directory_degrades_to_console_only_without_blocking_core_work() {
         use crate::db::tasks::{CreateTaskInput, TasksDb};
@@ -666,6 +692,27 @@ mod tests {
             .expect("read the task back")
             .expect("the row must be persisted");
         assert_eq!(readback.title, task.title);
+    }
+
+    /// TG4-24 no-sink visibility. The empty-view ambiguity was the defect: with
+    /// no writer at all, nothing counted failures and nothing recorded that the
+    /// sink was missing, so the Logs panel could not tell "this process dropped
+    /// its telemetry" from "this process did nothing worth logging".
+    #[test]
+    fn console_only_logging_reports_an_unavailable_file_sink_to_the_logs_reader() {
+        // `console_only_health` is the exact helper `init_with_filter`'s
+        // console-only early return uses, so this exercises the production
+        // wiring without installing a second process-wide subscriber.
+        let health = console_only_health();
+        assert!(
+            health.snapshot().file_logging_unavailable,
+            "the guards returned to the host must carry the missing-sink state"
+        );
+        assert!(
+            process_health_snapshot().file_logging_unavailable,
+            "the Logs metrics reader must be able to say 'no file sink' instead of \
+             leaving an empty view to mean 'no activity'"
+        );
     }
 
     #[test]

@@ -156,18 +156,35 @@ export default function LogsTab() {
   const loadPending  = useRef(false)
   const [queuedRefresh, setQueuedRefresh] = useState(0)
 
+  // Host health is the only channel that can say "there is no file sink". It
+  // must be read even when no log file exists yet, otherwise an unwritable log
+  // directory renders as an empty, quiet day.
+  const loadHealth = useCallback(async () => {
+    try {
+      const metricsResult = await invoke<Record<string, unknown>>('summarize_observability_events', { date: '' })
+      setMetricsError(null)
+      setMetrics(metricsResult)
+    } catch (error) {
+      setMetricsError(String(error))
+      setMetrics(null)
+    }
+  }, [])
+
   // Load available log file dates
   const loadDates = useCallback(async () => {
     try {
       const d = await invoke<string[]>('list_log_files')
       setDates(d)
+      if (d.length === 0) {
+        await loadHealth()
+      }
       if (d.length > 0 && (!selectedDate || selectedDate === dates[0])) {
         setSelectedDate(d[0]) // default to newest
       }
     } catch (error) {
       setLoadError(`Could not list log files: ${String(error)}`)
     }
-  }, [dates, selectedDate])
+  }, [dates, selectedDate, loadHealth])
 
   // Read the selected log file (tail-truncated) and parse lines
   interface LogFileResult {
@@ -704,7 +721,11 @@ export default function LogsTab() {
               ● live
             </span>
           )}
-          {dates.length === 0 && (
+          {fullWindowMetrics.file_logging_unavailable === true ? (
+            <span role="status" style={{ fontFamily: 'monospace', fontSize: 9, color: '#FF6363' }}>
+              File logging unavailable in this process — console only. Empty sections below mean no file sink exists, not that nothing happened.
+            </span>
+          ) : dates.length === 0 && (
             <span style={{ fontFamily: 'monospace', fontSize: 9, color: 'var(--warning)' }}>
               No log files found — restart the app to generate today's log.
             </span>
@@ -853,6 +874,7 @@ export default function LogsTab() {
           <div style={{ padding: '0 12px 12px', color: 'var(--text-4)', fontFamily: 'monospace', fontSize: 9 }}>
             {correlationFilter ? 'Selected-correlation totals' : 'Whole-day totals'} from {Number(fullWindowMetrics.total_events ?? 0).toLocaleString()} structured events
             {' · writer errors are process-lifetime totals'}
+            {fullWindowMetrics.file_logging_unavailable === true && ' · file logging unavailable (console only)'}
             {Number(fullWindowMetrics.malformed_events ?? 0) > 0 && ` · ${Number(fullWindowMetrics.malformed_events).toLocaleString()} malformed`}
           {metricsError && <div role="alert" style={{ color: '#FF6363', marginTop: 6 }}>Metrics unavailable: {metricsError}</div>}
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8, color: 'var(--text-2)' }}>
