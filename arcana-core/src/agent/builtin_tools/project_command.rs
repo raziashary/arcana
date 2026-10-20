@@ -259,10 +259,21 @@ impl Tool for ProjectCommandTool {
             }
             None => return ToolResult::error("Missing required field: intent"),
         };
+        // No intent may produce a host effect before the caller's claim is proven.
+        // Only the pinned-Ruff branch below performs an effect at this point
+        // (a network download plus a tool-cache write); the other install
+        // requests are refused outright further down before any effect.
         if intent == CommandIntent::Install
             && input["toolchain"].as_str() == Some("python")
             && input["package"].as_str() == Some("ruff")
         {
+            // This is the one install path that reaches the host: a network
+            // download plus a write into Arcana's tool cache. It must prove the
+            // caller's claim first; the plain install denial below is a pure
+            // refusal and needs no claim.
+            if let Err(message) = ctx.require_current_task_claim() {
+                return ToolResult::error(message);
+            }
             return install_pinned_ruff_for_host().await;
         }
         if intent == CommandIntent::Install {
@@ -4727,6 +4738,27 @@ fn main() {
                 .contains("Worker mutations require a task claim"),
             "an unclaimed worker may not build: {}",
             unclaimed.output
+        );
+
+        // The pinned-Ruff install is a network download plus a write into
+        // Arcana's tool cache, so it must hit the same claim boundary as the
+        // sandboxed build — and hit it *before* the installer can start.
+        let unclaimed_install = ProjectCommandTool
+            .execute(
+                json!({"intent": "install", "toolchain": "python", "package": "ruff"}),
+                &claim_boundary_context(workspace.path(), None),
+            )
+            .await;
+        assert!(unclaimed_install.is_error);
+        let install_envelope: Value =
+            serde_json::from_str(&unclaimed_install.output).expect("structured install refusal");
+        assert!(
+            install_envelope["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Worker mutations require a task claim"),
+            "an unclaimed worker may not install the pinned Ruff runtime: {}",
+            unclaimed_install.output
         );
 
         // A task that exists but is owned by another worker is the same refusal

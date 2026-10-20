@@ -8066,3 +8066,46 @@ simulated-legacy upgrade fixtures), `list_worker_health` 9/9, and the dual-worke
 (falsified three ways: writer removed → 0 vs 3; writer off by one → 4 vs 3; tool field removed → null
 vs 3, while the persisted assertion still passed). Receipt:
 `_verify/2026-10-20-P4-54-STARTUP-RETRY-COUNTER.md`.
+
+---
+
+## ADR-LOG-RESTRUCT-0411 — The task claim is required at the effect boundary, not at the tool entry
+
+**Context / 2026-10-20 (P4-56, TG4-30).** `project_command`'s pinned-Ruff branch (`intent: install`,
+`toolchain: python`, `package: ruff`) returned before the task-claim check, and that branch performs a
+host effect: a network download plus a write into Arcana's verified Python tool cache. A worker with
+no claim, or with a stale/foreign claim, could therefore start a host mutation — the exact boundary
+TG4-30 names ("worker file/process writes cannot begin without a task claim and attributable recovery
+boundary"). It was recorded during the P4-19/20 work and left for this unit.
+
+**Decision.** Prove the claim at the **effect boundary**. The ruff branch now calls
+`ctx.require_current_task_claim()` before `install_pinned_ruff_for_host()`; the existing check before
+the sandboxed project command is unchanged.
+
+**Why not hoist the check to the tool entry.** That was tried first and rejected on evidence: it
+inverts error precedence for *pure refusals*. The plain install path is an outright denial
+(`sandbox_violation` / network / deny) that performs no effect, and two existing tests assert that
+envelope for a caller whose task row does not exist. Hoisting made both report "the claimed task no
+longer exists" instead, which is a behavior change beyond the defect and would have forced those
+denial tests to build claim fixtures to keep testing denial. A claim at a pure refusal proves nothing
+and costs precedence.
+
+**Supervisor exemption is unchanged.** `require_current_task_claim` returns `Ok` for the supervisor
+role by design (interactive Supervisor operations are taskless), so the IDE and Supervisor paths are
+unaffected.
+
+**Consequences.** The one install path that reaches the host is claim-gated; the denial paths keep
+their tested envelopes. The falsification shape matters: the probe had to replace the installer with a
+guard, because a falsified run would otherwise perform the real download.
+
+**Not claimed.** This unit does not audit the pinned installer's own download verification, and it
+does not close P4-56: the failure-containment review across tool errors, retry amplification,
+cancellation races, checkpoint substitution, sandbox escape and telemetry leakage remains open under
+TG4-30.
+
+**Evidence.** New case in `project_command_process_is_refused_before_a_task_claim` asserts an
+unclaimed worker is refused for the ruff install with the claim error; the module passes 37/38 in
+parallel with only the documented `checked_in_ecosystem_corpora_...` Python-staging failure, which
+passes 1/1 serially. Falsified twice: restoring the old ordering and removing the branch check both
+let the request reach the installer guard. Receipt:
+`_verify/2026-10-20-P4-56-RUFF-INSTALL-CLAIM-BOUNDARY.md`.
