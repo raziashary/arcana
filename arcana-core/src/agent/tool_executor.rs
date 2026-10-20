@@ -21,6 +21,7 @@ use crate::events::{
     AgentStageChangePayload, AgentToolCallResultPayload, AgentToolCallStartPayload,
     PermissionPayload, ToolEndPayload, ToolStartPayload,
 };
+use crate::hooks::registry::HookGate;
 use crate::hooks::{HookContext, HookRegistry, HookType, ToolCallContext};
 use crate::platform::process_sandbox;
 use crate::session::manager::SessionManager;
@@ -1198,16 +1199,39 @@ impl ToolExecutor {
                         "batch": true,
                     }),
                 };
-                let should_continue = HookRegistry::fire(&HookType::PreToolUse, &pre_ctx).await;
+                let gate = HookRegistry::fire_gate(&HookType::PreToolUse, &pre_ctx).await;
 
-                let result = if !should_continue {
-                    warn!("Tool '{}' blocked by PreToolUse hook", tool.name());
-                    ToolResult::categorized_error(
-                        "permission_denied",
-                        "permission",
-                        format!("Tool '{}' was blocked by a hook", tool.name()),
-                        "Review the hook policy or choose a permitted operation.",
-                    )
+                // Both arms deny, but only one of them is a policy decision. A
+                // store that could not be read is reported as infrastructure,
+                // so the user is not sent to review a policy that never ran
+                // (`P4-51`).
+                let refusal = match &gate {
+                    HookGate::Allowed => None,
+                    HookGate::Denied { .. } => {
+                        warn!("Tool '{}' blocked by PreToolUse hook", tool.name());
+                        Some(ToolResult::categorized_error(
+                            "permission_denied",
+                            "permission",
+                            format!("Tool '{}' was blocked: {}", tool.name(), gate.reason()),
+                            "Review the hook policy or choose a permitted operation.",
+                        ))
+                    }
+                    HookGate::Unavailable(_) => {
+                        warn!(
+                            "Tool '{}' not run: the hook policy could not be evaluated",
+                            tool.name()
+                        );
+                        Some(ToolResult::categorized_error(
+                            "hook_evaluation_failed",
+                            "infrastructure",
+                            format!("Tool '{}' was not run because {}", tool.name(), gate.reason()),
+                            "Retry once the configuration store is available; this is not a policy decision.",
+                        ))
+                    }
+                };
+
+                let result = if let Some(refusal) = refusal {
+                    refusal
                 } else {
                     // Admission has no workspace side effect. Acquire before
                     // journaling so cancellation while waiting cannot leave a
@@ -2273,6 +2297,13 @@ mod p8_execution_registry_tests {
             .await
             .unwrap();
         assert!(results[0].1.is_error);
+        // The refusal must name the store failure, not a policy decision: the
+        // hook row could not be decoded, so no policy ran (`P4-51`,
+        // ADR-LOG-RESTRUCT-0402).
+        let refusal: serde_json::Value =
+            serde_json::from_str(&results[0].1.output).expect("stable JSON refusal");
+        assert_eq!(refusal["error_code"], "hook_evaluation_failed");
+        assert_eq!(refusal["error"]["category"], "infrastructure");
         assert!(!workspace.path().join("guarded.txt").exists());
         db.delete(&hook.id).unwrap();
         let results = executor

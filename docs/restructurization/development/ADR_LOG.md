@@ -7674,3 +7674,39 @@ express what a command may touch), consent resolution by capability instead of b
 `run_ide_project` passing the same claim/build-evidence check as the vetted path. No provider or
 billing behaviour is involved. The intent-based suite must be re-run through the production
 `execute` path, not the internal launcher, before this is called done.
+
+## ADR-LOG-RESTRUCT-0402 — A hook refusal says whether policy decided it or the store failed
+
+**Context / 2026-10-20 (P4-51).** `HookRegistry::fire` returned `bool` and `fire_with_logs`
+returned `Vec<HookExecutionLog>`. Both collapsed three different facts into "false / no logs": no
+hook matched, a hook blocked, and the hooks store could not be opened or decoded. The fail-closed
+direction is correct and stays — a failure to establish permission is not permission (ADR-0380
+made the readers propagate decoding errors for exactly this reason). What was wrong is the
+*report*: `tool_executor` turned every `false` into `permission_denied` / "blocked by a hook", so
+a user whose `config.db` was unreadable was told to review a hook policy that never ran. Two
+`write_file` tests already had to inject failures at a lower layer so the hook reader would not
+fire first — evidence that the conflation was load-bearing, not theoretical.
+
+**Decision.** The decision becomes a type: `HookGate { Allowed, Denied { hook, reason },
+Unavailable(String) }`, with `permits()` for callers that only need "may I continue" (`fire`
+delegates to it, so boolean callers are unchanged). `fire_with_logs` returns
+`(Vec<HookExecutionLog>, HookGate)`. The PreToolUse consumer maps the two refusal arms to
+different structured failures — `permission_denied`/`permission` for a policy denial,
+`hook_evaluation_failed`/`infrastructure` for a store failure — each with wording that says what
+happened and what the user should do.
+
+**Why both still deny.** A store that cannot be read must not become an allow: the hook policy is
+part of the containment boundary. The distinction is for the diagnosis, not the decision.
+
+**Why not a boolean plus a warning log.** A log line is not a contract. The tool result is what
+reaches the model and the user, and the envelope already carries category, code and next step —
+the information was available and was thrown away one layer below.
+
+**Consequences.** `fire_with_logs` changes shape; it had no production caller (one usage comment),
+so no compatibility wrapper was added. The `write_file` tests that inject checkpoint failures must
+keep the hooks store healthy — that requirement is now visible in the result, not only in a
+comment.
+
+**Evidence.** `hooks::registry::gate_tests`: an unreadable store is `Unavailable` and does not
+permit; an empty store is `Allowed`; a blocking hook is `Denied`, names itself and preserves its
+own message. Receipt: `_verify/2026-10-20-P4-51-HOOK-GATE.md`.

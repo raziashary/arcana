@@ -4,7 +4,10 @@
 //
 // Usage:
 //   HookRegistry::fire(&HookType::PostFileWrite, &ctx).await;
-//   let logs = HookRegistry::fire_with_logs(&HookType::PreToolUse, &ctx).await;
+//   let gate = HookRegistry::fire_gate(&HookType::PreToolUse, &ctx).await;
+//   let (logs, gate) = HookRegistry::fire_with_logs(&HookType::PreToolUse, &ctx).await;
+// `fire` answers "may I continue"; `fire_gate` also says whether a refusal was a
+// policy decision or the hooks store being unreadable.
 
 pub mod conditions;
 pub mod db;
