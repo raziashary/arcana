@@ -4669,4 +4669,112 @@ fn main() {
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(root);
     }
+
+    // --- P4-19 · the second process writer under the same claim boundary ------
+    //
+    // `bash` already proves its claim refusal. `project_command` is the other
+    // production process writer, and its claim check sits after project
+    // detection but before any batch row, sandbox admission or child spawn —
+    // so a worker that does not own an in-progress task can neither build nor
+    // leave build evidence behind.
+
+    fn write_claim_boundary_cargo_fixture(workspace: &std::path::Path) {
+        std::fs::create_dir_all(workspace.join("src")).expect("create cargo source tree");
+        std::fs::write(
+            workspace.join("Cargo.toml"),
+            "[package]\nname = \"claim-boundary\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+        )
+        .expect("write dependency-free Cargo manifest");
+        std::fs::write(workspace.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n")
+            .expect("write cargo source");
+    }
+
+    fn claim_boundary_context(workspace: &std::path::Path, task_id: Option<i64>) -> ToolContext {
+        ToolContext {
+            session_id: "project-claim-boundary-session".into(),
+            working_dir: workspace.to_string_lossy().into_owned(),
+            call_id: "project-claim-boundary-call".into(),
+            run_id: None,
+            task_id,
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: "worker-backend".into(),
+
+            run_token_budget: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn project_command_process_is_refused_before_a_task_claim() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        write_claim_boundary_cargo_fixture(workspace.path());
+
+        let unclaimed = ProjectCommandTool
+            .execute(
+                json!({"intent": "build"}),
+                &claim_boundary_context(workspace.path(), None),
+            )
+            .await;
+        let unclaimed_envelope: Value =
+            serde_json::from_str(&unclaimed.output).expect("structured claim refusal");
+        assert!(unclaimed.is_error);
+        assert!(
+            unclaimed_envelope["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Worker mutations require a task claim"),
+            "an unclaimed worker may not build: {}",
+            unclaimed.output
+        );
+
+        // A task that exists but is owned by another worker is the same refusal
+        // shape the file tools already prove, and it must leave no build batch.
+        let tasks = crate::db::tasks::TasksDb::open().expect("open isolated TasksDb");
+        let foreign = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "foreign build claim".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "only the owning worker may build".into(),
+                created_by: Some("p4-19-process-writer-test".into()),
+            })
+            .expect("create foreign task");
+        tasks
+            .update_status(foreign.id, "assigned", Some("worker-frontend"))
+            .expect("assign the task to a different worker");
+        tasks
+            .claim_task_with_pid(foreign.id, "worker-frontend", std::process::id())
+            .expect("claim the task for the other worker");
+        drop(tasks);
+
+        let foreign_attempt = ProjectCommandTool
+            .execute(
+                json!({"intent": "build"}),
+                &claim_boundary_context(workspace.path(), Some(foreign.id)),
+            )
+            .await;
+        let foreign_envelope: Value =
+            serde_json::from_str(&foreign_attempt.output).expect("structured ownership refusal");
+        assert!(foreign_attempt.is_error);
+        assert!(
+            foreign_envelope["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("no longer owns the in-progress task"),
+            "a foreign claim may not build: {}",
+            foreign_attempt.output
+        );
+
+        let tasks = crate::db::tasks::TasksDb::open().expect("reopen isolated TasksDb");
+        assert_eq!(
+            tasks
+                .latest_project_build_batch_status(foreign.id)
+                .expect("read build batches for the foreign task"),
+            None,
+            "a refused process must not persist a build batch"
+        );
+    }
 }

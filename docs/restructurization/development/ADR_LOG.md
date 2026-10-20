@@ -7710,3 +7710,57 @@ comment.
 **Evidence.** `hooks::registry::gate_tests`: an unreadable store is `Unavailable` and does not
 permit; an empty store is `Allowed`; a blocking hook is `Denied`, names itself and preserves its
 own message. Receipt: `_verify/2026-10-20-P4-51-HOOK-GATE.md`.
+
+## ADR-LOG-RESTRUCT-0403 — A process write's checkpoint is its attributable boundary, not a file copy
+
+**Context / 2026-10-20 (P4-19, P4-20; owner ruling).** P4-19 closed for the four file tools
+(`write_file`, `edit_file`, `append_file`, `write_interface_spec`) and left "process-writer
+coverage" open; P4-20 left "process mutation snapshots" open. The four file tools checkpoint the
+target file's prior state before mutating it, so a failed checkpoint vetoes the write. A process
+writer (`bash` = `FreeformShell`; `project_command`, `git_commit`, `check_file`, `e2e_probe` =
+`Execute`) cannot be checkpointed that way: which files it will touch is not knowable before it
+runs, so there is no file to snapshot.
+
+What the process path does have is a boundary: `ToolExecutor::begin_operation_journal` persists a
+task-attributed intent plus a `RecoverySnapshot` (workspace fingerprint, Git HEAD/branch/index
+digest, root identity, the task's checkpoint ids) **before** the handler runs, and refuses with
+`operation_intent_unavailable` when that evidence cannot be verified and persisted. That
+mechanism was proven only with a `Write`-effect stub, never for a real process effect, and no test
+drove the real `bash` tool against an injected boundary failure.
+
+**Decision (owner ruled, option A).** P4-19/P4-20 close on the boundary contract: a worker
+process cannot begin without (a) a verified current task claim and (b) a persisted,
+task-attributed recovery boundary — and an unresolvable prior effect for the task blocks the next
+process. The `RecoverySnapshot` **is** the process-mutation snapshot; it is what
+`RecoverySnapshot::verify` / `verify_retry_admission` re-check against the workspace and task
+state before a retry is admitted (both funnel into the private `verify_state`).
+
+**Explicit residual, recorded rather than implied.** Per-file *content* reversal of a file a
+process rewrote is not provided by the checkpoint store, and a file a process creates is not
+removed by a task restore. That gap belongs to the repository-snapshot breadth clause already
+owned by P4-53/TG4-27 (HEAD, branch/worktree, staged, unstaged and relevant untracked contents),
+not to P4-19/20. The alternative — a bounded per-task workspace content archive in the checkpoint
+store with restore-and-remove semantics — was offered and declined for this phase; it would have
+introduced a new mechanism, a size/count bound and a fail-closed refusal policy for large
+workspaces.
+
+**Why not silently widen P4-19 instead.** The row says "pass the verified task identity through
+all production file mutation paths". A process's identity/boundary is provable; its content
+reversal is a different capability with a different owner. Closing the first without naming the
+second is the narrowing §0.13 forbids.
+
+**Consequences.** The process boundary is proven with the real tool, not a stub: a real `bash`
+call under a claimed task is refused when its intent row cannot be persisted (the child never
+spawns, no sentinel file appears) and refused when an earlier shell effect for that task is
+unresolved; and a successful shell write persists one journal entry whose `task_id` and
+`before_snapshot.task_id()` are the claimed task, not the session. `project_command`'s claim
+refusal is proven for both "no claim" and "foreign claim", leaving no build batch behind.
+`git_commit`/`check_file`/`e2e_probe` share the same executor gate by effect, not by a per-tool
+copy.
+
+**Evidence.** `agent::builtin_tools::bash::process_sandbox_tests`:
+`shell_mutation_without_a_persistable_recovery_boundary_never_runs`,
+`unresolved_prior_shell_effect_blocks_a_new_shell_mutation`,
+`shell_mutation_records_a_task_attributed_recovery_boundary`.
+`agent::builtin_tools::project_command::tests::project_command_process_is_refused_before_a_task_claim`.
+Receipt: `_verify/2026-10-20-P4-19-PROCESS-WRITER-BOUNDARY.md`.

@@ -1010,4 +1010,266 @@ mod process_sandbox_tests {
             "Bash process escaped its workspace boundary: {result:?}"
         );
     }
+
+    // --- P4-19 / TG4-23 · process-writer coverage ------------------------------
+    //
+    // P4-19 closed for the four file tools but left its process writers open.
+    // A shell command is not a file write the host can checkpoint ahead of
+    // time, so its attributable recovery boundary is the executor's journalled
+    // intent plus task-attributed `RecoverySnapshot` (workspace fingerprint,
+    // Git HEAD/branch/index digest, the task's checkpoint ids) written BEFORE
+    // the child spawns. These tests hold that boundary to the same rule the
+    // file tools already obey: if the boundary cannot be persisted, the write
+    // does not happen. What they deliberately do NOT claim: per-file content
+    // reversal of a file a shell rewrote — that stays with the repository
+    // snapshot breadth owned by P4-53/TG4-27 (ADR-LOG-RESTRUCT-0403).
+
+    #[cfg(any(windows, target_os = "linux"))]
+    fn claim_process_writer_task(worker: &str) -> i64 {
+        let tasks = crate::db::tasks::TasksDb::open().expect("open isolated TasksDb");
+        let task = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: "process-writer recovery boundary".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "a shell write needs an attributable recovery boundary".into(),
+                created_by: Some("p4-19-process-writer-test".into()),
+            })
+            .expect("create process-writer task");
+        tasks
+            .update_status(task.id, "assigned", Some(worker))
+            .expect("assign process-writer task");
+        tasks
+            .claim_task_with_pid(task.id, worker, std::process::id())
+            .expect("claim process-writer task");
+        task.id
+    }
+
+    /// Drive the registered production `bash` tool through `ToolExecutor`,
+    /// including the per-call host approval every freeform shell requires in
+    /// Autonomous mode, and return the model-facing result.
+    #[cfg(any(windows, target_os = "linux"))]
+    async fn run_registered_bash(
+        workspace: &std::path::Path,
+        worker: &str,
+        session_id: &str,
+        run_id: Option<String>,
+        task_id: Option<i64>,
+        command: &str,
+    ) -> ToolResult {
+        use crate::agent::permission::{
+            new_pending_permissions, PermissionMode, PermissionResponse,
+        };
+        use crate::agent::tool_executor::ToolExecutor;
+        use crate::agent::tool_trait::AgentIdentity;
+        use std::sync::Arc;
+        use std::time::Duration;
+
+        let pending = new_pending_permissions();
+        let responder_map = Arc::clone(&pending);
+        let mut executor = ToolExecutor::new(
+            PermissionMode::Autonomous,
+            pending,
+            session_id.into(),
+            workspace.to_string_lossy().into_owned(),
+            AgentIdentity::worker(worker),
+        )
+        .with_run_id(run_id);
+        executor.set_task_id(task_id);
+        let tool: Arc<dyn Tool> = Arc::new(BashTool);
+        let input = serde_json::json!({ "command": command });
+        let execution = tokio::spawn(async move {
+            executor
+                .execute_batch(vec![(tool, input, "process-boundary-call".into())])
+                .await
+        });
+
+        // The executor keys the one-use approval on `<session>-<tool_use_id>`.
+        let permission_id = format!("{session_id}-process-boundary-call");
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if responder_map
+                    .lock()
+                    .expect("pending permission mutex")
+                    .contains_key(&permission_id)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("registered Bash must request per-call host approval");
+        responder_map
+            .lock()
+            .expect("pending permission mutex")
+            .remove(&permission_id)
+            .expect("one-use pending responder")
+            .send(PermissionResponse::Allow)
+            .expect("permission waiter still active");
+        let results = execution
+            .await
+            .expect("registered Bash executor task")
+            .expect("registered Bash batch");
+        results.into_iter().next().expect("one batch result").1
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[tokio::test]
+    async fn shell_mutation_without_a_persistable_recovery_boundary_never_runs() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        let task_id = claim_process_writer_task("worker-backend");
+        let runs = crate::db::runs::RunsDb::open().expect("open isolated RunsDb");
+        let run_id = runs
+            .begin_worker_tick("worker-backend", "process-boundary-session")
+            .expect("begin durable worker run");
+        runs.conn
+            .execute_batch(
+                "CREATE TRIGGER reject_operation_intent
+                 BEFORE INSERT ON operation_journal
+                 WHEN NEW.record_type = 'intent'
+                 BEGIN SELECT RAISE(ABORT, 'injected intent-store failure'); END;",
+            )
+            .expect("inject an intent-store failure");
+
+        let result = run_registered_bash(
+            workspace.path(),
+            "worker-backend",
+            "process-boundary-session",
+            Some(run_id.clone()),
+            Some(task_id),
+            "echo written> boundary-sentinel.txt",
+        )
+        .await;
+
+        assert!(
+            result.is_error,
+            "a shell without a persisted recovery boundary must be refused: {}",
+            result.output
+        );
+        assert!(
+            !workspace.path().join("boundary-sentinel.txt").exists(),
+            "the child must never spawn when its task-attributed boundary is unpersistable"
+        );
+        let envelope: serde_json::Value =
+            serde_json::from_str(&result.output).expect("structured boundary refusal");
+        assert_eq!(
+            envelope["error"]["code"], "operation_intent_unavailable",
+            "the refusal must name the missing recovery evidence: {}",
+            result.output
+        );
+        assert_eq!(
+            runs.operation_journal_page(&run_id, 0, 10)
+                .expect("read the failed intent page")
+                .entries
+                .len(),
+            0,
+            "a refused shell leaves no intent that could later read as a duplicate effect"
+        );
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[tokio::test]
+    async fn unresolved_prior_shell_effect_blocks_a_new_shell_mutation() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        let task_id = claim_process_writer_task("worker-backend");
+        let runs = crate::db::runs::RunsDb::open().expect("open isolated RunsDb");
+        let interrupted = runs
+            .begin_worker_tick("worker-backend", "process-interrupted-session")
+            .expect("begin interrupted worker run");
+        runs.record_operation_intent(
+            &interrupted,
+            Some(task_id),
+            "uncertain-shell-intent",
+            "bash",
+            "FreeformShell",
+            &[],
+        )
+        .expect("persist the prior uncertain shell effect");
+        runs.finish_worker_tick(&interrupted, "interrupted", "interrupted", None)
+            .expect("close the interrupted run");
+        let replacement = runs
+            .begin_worker_tick("worker-backend", "process-replacement-session")
+            .expect("begin replacement worker run");
+
+        let result = run_registered_bash(
+            workspace.path(),
+            "worker-backend",
+            "process-replacement-session",
+            Some(replacement),
+            Some(task_id),
+            "echo written> unresolved-sentinel.txt",
+        )
+        .await;
+
+        assert!(result.is_error, "{}", result.output);
+        assert!(
+            !workspace.path().join("unresolved-sentinel.txt").exists(),
+            "a replacement worker may not run a shell while its task effect is unresolved"
+        );
+        let envelope: serde_json::Value =
+            serde_json::from_str(&result.output).expect("structured reconciliation refusal");
+        assert_eq!(
+            envelope["error"]["code"], "operation_reconciliation_required",
+            "{}",
+            result.output
+        );
+    }
+
+    #[cfg(any(windows, target_os = "linux"))]
+    #[tokio::test]
+    async fn shell_mutation_records_a_task_attributed_recovery_boundary() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+        let task_id = claim_process_writer_task("worker-backend");
+        let runs = crate::db::runs::RunsDb::open().expect("open isolated RunsDb");
+        let run_id = runs
+            .begin_worker_tick("worker-backend", "process-record-session")
+            .expect("begin durable worker run");
+
+        let result = run_registered_bash(
+            workspace.path(),
+            "worker-backend",
+            "process-record-session",
+            Some(run_id.clone()),
+            Some(task_id),
+            "echo written> process-write.txt",
+        )
+        .await;
+        assert!(!result.is_error, "{}", result.output);
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("process-write.txt"))
+                .expect("shell wrote inside its workspace")
+                .trim(),
+            "written"
+        );
+
+        let page = runs
+            .operation_journal_page(&run_id, 0, 10)
+            .expect("read the process-write journal");
+        assert_eq!(page.entries.len(), 1);
+        let entry = &page.entries[0];
+        assert_eq!(
+            entry.task_id,
+            Some(task_id),
+            "a process write is attributed to the claimed task, not its session"
+        );
+        assert_eq!(entry.operation, "bash");
+        assert_eq!(entry.effect, "FreeformShell");
+        let before = entry
+            .before_snapshot
+            .as_ref()
+            .expect("the shell must carry a pre-spawn recovery snapshot");
+        assert_eq!(
+            before.task_id(),
+            task_id,
+            "the recovery snapshot belongs to the same claimed task"
+        );
+    }
 }

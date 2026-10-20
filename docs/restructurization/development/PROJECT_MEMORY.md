@@ -1,8 +1,11 @@
-# Arcana working memory (updated 2026-10-14)
+# Arcana working memory (updated 2026-10-20)
 
-**Current navigation (ADR0391):** P4 is Windows-first, **49/59 tasks checked and
-24/33 TG4 gates passing** after P4-21 IDE handoff, P4-36 recovery and P4-11
-Windows Build/Test proofs.
+**Current navigation (ADR0391):** P4 is Windows-first, **51/59 tasks checked and
+25/33 TG4 gates passing** after P4-21 IDE handoff, P4-36 recovery, P4-11
+Windows Build/Test and the P4-19/P4-20/TG4-23 process-writer checkpoint
+boundary proofs (ADR-LOG-RESTRUCT-0403: a task-attributed `RecoverySnapshot`
+plus journalled intent *is* the process mutation snapshot; per-file content
+reversal of process writes stays with TG4-27).
 Windows PA → Fleet engineering, full built-in failure,
 graph/MCP/observability proof and the owner's final Calendar P4-49 remain.
 The latest P4-53 process-loss test passes after a separate worker process exits
@@ -174,8 +177,11 @@ TG3-26/TG4-16; S4-03 proves in-process cancellation/recovery. ADR-0067…0070
 record these decisions. Checkpoints now carry verified task IDs in ToolContext,
 distinguish prior file absence, fail closed before direct file-tool mutation,
 and refuse stale cross-task restoration. Whether process writes also need
-task-level snapshots remains pending; OS write containment and Bash approval
-are both required by P4-18.
+task-level snapshots was left pending here; **resolved 2026-10-20**
+(ADR-LOG-RESTRUCT-0403): a process write's task-level snapshot is the
+task-attributed journalled intent plus `RecoverySnapshot` persisted before the
+spawn, and per-file content reversal of process writes stays with TG4-27. OS
+write containment and Bash approval are both required by P4-18.
 
 P4-17 closed on 2026-09-28: the shared strict workspace resolver canonicalizes
 configured or explicit project roots and rejects unset, relative, missing, and

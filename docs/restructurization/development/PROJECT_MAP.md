@@ -111,8 +111,11 @@ proves customization survives initialization and reaches that scheduler
 resolver. Fleet workers opt into procedural recall at the AgentEngine boundary;
 only a matching tool batch reaches the next provider request, with other runs
 remaining off by default (P4-44). Checkpoint rows now include nullable
-`task_id` alongside session and file path; P4-19/20 still needs task-wide
-reversibility and stale-restore behavior proof.
+`task_id` alongside session and file path; P4-19/20 and TG4-23 are now proven —
+file tools checkpoint before mutation, the stale cross-task restore is refused,
+and a worker process must carry a task-attributed journalled intent plus
+`RecoverySnapshot` before it may spawn (ADR-LOG-RESTRUCT-0403). Per-file content
+reversal of files a shell rewrites stays with TG4-27's repository-snapshot clause.
 
 The fleet dispatch path now wakes workers from task/message events and uses
 per-worker five-minute recovery schedules only when recoverable work exists.
