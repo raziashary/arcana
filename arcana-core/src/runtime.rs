@@ -231,6 +231,10 @@ enum OfflineFleetScenario {
 const OFFLINE_FLEET_CHILD_TITLE: &str = "Offline Fleet Cargo/QC child";
 #[cfg(feature = "offline-fleet-test")]
 const OFFLINE_FLEET_SECRET_PATTERN: &str = r"(?i)(password|api_key|secret|token)\s*=";
+/// A real, checkable fact the scripted worker proposes so the run exercises the
+/// long-term memory gateway and retrieval rather than only task/build tools.
+#[cfg(feature = "offline-fleet-test")]
+const OFFLINE_FLEET_MEMORY_FACT: &str = "The offline Fleet fixture is built from fleet-fixture with a locked Cargo.lock and no network access.";
 
 #[cfg(feature = "offline-fleet-test")]
 fn offline_fleet_test_scenario() -> Result<Option<OfflineFleetScenario>> {
@@ -727,6 +731,26 @@ fn scripted_fleet_tool(
     let task_id = assigned["id"].as_i64()?;
     if !results.iter().any(|(name, _, _)| *name == "claim_task") {
         return Some(("claim_task".into(), json!({"task_id": task_id})));
+    }
+    // Memory gateway + retrieval before the build, so a real Fleet run covers
+    // the memory tier and its telemetry, not only task and command work.
+    if !results.iter().any(|(name, _, _)| *name == "propose_memory") {
+        return Some((
+            "propose_memory".into(),
+            json!({
+                "content": OFFLINE_FLEET_MEMORY_FACT,
+                "scope": "project",
+                "confidence": 0.5,
+                "source_file": "fleet-fixture/Cargo.toml",
+                "source_line": 1
+            }),
+        ));
+    }
+    if !results.iter().any(|(name, _, _)| *name == "search_memory") {
+        return Some((
+            "search_memory".into(),
+            json!({"query": "offline Fleet fixture locked Cargo.lock", "limit": 5}),
+        ));
     }
     if !results
         .iter()

@@ -1,5 +1,6 @@
 #![cfg(feature = "offline-fleet-test")]
 
+use arcana_core::db::runs::RunsDb;
 use arcana_core::db::tasks::{TaskStatus, TasksDb};
 use std::{
     collections::BTreeMap,
@@ -663,6 +664,61 @@ fn offline_fleet_cli_completes_board_child_and_exports_observability() {
             .as_array()
             .is_some_and(|rows| rows.iter().any(|row| row["worker_id"] == "worker-backend")),
         "analytics CLI export must read worker stats produced by the actual tick"
+    );
+
+    // Memory coverage: the run proposed a real fact and then retrieved it, so the
+    // exported telemetry carries the memory gateway and search operations — not
+    // only task and build events.
+    assert!(
+        logs.contains("memory_proposal") && logs.contains("memory_search_all"),
+        "CLI log export must read the memory gateway and retrieval the worker performed"
+    );
+    // ...and the export carries the operations without the memory contents the
+    // gate forbids (the fact below is exactly what the scripted worker proposed).
+    const PROPOSED_FACT: &str = "The offline Fleet fixture is built from fleet-fixture with a locked Cargo.lock and no network access.";
+    assert!(
+        !logs.contains(PROPOSED_FACT),
+        "telemetry export must never carry memory contents"
+    );
+    // The absence above is only meaningful if the proposal really wrote: the
+    // gateway's insert statements are recorded as children of the
+    // `memory_proposal` span, with the memory database named.
+    let proposal_inserts = logs
+        .lines()
+        .filter(|line| line.contains("\"operation\":\"memory_proposal\""))
+        .filter(|line| line.contains("\"operation\":\"insert\""))
+        .filter(|line| line.contains("\"database\":\"memory\""))
+        .count();
+    assert!(
+        proposal_inserts > 0,
+        "the proposal must record its memory-database insert under the memory_proposal span, \
+         otherwise the content-free export proves nothing"
+    );
+
+    // Supervisor/worker lifecycle readback from the durable run ledger, not just
+    // the task board.
+    let runs = RunsDb::open_at(&profile.root.join(".arcana").join("runs.db"))
+        .expect("open CLI run ledger");
+    let supervisor = runs
+        .latest_worker_tick("supervisor")
+        .expect("read supervisor lifecycle row")
+        .expect("a supervisor tick must be recorded");
+    assert!(
+        supervisor.outcome.is_some(),
+        "a finished supervisor tick must record an outcome, not only a heartbeat"
+    );
+    let worker = runs
+        .latest_worker_tick("worker-backend")
+        .expect("read worker lifecycle row")
+        .expect("a worker tick must be recorded");
+    assert_eq!(
+        worker.task_id,
+        Some(children[0].id),
+        "the worker lifecycle row must carry the task it consumed"
+    );
+    assert!(
+        worker.outcome.is_some(),
+        "a finished worker tick must record an outcome"
     );
 }
 

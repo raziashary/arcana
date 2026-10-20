@@ -7928,3 +7928,46 @@ an observation of the run, not an injected fault.
 --test-threads=1` → 7/7. Falsified by deleting the blocker: with a writable sink both streams appear
 and the "no partial stream" assertion fails, so the injection is load-bearing rather than incidental.
 Receipt: `_verify/2026-10-20-P4-50-FLEET-NO-SINK-INJECTION.md`.
+
+---
+
+## ADR-LOG-RESTRUCT-0408 — The offline Fleet script exercises memory, and lifecycle readback reads the run ledger
+
+**Context / 2026-10-20 (P4-50, TG4-24).** The gate requires the CLI readback to cover "memory
+retrieval/write/index/embedding/fallback operations" and "worker/task lifecycle". The offline Fleet
+run completed a board child with a sandboxed Cargo build and read back tasks, logs and analytics —
+but its scripted worker never touched memory, so no memory operation could appear in any readback,
+and nothing verified the supervisor/worker run records beyond the task board.
+
+**Decision.** (a) The feature-gated offline scripted worker now proposes one real, checkable fact
+(`OFFLINE_FLEET_MEMORY_FACT`, scope `project`, confidence 0.5, attributed to
+`fleet-fixture/Cargo.toml:1`) and then searches for it, between `claim_task` and the build. (b) The
+readback asserts the export carries `memory_proposal` **and** `memory_search_all`; that the proposal
+records its memory-database `insert` as a child statement of the `memory_proposal` span (database
+identity `memory`, no SQL text); that the proposed fact's text never appears in the export; and that
+the durable run ledger holds a supervisor tick with an outcome plus a `worker-backend` tick carrying
+the consumed child's id and an outcome.
+
+**Why the script and not a new seam.** The scripted provider is an existing feature-gated harness
+(`offline-fleet-test`, compiled out of shipped binaries); extending its script adds coverage without
+adding any `#[cfg(test)]` branch to a production path. The alternative — calling memory APIs directly
+from the test process — would bypass the runtime, the correlation IDs and the telemetry path the gate
+is actually about.
+
+**Embedding safety.** The `embeddings` feature is **off** by default and the CLI does not enable it,
+so `search_memory` runs the lexical path and cannot trigger the 133 MB model download
+(`download_policy()` defaults to `Allowed`, so this depends on the feature gate, not on config). That
+is also the degraded/fallback behaviour the gate names.
+
+**Consequences.** One run now demonstrates, from a single export: correlation IDs across
+recipe → tool → memory spans, statement-level timing for the memory SQLite database with its
+identity, content-free detail, and both supervisor and worker lifecycle records.
+
+**Not claimed.** The vector/embedding path is not exercised (feature off), so "embedding" coverage
+stays unit-level. Memory contents are asserted absent from telemetry, not encrypted at rest. This is
+still an offline scenario — no provider request, so no live-provider claim.
+
+**Evidence.** `cargo test -p arcanactl --features offline-fleet-test --test fleet_offline --locked --
+--test-threads=1` → 7/7. Falsified three ways: memory steps disabled (export assertion failed);
+expected child id off by one (failed, `Some(2)` vs `Some(3)`); supervisor outcome negated (failed).
+All reverted. Receipt: `_verify/2026-10-20-P4-50-CLI-MEMORY-LIFECYCLE-READBACK.md`.
