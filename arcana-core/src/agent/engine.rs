@@ -589,6 +589,7 @@ impl AgentEngine {
                 file_path: Some(working_dir.to_string()),
                 task_id: None,
                 worker_id: None,
+                workspace_root: Some(working_dir.to_string()),
                 extra: serde_json::json!({
                     "turn": turn,
                     "total_tokens_in": total_usage.total_input(),
@@ -943,6 +944,7 @@ impl AgentEngine {
                         file_path: Some(working_dir.to_string()),
                         task_id: None,
                         worker_id: None,
+                        workspace_root: Some(working_dir.to_string()),
                         extra: serde_json::json!({
                             "error": e.to_string(),
                             "turn": turn,
@@ -1329,6 +1331,7 @@ impl AgentEngine {
             file_path: Some(working_dir.to_string()),
             task_id: None,
             worker_id: None,
+            workspace_root: Some(working_dir.to_string()),
             extra: serde_json::json!({
                 "final_turn": turn,
                 "total_tokens_in": total_usage.total_input(),

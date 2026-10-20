@@ -182,6 +182,13 @@ pub struct HookContext {
     pub file_path: Option<String>,
     pub task_id: Option<String>,
     pub worker_id: Option<String>,
+    /// The workspace this hook is firing for. Egress consent is scoped to a
+    /// workspace, so an action that leaves the process needs this to have an
+    /// owner to ask consent of (`ADR-LOG-RESTRUCT-0400`). Absent means "no
+    /// workspace was established for this event", which is a refusal, not a
+    /// default allow.
+    #[serde(default)]
+    pub workspace_root: Option<String>,
     pub extra: serde_json::Value,
 }
 

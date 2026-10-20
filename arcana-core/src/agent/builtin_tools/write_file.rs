@@ -162,6 +162,7 @@ impl Tool for WriteFileTool {
                     file_path: Some(path.to_string_lossy().to_string()),
                     task_id: None,
                     worker_id: None,
+                    workspace_root: Some(ctx.working_dir.clone()),
                     extra: serde_json::json!({
                         "bytes_written": content.len(),
                         "working_dir": ctx.working_dir,

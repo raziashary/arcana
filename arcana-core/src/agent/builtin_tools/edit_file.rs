@@ -241,6 +241,7 @@ impl Tool for EditFileTool {
             file_path: Some(file_path_str),
             task_id: None,
             worker_id: None,
+            workspace_root: Some(ctx.working_dir.clone()),
             extra: json!({
                 "bytes_written": new_content.len(),
                 "working_dir": ctx.working_dir,

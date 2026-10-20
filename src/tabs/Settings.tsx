@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react'
 import { CheckCircle, XCircle, RefreshCw, Eye, EyeOff, RotateCcw, Save, Brain, FolderOpen, X, AlertTriangle, Globe } from 'lucide-react'
 import { useSettingsStore } from '../stores/settingsStore'
+import type { HookConfig } from '../stores/hookStore'
 import { useWorkerStore } from '../stores/workerStore'
 import { useModelConfigStore, THINKING_MODELS, REASONING_EFFORT_MODELS } from '../stores/modelConfigStore'
 import WorkerTable from '../components/workers/WorkerTable'
@@ -127,15 +128,30 @@ export function WorkspaceEgressConsentCard() {
   const ws = useWorkspaceStore()
   const settings = useSettingsStore()
   const [grants, setGrants] = useState<Record<string, boolean>>({})
+  const [httpHooks, setHttpHooks] = useState<HookConfig[]>([])
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const refresh = async () => {
     if (!ws.workspaceDir) return
-    const entries = await Promise.all([...settings.providers.map(async provider => {
-      const granted = await invoke<boolean>('get_workspace_egress_consent', { providerId: provider.id })
-      return [provider.id, granted] as const
-    }), invoke<boolean>('get_workspace_egress_consent', { providerId: 'mcp:github-mcp' }).then(granted => ['mcp:github-mcp', granted] as const)])
+    // Hook HTTP actions are a destination too: they leave the process with a
+    // URL the hook template can interpolate model-derived tool input into, so
+    // they are granted and revoked here like any other egress
+    // (`ADR-LOG-RESTRUCT-0400`).
+    const hooks = (await invoke<HookConfig[]>('list_hooks')).filter(hook => hook.action.type === 'http')
+    setHttpHooks(hooks)
+    const entries = await Promise.all([
+      ...settings.providers.map(async provider => {
+        const granted = await invoke<boolean>('get_workspace_egress_consent', { providerId: provider.id })
+        return [provider.id, granted] as const
+      }),
+      invoke<boolean>('get_workspace_egress_consent', { providerId: 'mcp:github-mcp' }).then(granted => ['mcp:github-mcp', granted] as const),
+      ...hooks.map(async hook => {
+        const destination = `hook:${hook.id}`
+        const granted = await invoke<boolean>('get_workspace_egress_consent', { providerId: destination })
+        return [destination, granted] as const
+      }),
+    ])
     setGrants(Object.fromEntries(entries))
   }
 
@@ -199,6 +215,23 @@ export function WorkspaceEgressConsentCard() {
           {busy === 'mcp:github-mcp' ? 'Saving…' : grants['mcp:github-mcp'] ? 'Revoke consent' : 'Allow egress'}
         </button>
       </div>
+      {httpHooks.map(hook => {
+        const destination = `hook:${hook.id}`
+        return (
+          <div key={destination} className="flex items-center justify-between gap-3">
+            <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>HTTP hook: {hook.name}</span>
+            <button
+              onClick={() => change(destination, !grants[destination])}
+              disabled={busy === destination}
+              aria-label={`${grants[destination] ? 'Revoke consent for' : 'Allow egress for'} HTTP hook ${hook.name}`}
+              className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+              style={{ background: grants[destination] ? 'transparent' : 'var(--bg-2)', border: '1px solid var(--border-1)', color: grants[destination] ? 'var(--danger)' : 'var(--accent)' }}
+            >
+              {busy === destination ? 'Saving…' : grants[destination] ? 'Revoke consent' : 'Allow egress'}
+            </button>
+          </div>
+        )
+      })}
       </>}
       {error && <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</div>}
     </div>

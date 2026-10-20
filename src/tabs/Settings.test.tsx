@@ -12,6 +12,7 @@ import { PythonFallbackCard, WorkspaceEgressConsentCard } from './Settings'
 
 describe('WorkspaceEgressConsentCard', () => {
   const grants = new Set<string>()
+  let hooks: Array<{ id: string; name: string; action: { type: string } }> = []
 
   const grantKey = (providerId: string) =>
     `${useWorkspaceStore.getState().workspaceDir}|${providerId}`
@@ -19,6 +20,7 @@ describe('WorkspaceEgressConsentCard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     grants.clear()
+    hooks = []
     useWorkspaceStore.setState({ workspaceDir: 'C:/projects/arcana' })
     useSettingsStore.setState({ providers: [] })
     invoke.mockImplementation(async (command: string, args?: Record<string, unknown>) => {
@@ -26,16 +28,15 @@ describe('WorkspaceEgressConsentCard', () => {
         return [{ id: 'google', name: 'Google', status: 'connected', models: [], has_key: true }]
       }
       if (command === 'get_active_provider') return ['google', 'gemini-3.8-flash']
+      if (command === 'list_hooks') return hooks
       if (command === 'get_workspace_egress_consent') {
         return grants.has(grantKey(String(args?.providerId)))
       }
       if (command === 'grant_workspace_egress_consent') {
-        expect(args).toEqual({ providerId: 'google' })
         grants.add(grantKey(String(args?.providerId)))
         return undefined
       }
       if (command === 'revoke_workspace_egress_consent') {
-        expect(args).toEqual({ providerId: 'google' })
         return grants.delete(grantKey(String(args?.providerId)))
       }
       if (command === 'get_python_user_fallback') return null
@@ -72,6 +73,30 @@ describe('WorkspaceEgressConsentCard', () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledWith('revoke_workspace_egress_consent', { providerId: 'google' })
       expect(grants.has('C:/projects/arcana|google')).toBe(false)
+    })
+  })
+
+  // An HTTP hook is an egress destination: the card must offer it, name it by
+  // hook id, and grant/revoke it through the same consent commands.
+  it('grants egress for an HTTP hook by hook destination and ignores non-network hooks', async () => {
+    hooks = [
+      { id: 'hook-net', name: 'Notify build', action: { type: 'http' } },
+      { id: 'hook-log', name: 'Write log', action: { type: 'log' } },
+    ]
+    render(<WorkspaceEgressConsentCard />)
+
+    const allow = await screen.findByRole('button', {
+      name: 'Allow egress for HTTP hook Notify build',
+    })
+    expect(invoke).toHaveBeenCalledWith('get_workspace_egress_consent', {
+      providerId: 'hook:hook-net',
+    })
+    expect(screen.queryByRole('button', { name: /Write log/ })).toBeNull()
+
+    fireEvent.click(allow)
+    await screen.findByRole('button', { name: 'Revoke consent for HTTP hook Notify build' })
+    expect(invoke).toHaveBeenCalledWith('grant_workspace_egress_consent', {
+      providerId: 'hook:hook-net',
     })
   })
 

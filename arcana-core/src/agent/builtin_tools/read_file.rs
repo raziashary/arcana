@@ -108,6 +108,7 @@ impl Tool for ReadFileTool {
             file_path: Some(path.to_string_lossy().to_string()),
             task_id: None,
             worker_id: None,
+            workspace_root: Some(ctx.working_dir.clone()),
             extra: serde_json::json!({
                 "start_line": input["start_line"].as_u64(),
                 "end_line": input["end_line"].as_u64(),

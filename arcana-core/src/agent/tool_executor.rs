@@ -1187,6 +1187,7 @@ impl ToolExecutor {
                     file_path: None,
                     task_id: None,
                     worker_id: None,
+                    workspace_root: Some(self.working_dir.clone()),
                     extra: serde_json::json!({
                         "working_dir": self.working_dir,
                         // The EFFECT, not the concurrency flag. A hook shown
@@ -1339,6 +1340,7 @@ impl ToolExecutor {
                     file_path: None,
                     task_id: None,
                     worker_id: None,
+                    workspace_root: Some(self.working_dir.clone()),
                     extra: serde_json::json!({
                         "output": &result.output,
                         "is_error": result.is_error,

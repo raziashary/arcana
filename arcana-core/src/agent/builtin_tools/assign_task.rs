@@ -188,6 +188,7 @@ impl Tool for AssignTaskTool {
             file_path: None,
             task_id: Some(id.to_string()),
             worker_id: Some(worker_slug.clone()),
+            workspace_root: Some(ctx.working_dir.clone()),
             extra: json!({
                 "task_title":      task.title,
                 "previous_status": prev_status,

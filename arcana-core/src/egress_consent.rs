@@ -136,15 +136,42 @@ pub fn mcp_destination(connector_id: &str) -> Result<String> {
     validate_destination(&format!("mcp:{connector_id}"))
 }
 
+/// The egress destination for one persisted hook's network action.
+///
+/// Hooks are user-authored and globally scoped, while consent is scoped to a
+/// workspace, so the destination names the hook and the stored grant names the
+/// workspace it applies to (`ADR-LOG-RESTRUCT-0400`). Without this, an HTTP hook
+/// was the one egress path in the product with no consent check at all.
+pub fn hook_destination(hook_id: &str) -> Result<String> {
+    validate_destination(&format!("hook:{hook_id}"))
+}
+
 fn validate_destination(destination: &str) -> Result<String> {
     match destination {
         "provider:anthropic" | "provider:google" | "provider:openai" | "provider:groq" => {
             Ok(destination.to_string())
         }
         "mcp:github-mcp" => Ok(destination.to_string()),
-        _ => Err(ArcanaError::Agent(format!(
-            "unsupported egress destination '{destination}'"
-        ))),
+        _ => {
+            // A hook destination is per-hook rather than a fixed literal, so the
+            // rule is a shape: `hook:` followed by a bounded, id-shaped suffix.
+            // Anything that is not an id — a URL, a path, a free-form note — is
+            // still refused, which keeps this allow-list narrower than "any
+            // destination the caller can spell".
+            if let Some(id) = destination.strip_prefix("hook:") {
+                let id_shaped = !id.is_empty()
+                    && id.len() <= 64
+                    && id
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                if id_shaped {
+                    return Ok(destination.to_string());
+                }
+            }
+            Err(ArcanaError::Agent(format!(
+                "unsupported egress destination '{destination}'"
+            )))
+        }
     }
 }
 
@@ -669,5 +696,25 @@ mod tests {
         let _ = std::fs::remove_file(config.with_extension("db-wal"));
         let _ = std::fs::remove_file(config.with_extension("db-shm"));
         let _ = std::fs::remove_dir_all(workspace);
+    }
+}
+
+#[cfg(test)]
+mod hook_destination_tests {
+    use super::*;
+
+    #[test]
+    fn hook_destinations_are_id_shaped_and_everything_else_is_refused() {
+        assert_eq!(
+            hook_destination("6f1c2a4e-1b2c-4d5e-8f90-1234567890ab").unwrap(),
+            "hook:6f1c2a4e-1b2c-4d5e-8f90-1234567890ab"
+        );
+        assert!(hook_destination("").is_err());
+        assert!(hook_destination("has space").is_err());
+        assert!(hook_destination(&"a".repeat(65)).is_err());
+        // The allow-list stays closed: a URL is not a destination, so a hook
+        // cannot be used to register an endpoint the product would never grant.
+        assert!(hook_destination("https://example.com/x").is_err());
+        assert!(hook_destination("../../etc/passwd").is_err());
     }
 }

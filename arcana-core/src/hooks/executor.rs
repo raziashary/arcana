@@ -14,7 +14,7 @@ impl HookExecutor {
     /// Execute a hook and return a log entry describing the outcome.
     pub async fn execute(hook: &HookConfig, ctx: &HookContext) -> HookExecutionLog {
         let start = Instant::now();
-        let (outcome, output, error) = Self::run_action(&hook.action, ctx).await;
+        let (outcome, output, error) = Self::run_action(&hook.id, &hook.action, ctx).await;
         let duration_ms = start.elapsed().as_millis() as u64;
 
         debug!(
@@ -39,6 +39,7 @@ impl HookExecutor {
     }
 
     async fn run_action(
+        hook_id: &str,
         action: &HookAction,
         ctx: &HookContext,
     ) -> (HookOutcome, Option<String>, Option<String>) {
@@ -105,6 +106,63 @@ impl HookExecutor {
                 let url = substitute(url, ctx);
                 let meth = method.to_uppercase();
 
+                // Egress consent — the same gate provider and MCP traffic pass
+                // through, and the one path that previously had none. The URL is
+                // template-expanded and the template can interpolate
+                // model-derived tool input, so the destination is influenced by
+                // the model: nothing is sent until the user grants this hook for
+                // this workspace (`ADR-LOG-RESTRUCT-0400`).
+                let Some(workspace) = ctx.workspace_root.as_deref() else {
+                    return (
+                        HookOutcome::Failed,
+                        None,
+                        Some(
+                            "HTTP hook refused: no workspace to scope network consent to"
+                                .to_string(),
+                        ),
+                    );
+                };
+                let destination = match crate::egress_consent::hook_destination(hook_id) {
+                    Ok(destination) => destination,
+                    Err(error) => {
+                        return (
+                            HookOutcome::Failed,
+                            None,
+                            Some(format!("HTTP hook refused: {error}")),
+                        )
+                    }
+                };
+                let consent =
+                    crate::egress_consent::WorkspaceEgressConsentDb::open().and_then(|mut db| {
+                        db.authorize_and_audit(
+                            std::path::Path::new(workspace),
+                            &destination,
+                            "hook_http",
+                        )
+                    });
+                match consent {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return (
+                            HookOutcome::Failed,
+                            None,
+                            Some(format!(
+                                "HTTP hook refused: no egress consent for {destination} in this \
+                                 workspace (allow it in Settings > Workspace egress consent)"
+                            )),
+                        )
+                    }
+                    Err(error) => {
+                        return (
+                            HookOutcome::Failed,
+                            None,
+                            Some(format!(
+                                "HTTP hook refused: consent could not be established ({error})"
+                            )),
+                        )
+                    }
+                }
+
                 let client = reqwest::Client::new();
                 let mut req = match meth.as_str() {
                     "GET" => client.get(&url),
@@ -147,8 +205,33 @@ impl HookExecutor {
             }
 
             HookAction::Log { file, message } => {
-                let msg = substitute(message, ctx);
+                // The target path is user-authored configuration and is
+                // deliberately NOT substituted — only the message is — so a model
+                // cannot choose where this writes. What it must not do is climb
+                // out of the location the author named by traversal.
+                //
+                // Note for accuracy: the sibling Shell action's
+                // `validate_working_directory` is a *portability* check (it
+                // rejects `/tmp/`), not a jail — the sandbox is what confines a
+                // shell hook. Arcana's own file I/O runs outside that sandbox, so
+                // this explicit-path rule is the confinement this action has.
                 let path = std::path::Path::new(file);
+                if file.trim().is_empty()
+                    || path
+                        .components()
+                        .any(|component| matches!(component, std::path::Component::ParentDir))
+                {
+                    return (
+                        HookOutcome::Failed,
+                        None,
+                        Some(
+                            "Log hook refused: the target path must be explicit and must not \
+                             traverse upwards"
+                                .to_string(),
+                        ),
+                    );
+                }
+                let msg = substitute(message, ctx);
                 let line = format!("[{}] {}\n", crate::db::timestamps::now_rfc3339(), msg);
                 match std::fs::OpenOptions::new()
                     .create(true)
@@ -504,6 +587,7 @@ mod portability_tests {
             file_path: None,
             task_id: None,
             worker_id: None,
+            workspace_root: None,
             extra: serde_json::Value::Null,
         };
         let log = HookExecutor::execute(&hook, &context).await;
@@ -556,6 +640,7 @@ mod shell_boundary_tests {
             file_path: None,
             task_id: None,
             worker_id: None,
+            workspace_root: workspace.map(|path| path.to_string_lossy().into_owned()),
             extra: workspace.map_or(
                 serde_json::Value::Null,
                 |path| json!({"working_dir": path.to_string_lossy()}),
@@ -656,5 +741,156 @@ mod shell_boundary_tests {
             !sentinel.exists(),
             "unsupported platforms must not spawn a shell"
         );
+    }
+}
+
+#[cfg(test)]
+mod egress_boundary_tests {
+    use super::*;
+    use crate::hooks::types::{HookType, ToolCallContext};
+
+    fn http_hook(url: &str) -> HookConfig {
+        HookConfig {
+            id: "http-egress-hook".into(),
+            name: "HTTP egress hook".into(),
+            hook_type: HookType::PostToolUse,
+            enabled: true,
+            priority: 100,
+            conditions: Default::default(),
+            action: HookAction::Http {
+                url: url.into(),
+                method: "POST".into(),
+                headers: None,
+                body: None,
+            },
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    fn log_hook(file: &str) -> HookConfig {
+        HookConfig {
+            id: "log-egress-hook".into(),
+            name: "Log hook".into(),
+            hook_type: HookType::PostToolUse,
+            enabled: true,
+            priority: 100,
+            conditions: Default::default(),
+            action: HookAction::Log {
+                file: file.into(),
+                message: "observed".into(),
+            },
+            created_at: String::new(),
+            updated_at: String::new(),
+        }
+    }
+
+    fn context(workspace_root: Option<String>) -> HookContext {
+        HookContext {
+            hook_type: HookType::PostToolUse.as_str().into(),
+            timestamp: chrono::Utc::now(),
+            session_id: Some("egress-boundary".into()),
+            agent_mode: None,
+            tool_call: Some(ToolCallContext {
+                id: "call".into(),
+                name: "write_file".into(),
+                input: serde_json::json!({"path": "src/lib.rs"}),
+                result: None,
+                is_error: false,
+            }),
+            file_path: None,
+            task_id: None,
+            worker_id: None,
+            workspace_root,
+            extra: serde_json::Value::Null,
+        }
+    }
+
+    /// The URL of an HTTP hook is template-expanded and the template may
+    /// interpolate model-derived tool input, so it must not leave the process
+    /// until the user has granted this hook for this workspace.
+    #[tokio::test]
+    async fn an_http_hook_without_consent_is_refused_before_any_request() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("project");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let _home = crate::db::test_support::with_home(home.path());
+
+        let log = HookExecutor::execute(
+            &http_hook("http://127.0.0.1:9/should-never-be-contacted"),
+            &context(Some(workspace.to_string_lossy().into_owned())),
+        )
+        .await;
+
+        assert_eq!(log.outcome, HookOutcome::Failed);
+        let error = log.error.unwrap_or_default();
+        assert!(
+            error.contains("no egress consent"),
+            "the refusal must come from the consent gate, not from the network: {error}"
+        );
+        assert!(
+            !error.contains("connect") && !error.contains("dns"),
+            "no request may be attempted before consent: {error}"
+        );
+    }
+
+    /// An HTTP hook fired somewhere with no workspace has no consent scope, and
+    /// absent scope is a refusal rather than an implied allow.
+    #[tokio::test]
+    async fn an_http_hook_without_a_workspace_is_refused() {
+        let home = tempfile::tempdir().unwrap();
+        let _home = crate::db::test_support::with_home(home.path());
+
+        let log = HookExecutor::execute(&http_hook("http://127.0.0.1:9/x"), &context(None)).await;
+
+        assert_eq!(log.outcome, HookOutcome::Failed);
+        assert!(log
+            .error
+            .unwrap_or_default()
+            .contains("no workspace to scope network consent"));
+    }
+
+    /// Proof the gate is a gate and not a blanket refusal: with the grant in
+    /// place the consent refusal no longer happens (the send then fails on its
+    /// own, which is fine - the assertion is about which refusal occurred).
+    #[tokio::test]
+    async fn a_granted_hook_destination_passes_the_consent_gate() {
+        let home = tempfile::tempdir().unwrap();
+        let workspace = home.path().join("project");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let _home = crate::db::test_support::with_home(home.path());
+        let destination = crate::egress_consent::hook_destination("http-egress-hook").unwrap();
+        let mut db = crate::egress_consent::WorkspaceEgressConsentDb::open().unwrap();
+        db.grant(&workspace, &destination).unwrap();
+
+        let log = HookExecutor::execute(
+            &http_hook("http://127.0.0.1:9/x"),
+            &context(Some(workspace.to_string_lossy().into_owned())),
+        )
+        .await;
+
+        let error = log.error.unwrap_or_default();
+        assert!(
+            !error.contains("no egress consent"),
+            "a granted destination must pass the gate, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_log_hook_refuses_upward_traversal() {
+        let log = HookExecutor::execute(&log_hook("../outside.log"), &context(None)).await;
+        assert_eq!(log.outcome, HookOutcome::Failed);
+        assert!(log.error.unwrap_or_default().contains("traverse upwards"));
+    }
+
+    #[tokio::test]
+    async fn a_log_hook_still_writes_an_explicit_path() {
+        let home = tempfile::tempdir().unwrap();
+        let target = home.path().join("hooks.log");
+        let log = HookExecutor::execute(&log_hook(&target.to_string_lossy()), &context(None)).await;
+        assert_eq!(log.outcome, HookOutcome::Executed);
+        assert!(std::fs::read_to_string(&target)
+            .unwrap()
+            .contains("observed"));
     }
 }

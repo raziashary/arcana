@@ -409,6 +409,7 @@ impl Tool for UpdateTaskStatusTool {
                 file_path: None,
                 task_id: Some(id.to_string()),
                 worker_id: assigned_worker.clone(),
+                workspace_root: Some(ctx.working_dir.clone()),
                 extra: json!({
                     "task_title": task.title,
                     "previous_status": task.status.as_str(),

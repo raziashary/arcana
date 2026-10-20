@@ -629,6 +629,7 @@ mod portability_tests {
             file_path: None,
             task_id: None,
             worker_id: None,
+            workspace_root: None,
             extra: serde_json::Value::Null,
         };
 

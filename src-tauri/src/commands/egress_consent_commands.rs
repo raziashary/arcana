@@ -1,6 +1,6 @@
 use crate::errors::{ArcanaError, Result};
 use arcana_core::egress_consent::{
-    mcp_destination, provider_destination, WorkspaceEgressConsentDb,
+    hook_destination, mcp_destination, provider_destination, WorkspaceEgressConsentDb,
 };
 use std::path::PathBuf;
 
@@ -11,6 +11,8 @@ fn scope(provider_id: &str) -> Result<(PathBuf, String)> {
         })?;
     let destination = if let Some(connector_id) = provider_id.strip_prefix("mcp:") {
         mcp_destination(connector_id)
+    } else if let Some(hook_id) = provider_id.strip_prefix("hook:") {
+        hook_destination(hook_id)
     } else {
         provider_destination(&provider_id)
     }

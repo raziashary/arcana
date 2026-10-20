@@ -46,6 +46,9 @@ pub fn delete_session(
         file_path: None,
         task_id: None,
         worker_id: None,
+        // Deleting a session has no workspace in hand; an HTTP hook fired here
+        // has no consent scope, so it is refused rather than assumed allowed.
+        workspace_root: None,
         extra: serde_json::json!({}),
     };
 
@@ -73,9 +76,10 @@ pub fn create_session(
         session_id: Some(session.id.clone()),
         agent_mode: None,
         tool_call: None,
-        file_path: Some(working_dir),
+        file_path: Some(working_dir.clone()),
         task_id: None,
         worker_id: None,
+        workspace_root: Some(working_dir),
         extra: serde_json::json!({
             "provider": provider,
             "model": model,

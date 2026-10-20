@@ -7626,3 +7626,18 @@ The class is therefore a string property of a Display impl rather than a type: a
 **Scope halt:** carried out as one unit (producers + both consumers + their tests). A partial change leaves one consumer parsing text and re-creates the defect. Tests that constructed a tagged `Provider(String)` to pin the old mechanism are repointed at the variant.
 
 **Evidence:** producer sites `provider/{anthropic,google,groq,openai}.rs` and any `usage.rs` construction; consumers `agent/engine.rs`, `recipes/runner.rs`. Validation is recorded with the implementing commit.
+
+## ADR-LOG-RESTRUCT-0400 — Hook actions pass through the same egress consent as provider traffic
+
+**Context / 2026-10-20 (owner-approved W8).** The audit found `HookAction::Http` was the one egress path in the product with no consent check: it expanded its URL with `substitute(url, ctx)`, and `ctx` carries `tool_call.input`, which is model-produced. So a persisted hook could be made to send data to a destination the model chose, from a hook the user authored for a different URL, with nothing asked. `HookAction::Log` was recorded as writing an "unjailed" path.
+
+**Decision.** Both are closed at the owning layer:
+
+1. **HTTP hooks need consent, per workspace, per hook.** `egress_consent` gains `hook_destination(hook_id)` → `hook:<id>`, validated by shape (`hook:` + ≤64 id-shaped characters) so the destination allow-list stays closed — a URL is still not a destination. `HookContext` gains `workspace_root: Option<String>` because consent is workspace-scoped and the hook executor previously had no workspace identity at all; it is populated at every firing site that has one. The `Http` branch constructs the URL, then calls `WorkspaceEgressConsentDb::authorize_and_audit(workspace, "hook:<id>", "hook_http")` and refuses on `false`, on error, and on absent workspace **before** building a request. The grant/revoke surface is the existing `WorkspaceEgressConsentCard`, which now lists each HTTP hook by name with destination `hook:<id>` — no new consent mechanism, no new command.
+2. **The Log path refuses traversal.** The target path is user-authored and is deliberately not substituted (only the message is), so a model cannot choose it; what it could still do is climb out by `..`. Empty and parent-traversing paths are refused.
+
+**Corrected finding (retracted in place).** The audit claimed `HookAction::Log` was "unjailed" *relative to* the Shell action's jailing. `platform::shell_portability::validate_working_directory` is a **portability** check — it rejects the hardcoded `/tmp/` — not a jail; what confines a shell hook is `run_sandboxed_shell_hook`'s sandbox. Arcana's own file I/O runs outside that sandbox, so there is no existing jail rule to mirror. The Log action therefore gets the confinement that is actually available to it (explicit, non-traversing path), and the residual — no workspace jail for Arcana-authored file writes — is named here rather than implied to be solved.
+
+**Consequences.** An HTTP hook that fired with no workspace in hand (session deletion) is now refused instead of sending: absent consent scope is a refusal, not an implied allow. A hook in a workspace that has not granted it is refused with an actionable message. Live/billable behaviour is unchanged (no provider call is involved).
+
+**Evidence.** `_verify/2026-10-20-W8-HOOK-EGRESS.md`: 6 new tests, and the consent-gate test falsified by bypassing the denial arm (request then attempted → test fails with a network error, naming the URL), then reverted.
