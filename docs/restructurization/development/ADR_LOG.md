@@ -7886,3 +7886,45 @@ Falsified: uninstalled counters reported 0 against 63 real drops; the transport 
 to a literal `0` (test failed, 0 vs 7); the header warning made unconditional failed three tests,
 and removed failed the new one. Receipt:
 `_verify/2026-10-20-P4-50-PRODUCER-COST-AND-DROP-VISIBILITY.md`.
+
+---
+
+## ADR-LOG-RESTRUCT-0407 — Failure injection uses the filesystem, not a test seam
+
+**Context / 2026-10-20 (P4-50, TG4-24).** The gate requires: "Inject telemetry persistence and
+export failures and prove core task execution remains safe and its actual result is preserved."
+The evidence on record was producer-level only — a writer that errors in a unit test. The audit
+plan's Theme D separately flags production structs that grow `#[cfg(test)]` seams.
+
+**Decision.** Persistence failure is injected **through the filesystem**, not through test-only
+code: the real Fleet CLI runs with its `USERPROFILE`/`HOME` pointing at an isolated profile in which
+`~/.arcana/logs` exists as a *file*, so `resolve_log_dir`'s `create_dir_all` fails and
+`init_with_filter` takes its shipped console-only path. Nothing in production changes to support the
+test, and the test therefore proves the shipped degradation path rather than a mock of it.
+
+The test (`src-cli/tests/fleet_offline.rs::offline_fleet_cli_completes_when_telemetry_cannot_persist`)
+runs the real offline Fleet scenario and asserts: the run exits successfully; the epic and its child
+reach `Done` with `worker-backend` assigned; workspace inputs are unchanged; **no** readable `.log`
+or `arcana-events` stream was created; and the blocker path is still a file with its original
+contents, so nothing half-replaced or truncated it.
+
+**Export failures stay at the command layer.** A Fleet run performs no export — export is a
+user-initiated read of already-persisted files — so injecting an export failure "through a Fleet
+run" would mean inventing an operation the Fleet does not perform. `write_log_export`'s refusal to
+create partial output (`log_export_failure_is_reported_without_creating_partial_output`) is the
+owning-layer proof, and the Logs tab surfaces the error instead of swallowing it.
+
+**Consequences.** Failure isolation is proven end to end with no production seam and no weakened
+production code. The test is feature-gated (`offline-fleet-test`) and runs offline with provider
+credentials removed.
+
+**Not claimed.** This is not a live-provider run, so it does not close P4-49 or the live milestone.
+The process-local health flag cannot be read back from the CLI process (the reader is the desktop
+Logs panel; the flag is process lifetime by design) — the assertion here is that core work and its
+artifacts survive, not that a second process can observe the flag. The workspace-integrity check is
+an observation of the run, not an injected fault.
+
+**Evidence.** `cargo test -p arcanactl --features offline-fleet-test --test fleet_offline --locked --
+--test-threads=1` → 7/7. Falsified by deleting the blocker: with a writable sink both streams appear
+and the "no partial stream" assertion fails, so the injection is load-bearing rather than incidental.
+Receipt: `_verify/2026-10-20-P4-50-FLEET-NO-SINK-INJECTION.md`.

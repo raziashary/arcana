@@ -667,6 +667,94 @@ fn offline_fleet_cli_completes_board_child_and_exports_observability() {
 }
 
 #[test]
+fn offline_fleet_cli_completes_when_telemetry_cannot_persist() {
+    // TG4-24 failure injection through a real Fleet run, with no test seam: the
+    // production degradation path is reached by making the log directory
+    // unpreparable on disk (a file where `~/.arcana/logs` must be a directory).
+    // The CLI then initialises console-only, exactly as it would on a broken
+    // profile.
+    let profile = IsolatedProfile::new();
+    let sink = profile.root.join(".arcana").join("logs");
+    std::fs::write(&sink, "not a directory").expect("block the log directory");
+    profile.grant_workspace_egress();
+
+    let title = format!("Offline Fleet without a telemetry sink {}", Uuid::new_v4());
+    let before = workspace_input_snapshot(&profile.workspace);
+    let output = profile.run_fleet("success", &title, 120);
+    let changed = changed_workspace_inputs(&before, &workspace_input_snapshot(&profile.workspace));
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        output.status.success(),
+        "Fleet must complete when telemetry cannot persist: {}",
+        fleet_failure_diagnostics(&output.stderr)
+    );
+
+    // (i) The actual work and its durable result are unaffected.
+    let board = profile.tasks();
+    let epic = board
+        .list(None)
+        .expect("read persisted board")
+        .into_iter()
+        .find(|task| task.title == title)
+        .expect("CLI-created epic survives a missing telemetry sink");
+    assert_eq!(
+        epic.status,
+        TaskStatus::Done,
+        "epic completion comes from child completion and must not depend on telemetry"
+    );
+    let children = board
+        .get_epic_tasks(&epic.id.to_string())
+        .expect("read epic children");
+    assert_eq!(children.len(), 1);
+    assert_eq!(
+        children[0].status,
+        TaskStatus::Done,
+        "the worker's task result must survive with no telemetry sink"
+    );
+    assert_eq!(
+        children[0].assigned_worker.as_deref(),
+        Some("worker-backend")
+    );
+    // The worker's *actual* result is the compiled fixture, not a status flag:
+    // telemetry failure must leave the real artifact in place.
+    assert!(
+        changed.is_empty(),
+        "a telemetry persistence failure must not disturb workspace inputs: {changed:?}"
+    );
+
+    // (ii) No partial stream was created, and the blocker was not replaced or
+    // truncated by a retired writer.
+    let entries = std::fs::read_dir(profile.root.join(".arcana"))
+        .expect("read isolated profile")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        !entries
+            .iter()
+            .any(|name| name.ends_with(".log") || name.contains("arcana-events")),
+        "an unpreparable sink must not leave a partial readable or structured stream: {entries:?}"
+    );
+    assert!(
+        std::fs::metadata(&sink).is_ok_and(|metadata| metadata.is_file()),
+        "the log-directory blocker must remain a file after the run"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&sink).expect("read the blocker back"),
+        "not a directory",
+        "the run must not overwrite the path it could not use"
+    );
+
+    // (iii) The degradation is reported, not silent. `--quiet` keeps the
+    // console filter at its quiet level, so the CLI reports loss of the sink
+    // through its own visible path rather than by pretending to have written.
+    assert!(
+        !stderr.contains("arcana-events"),
+        "the CLI must not claim a structured stream it never had: {stderr}"
+    );
+}
+
+#[test]
 fn offline_fleet_cli_deadline_persists_ready_epic_and_returns_after_shutdown() {
     let profile = IsolatedProfile::new();
     profile.grant_workspace_egress();
