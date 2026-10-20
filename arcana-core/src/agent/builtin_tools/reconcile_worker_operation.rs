@@ -1272,4 +1272,192 @@ mod tests {
             json!("recovery_conflict")
         );
     }
+
+    /// TG4-27 names the repository state explicitly: HEAD, branch/worktree,
+    /// staged and unstaged content, and *relevant* untracked files.
+    /// `RecoverySnapshot` covers those through two arms — `GitSnapshot`
+    /// (head + branch digest + index digest) and `workspace_fingerprint`
+    /// (every workspace input, generated directories excluded). Each arm needs
+    /// its own negative case, plus the scoping control that proves the exclusion
+    /// is deliberate rather than accidental blindness.
+    #[tokio::test]
+    async fn repository_worktree_and_index_changes_refuse_before_handoff() {
+        async fn decide(f: &ConflictFixture, decision: &str, reason: &str) -> ToolResult {
+            ReconcileWorkerOperationTool
+                .execute(
+                    json!({
+                        "run_id": f.run,
+                        "intent_cursor": f.cursor,
+                        "decision": decision,
+                        "reason_code": reason
+                    }),
+                    &supervisor_working(f.workspace.path()),
+                )
+                .await
+        }
+
+        /// Complete the journalled effect on disk, so a clean workspace would
+        /// reconcile. Any refusal after that is caused by the tamper alone.
+        fn complete_effect(f: &ConflictFixture) {
+            std::fs::create_dir_all(f.workspace.path().join("target")).unwrap();
+            std::fs::write(f.workspace.path().join("target/generated.txt"), f.content).unwrap();
+        }
+
+        async fn assert_reconciled_refused(f: &ConflictFixture, case: &str) {
+            let refused = decide(f, "reconciled", "effect_verified_complete").await;
+            assert!(
+                refused.is_error,
+                "{case}: a changed repository must refuse a verified completion: {}",
+                refused.output
+            );
+            let envelope = error_envelope(&refused);
+            assert_eq!(
+                envelope["error"]["code"],
+                json!("operation_reconciliation_rejected"),
+                "{case}"
+            );
+            assert_eq!(
+                envelope["error"]["category"],
+                json!("recovery_conflict"),
+                "{case}"
+            );
+            // The unknown effect must remain unresolved after every refusal.
+            assert_eq!(
+                RunsDb::open()
+                    .unwrap()
+                    .unresolved_task_side_effect(f.task_id)
+                    .unwrap()
+                    .expect("effect still unresolved")
+                    .2,
+                f.cursor,
+                "{case}: a refusal must not resolve the uncertainty"
+            );
+        }
+
+        // (1) Unstaged worktree edit of a tracked file. The index still matches
+        // HEAD and the effect is complete, so only the workspace-fingerprint arm
+        // can refuse this.
+        {
+            let home = tempfile::tempdir().unwrap();
+            let _home = crate::db::test_support::with_home(home.path());
+            let f = conflict_fixture("unstaged-session");
+            complete_effect(&f);
+            std::fs::write(f.workspace.path().join("seed.txt"), b"seed content edited").unwrap();
+            assert_eq!(
+                f.repo
+                    .index()
+                    .unwrap()
+                    .get_path(std::path::Path::new("seed.txt"), 0)
+                    .unwrap()
+                    .id,
+                f.repo
+                    .find_commit(f.seed_head)
+                    .unwrap()
+                    .tree()
+                    .unwrap()
+                    .get_name("seed.txt")
+                    .unwrap()
+                    .id(),
+                "the index must still match HEAD, otherwise this case proves the index arm"
+            );
+            assert_reconciled_refused(&f, "unstaged worktree edit").await;
+        }
+
+        // (1b) The same tamper must also refuse the retry-admission path, whose
+        // fingerprint comparison is separate from the completion comparison.
+        {
+            let home = tempfile::tempdir().unwrap();
+            let _home = crate::db::test_support::with_home(home.path());
+            let f = conflict_fixture("unstaged-retry-session");
+            std::fs::write(f.workspace.path().join("seed.txt"), b"seed content edited").unwrap();
+            let refused = decide(&f, "retry_safe", "idempotent_retry_verified").await;
+            assert!(
+                refused.is_error,
+                "a changed workspace must refuse retry admission: {}",
+                refused.output
+            );
+            assert_eq!(
+                error_envelope(&refused)["error"]["category"],
+                json!("recovery_conflict")
+            );
+        }
+
+        // (2) Index-only change: worktree content and HEAD are untouched, so
+        // only the index digest can refuse this. Restoring the recorded mode
+        // accepts, which makes the refusal differential rather than blanket.
+        {
+            let home = tempfile::tempdir().unwrap();
+            let _home = crate::db::test_support::with_home(home.path());
+            let f = conflict_fixture("staged-session");
+            complete_effect(&f);
+            let mut entry = {
+                let mut index = f.repo.index().unwrap();
+                let mut entry = index.get_path(std::path::Path::new("seed.txt"), 0).unwrap();
+                entry.mode = 0o100755;
+                index.add(&entry).unwrap();
+                index.write().unwrap();
+                entry
+            };
+            assert_eq!(
+                std::fs::read(f.workspace.path().join("seed.txt")).unwrap(),
+                b"seed content",
+                "the worktree content must be untouched, otherwise this case proves the fingerprint arm"
+            );
+            assert_reconciled_refused(&f, "staged index change").await;
+
+            entry.mode = 0o100644;
+            let mut index = f.repo.index().unwrap();
+            index.add(&entry).unwrap();
+            index.write().unwrap();
+            let accepted = decide(&f, "reconciled", "effect_verified_complete").await;
+            assert!(
+                !accepted.is_error,
+                "restoring the recorded index must accept: {}",
+                accepted.output
+            );
+        }
+
+        // (3) Relevant untracked file: not generated output, so it is a
+        // workspace input and must block the handoff.
+        {
+            let home = tempfile::tempdir().unwrap();
+            let _home = crate::db::test_support::with_home(home.path());
+            let f = conflict_fixture("untracked-session");
+            complete_effect(&f);
+            std::fs::write(f.workspace.path().join("notes.txt"), b"untracked input").unwrap();
+            assert!(
+                f.repo
+                    .statuses(None)
+                    .unwrap()
+                    .iter()
+                    .any(|status| status.path() == Some("notes.txt")),
+                "the tamper must be untracked, otherwise this case proves the index arm"
+            );
+            assert_reconciled_refused(&f, "relevant untracked file").await;
+        }
+
+        // (4) Scoping control: untracked content inside a generated dependency
+        // tree is deliberately excluded, and the completed effect still
+        // reconciles. Without this case the refusals above would be
+        // indistinguishable from "any new file blocks everything".
+        {
+            let home = tempfile::tempdir().unwrap();
+            let _home = crate::db::test_support::with_home(home.path());
+            let f = conflict_fixture("generated-session");
+            complete_effect(&f);
+            std::fs::create_dir_all(f.workspace.path().join("node_modules/pkg")).unwrap();
+            std::fs::write(
+                f.workspace.path().join("node_modules/pkg/index.js"),
+                b"generated dependency tree",
+            )
+            .unwrap();
+            let accepted = decide(&f, "reconciled", "effect_verified_complete").await;
+            assert!(
+                !accepted.is_error,
+                "generated untracked content must not block a verified completion: {}",
+                accepted.output
+            );
+            assert_eq!(error_envelope(&accepted)["operation_complete"], json!(true));
+        }
+    }
 }

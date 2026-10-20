@@ -7971,3 +7971,53 @@ still an offline scenario — no provider request, so no live-provider claim.
 --test-threads=1` → 7/7. Falsified three ways: memory steps disabled (export assertion failed);
 expected child id off by one (failed, `Some(2)` vs `Some(3)`); supervisor outcome negated (failed).
 All reverted. Receipt: `_verify/2026-10-20-P4-50-CLI-MEMORY-LIFECYCLE-READBACK.md`.
+
+---
+
+## ADR-LOG-RESTRUCT-0409 — Repository state is bound by two mechanisms, and generated trees are out of scope by contract
+
+**Context / 2026-10-20 (P4-53, TG4-27).** The gate names the repository state that a handoff must
+reconcile: "HEAD, branch/worktree, staged/unstaged and relevant untracked files". `RecoverySnapshot`
+already persisted `head`, `branch_digest`, `index_digest` and a workspace input fingerprint, but no
+test proved the *breadth*, and nothing stated which untracked files count. Without both, "snapshot
+comparison" was only proven for HEAD advances.
+
+**Decision.** Repository state is bound by **two independent mechanisms**, each with its own negative
+case, rather than by a single git-status summary:
+
+1. **`GitSnapshot`** — resolved HEAD, a digest of the symbolic branch target, and a digest over every
+   index entry (path, object id, mode, flags). This catches branch switches, HEAD advances and
+   *stage-only* changes: staging is a mutation of the recorded state even when the worktree bytes and
+   HEAD are unchanged.
+2. **The workspace input fingerprint** — a deterministic hash over every workspace input, with a
+   fixed exclusion list of generated trees (`.git`, `target`, `node_modules`, virtualenvs, caches,
+   build output). This catches unstaged worktree edits and untracked **inputs**, which the index
+   cannot see.
+
+**"Relevant" is defined, not implied.** Generated dependency/build trees are excluded because
+ordinary builds write into them: including them would make every build invalidate its own evidence,
+and the pre-existing fingerprint contract already excludes them for build evidence. An untracked
+source or notes file is an input and blocks the handoff; an untracked file under `target/` or
+`node_modules/` does not. The exclusion list is the single owner of that rule.
+
+**Proof shape.** Each refusal case first plants the journalled effect (so a clean workspace reconciles)
+and then applies exactly one tamper, so the refusal is attributable rather than incidental. The
+staged-change case additionally restores the recorded index and asserts acceptance, and a generated
+tree control asserts that exclusion still reconciles — the refusals cannot be read as "any new file
+blocks everything".
+
+**Consequences.** Snapshot breadth is proven per mechanism, and the untracked-file rule is explicit
+instead of accidental. No production code changed: the mechanisms already existed; this unit found
+them sufficient and pinned them.
+
+**Not claimed.** The expectation model remains `write_file`-only — `verify_state` refuses any other
+operation, so git-commit, build/process and MCP/network effects still have no snapshot expectation.
+Whole-app restart is still unproven, and file modes are not part of the fingerprint (only the index
+digest sees a mode change).
+
+**Evidence.** `reconcile_worker_operation` 6/6 and `platform::workspace_fingerprint` 2/2 on the current
+tree. Falsified one arm at a time: removing the other-inputs comparison accepted the unstaged edit;
+removing the Git comparison accepted the staged change; removing `node_modules` from the exclusions
+made the generated-tree control refuse. All reverted. Receipt:
+`_verify/2026-10-20-P4-53-REPOSITORY-SNAPSHOT-BREADTH.md`. This unit also reconciled the P4-53 plan
+row, which had gone stale against receipts through 2026-10-18.
