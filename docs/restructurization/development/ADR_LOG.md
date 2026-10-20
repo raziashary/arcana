@@ -7641,3 +7641,36 @@ The class is therefore a string property of a Display impl rather than a type: a
 **Consequences.** An HTTP hook that fired with no workspace in hand (session deletion) is now refused instead of sending: absent consent scope is a refusal, not an implied allow. A hook in a workspace that has not granted it is refused with an actionable message. Live/billable behaviour is unchanged (no provider call is involved).
 
 **Evidence.** `_verify/2026-10-20-W8-HOOK-EGRESS.md`: 6 new tests, and the consent-gate test falsified by bypassing the denial arm (request then attempted → test fails with a network error, naming the URL), then reverted.
+
+## ADR-LOG-RESTRUCT-0401 — The freeform shell is retired by capability-scoped consent, not deletion
+
+**Context / 2026-10-20 (owner-delegated, §8.7).** §3.8 found that `project_command` is already
+vetted — closed intent set, argv from `platform::command::resolve`, workspace/toolchain/task-claim
+validation, an `install` → `HostApproval` upgrade, and the `process_sandbox::spawn` boundary —
+while `bash.rs` builds `cmd /C` / `sh -c` from raw model text inside the same sandbox under a
+separate `FreeformShell` effect. The gap is therefore **exclusivity and consent identity**, not
+vetting quality. Three mechanisms were offered: consent-gate and capability-scope the freeform
+shell; delete it from the model's tool set and extend the intent set where something real is
+missing; or keep both and make the vetted tool the default.
+
+**Decision: the first.** The freeform shell stays reachable, but an approval must name the
+capability the command will exercise, and the consent record is keyed to that capability rather
+than to the tool's name. Today's consent says "the `bash` tool was approved"; that is an identity
+for a name, and it transfers to whatever the model writes next. A capability identity does not.
+
+**Why not deletion (option 2).** It is the purest reading of the owner's mandate, but it removes
+a route real workflows use today (`bash` is how the shipped recipes run their own bookkeeping,
+and the intent set does not yet cover every one of those calls). Doing it in the same phase as
+P4 closeout would change what the agent can do with no fallback, which is exactly the risk the
+owner's own framing avoids ("it's running a single strong tool set" is the destination, and the
+destination is reached by narrowing what the freeform path is allowed to be, not by turning it
+off under a running fleet).
+
+**Why not the third.** It leaves the untyped path in the model's reach and records which one ran;
+visibility is not a boundary.
+
+**Scope.** W9 only. It needs: a capability object carried in `ProcessSpec` (today the spec cannot
+express what a command may touch), consent resolution by capability instead of by tool name, and
+`run_ide_project` passing the same claim/build-evidence check as the vetted path. No provider or
+billing behaviour is involved. The intent-based suite must be re-run through the production
+`execute` path, not the internal launcher, before this is called done.

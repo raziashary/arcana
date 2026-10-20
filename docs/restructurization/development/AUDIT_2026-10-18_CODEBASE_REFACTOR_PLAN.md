@@ -339,3 +339,35 @@ the untracked session-checkpoint receipts.
       visible while it is being closed. Weakest, and it leaves the untyped path in the model's
       reach.
    Which one — and if (2), which intents must exist first so no real workflow loses its only route?
+
+**Resolution (2026-10-20).** Owner: *"for both 8.6 and 8.7 yes you may correct them."*
+
+*Item 6 — status tokens and the stale command name: corrected.* `P4-18`, `P4-51` and `P4-56`
+now read `PARTIAL`, and the MDP's P4 preamble carries the rule that a `*-PROVEN` token belongs
+only on a checked row and an unchecked row states `PARTIAL` plus what is still open. In
+`_verify/A1-P0-code-audit.md` the two pre-rename names (`check_autodev_instructions_exists`,
+`get_autodev_instructions_char_count`) now match the live tree
+(`check_arcana_instructions_exists`, `get_arcana_instructions_char_count`). No checkbox changed.
+
+*Item 6 — veneers: kept, with a retirement condition.* Measured 2026-10-20 (the §3.7 figure was
+high by two): **26 files** under `src-tauri/src` re-export from `arcana_core`; **25** are a
+single `pub use arcana_core::<module>::*;` line, and `events.rs` also carries code, so the veneer
+population is 25. They exist so command modules can write `use crate::db::HooksDb`; nothing
+outside `src-tauri` imports them.
+
+Retirement condition — all three together:
+1. no `crate::<veneer>::` path remains under `src-tauri/src` (measured today: `crate::db::` 28,
+   `crate::provider::` 19, `crate::graph::` 12, then smaller counts);
+2. the file holds no other code (a veneer that grew a real module is excluded);
+3. `cargo check -p arcana --all-targets` passes with the file deleted.
+
+Not removed now: that is a mechanical rename across the whole Tauri crate, and putting it in the
+same commit as W8's security fix would make one commit carry both a crate-wide rename and a
+behaviour change. Enforcement belongs with W1's mechanical guards — a source scan that fails when
+a veneer exists with zero remaining `crate::<name>::` references, so the condition is checked
+rather than remembered.
+
+*Item 7 — §3.8/W9 mechanism: option 1.* The freeform shell stays reachable, but only through an
+approval that names the capability it may exercise — replacing today's implicit "the `bash` tool
+is approved" with a consent identity that travels with the call. Recorded in
+ADR-LOG-RESTRUCT-0401; the implementation is W9's own unit.

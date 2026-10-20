@@ -360,9 +360,12 @@ shipped**" implementation "wired to five Tauri commands". Registered is not ship
 them, so undo is not reachable by a user through either implementation. The reason text overstates
 the state of the surviving module.
 
-Full list: analyze_diff, analyze_pr_diff, break_down_epic, check_autodev_instructions_exists,
+Full list (command names re-checked against the live tree 2026-10-20; the two
+`autodev` spellings were the pre-rename names of commands that now ship as
+`check_arcana_instructions_exists` and `get_arcana_instructions_char_count`):
+analyze_diff, analyze_pr_diff, break_down_epic, check_arcana_instructions_exists,
 cmd_set_task_budget, compare_checkpoints, create_checkpoint, create_phased_task,
-find_symbol_references, force_release_task, get_autodev_instructions_char_count,
+find_symbol_references, force_release_task, get_arcana_instructions_char_count,
 get_daily_budget_summary, get_file_metadata, get_graph_communities, get_graph_edges_for_viz,
 get_graph_nodes_for_viz, get_orphaned_tasks, get_plugin_config, get_recipe, get_session,
 get_system_logs, get_user_preferences, get_worker_analytics, get_worker_by_slug, git_blame,
