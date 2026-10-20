@@ -83,6 +83,10 @@ pub struct WorkerRunState {
     pub last_progress_at: Option<String>,
     pub last_progress: Option<String>,
     pub failure_code: Option<String>,
+    /// Startup retries actually scheduled before provider work, persisted so a
+    /// Supervisor reads the attempt count rather than inferring it from a phase
+    /// it may have missed between polls.
+    pub startup_retry_count: i64,
     pub outcome: Option<String>,
     pub started_at: String,
 }
@@ -210,7 +214,7 @@ impl Run {
 const LATEST_WORKER_TICK_BY_SLUG_SQL: &str =
     "SELECT s.run_id, s.worker_slug, s.session_id, s.phase, s.task_id,
                         s.heartbeat_at, s.last_progress_at, s.last_progress,
-                        s.failure_code, r.outcome, r.started_at
+                        s.failure_code, s.startup_retry_count, r.outcome, r.started_at
                  FROM worker_run_state s
                  JOIN runs r ON r.id = s.run_id
                  WHERE s.worker_slug = ?1
@@ -224,7 +228,7 @@ const LATEST_WORKER_RUN_OWNER_SQL: &str = "SELECT s.run_id, r.host, r.pid, s.pha
 const LATEST_WORKER_TICKS_SQL: &str =
     "SELECT s.run_id, s.worker_slug, s.session_id, s.phase, s.task_id,
             s.heartbeat_at, s.last_progress_at, s.last_progress,
-            s.failure_code, r.outcome, r.started_at
+            s.failure_code, s.startup_retry_count, r.outcome, r.started_at
      FROM worker_run_state s
      JOIN runs r ON r.id = s.run_id
      WHERE s.run_id = (
@@ -698,6 +702,14 @@ const LADDER: &[Migration] = &[
             BEGIN SELECT RAISE(ABORT, 'retry requires a matching host-verified one-use grant'); END;
         "#,
     },
+    Migration {
+        version: 11,
+        name: "worker-run-startup-retry-count",
+        sql: r#"
+            ALTER TABLE worker_run_state ADD COLUMN startup_retry_count INTEGER NOT NULL DEFAULT 0
+                CHECK(startup_retry_count >= 0);
+        "#,
+    },
 ];
 
 impl RunsDb {
@@ -849,6 +861,35 @@ impl RunsDb {
                 params![phase, task_id, failure_code, now_rfc3339(), run_id],
             )
             .map_err(|e| ArcanaError::Agent(format!("updating worker run phase: {e}")))?;
+        if rows == 0 {
+            return Err(ArcanaError::Agent(format!(
+                "worker run state not found for run {run_id}"
+            )));
+        }
+        timing.with_result_count(rows).succeed();
+        Ok(())
+    }
+
+    /// Record one scheduled startup retry together with the `retrying` phase.
+    ///
+    /// Phase and count move in the same statement on purpose: a Supervisor that
+    /// polls between two writes could otherwise read `retrying` with a stale
+    /// count, or a count with a phase that already returned to `running`.
+    pub fn record_worker_startup_retry(&self, run_id: &str, retry_count: u32) -> Result<()> {
+        let timing = OperationTimer::start("database_worker_startup_retry_update")
+            .with_database("runs")
+            .with_run_id(run_id);
+        let rows = self
+            .conn
+            .execute(
+                "UPDATE worker_run_state
+                 SET phase = 'retrying',
+                     startup_retry_count = ?1,
+                     heartbeat_at = ?2
+                 WHERE run_id = ?3",
+                params![i64::from(retry_count), now_rfc3339(), run_id],
+            )
+            .map_err(|e| ArcanaError::Agent(format!("recording worker startup retry: {e}")))?;
         if rows == 0 {
             return Err(ArcanaError::Agent(format!(
                 "worker run state not found for run {run_id}"
@@ -1962,8 +2003,9 @@ fn row_to_worker_run_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerRu
         last_progress_at: row.get(6)?,
         last_progress: row.get(7)?,
         failure_code: row.get(8)?,
-        outcome: row.get(9)?,
-        started_at: row.get(10)?,
+        startup_retry_count: row.get(9)?,
+        outcome: row.get(10)?,
+        started_at: row.get(11)?,
     })
 }
 
@@ -2273,13 +2315,14 @@ mod tests {
                  ALTER TABLE operation_journal DROP COLUMN retry_worker;
                  DROP TRIGGER operation_snapshot_record_shape;
                  ALTER TABLE operation_journal DROP COLUMN snapshot_json;
+                 ALTER TABLE worker_run_state DROP COLUMN startup_retry_count;
                  PRAGMA user_version = 7;",
             )
             .expect("simulate a populated v7 database");
         drop(db);
 
         let upgraded = RunsDb::open_at(&path).expect("upgrade populated v7 RunsDb");
-        assert_eq!(upgraded.schema_version().expect("schema version"), 10);
+        assert_eq!(upgraded.schema_version().expect("schema version"), 11);
         let rows = upgraded
             .conn
             .prepare("SELECT id, started_at FROM runs ORDER BY id")
@@ -2333,10 +2376,51 @@ mod tests {
     }
 
     #[test]
+    fn worker_run_state_upgrade_defaults_startup_retry_count_for_existing_rows() {
+        let path = temp_db("runs-v11-retry-count-migration");
+        let db = RunsDb::open_at(&path).expect("open isolated RunsDb");
+        let run_id = db
+            .begin_worker_tick("worker-backend", "legacy-retry-session")
+            .expect("create a worker tick before the retry-count migration");
+        db.conn
+            .execute_batch(
+                "ALTER TABLE worker_run_state DROP COLUMN startup_retry_count;
+                 PRAGMA user_version = 10;",
+            )
+            .expect("simulate a populated v10 database");
+        drop(db);
+
+        let upgraded = RunsDb::open_at(&path).expect("upgrade a populated v10 RunsDb");
+        assert_eq!(upgraded.schema_version().expect("schema version"), 11);
+        let state = upgraded
+            .latest_worker_tick("worker-backend")
+            .expect("read the upgraded worker tick")
+            .expect("the worker tick survives the migration");
+        assert_eq!(state.run_id, run_id);
+        assert_eq!(state.phase, "starting", "the migration changes no phase");
+        assert_eq!(
+            state.startup_retry_count, 0,
+            "a run that predates the counter must read zero, not an invented retry count"
+        );
+
+        // The writer is live on the upgraded database, and it moves the phase in
+        // the same statement so the two can never disagree.
+        upgraded
+            .record_worker_startup_retry(&run_id, 2)
+            .expect("record a retry on the upgraded database");
+        let state = upgraded
+            .latest_worker_tick("worker-backend")
+            .expect("re-read the upgraded worker tick")
+            .expect("worker tick still present");
+        assert_eq!(state.startup_retry_count, 2);
+        assert_eq!(state.phase, "retrying");
+    }
+
+    #[test]
     fn a_run_is_recorded_and_read_back() {
         let path = temp_db("roundtrip");
         let db = RunsDb::open_at(&path).expect("open");
-        assert_eq!(db.schema_version().unwrap(), 10);
+        assert_eq!(db.schema_version().unwrap(), 11);
 
         let id = db.begin(kind::APP, None).expect("begin");
 
@@ -2919,7 +3003,7 @@ mod tests {
             );
         }
         let db = RunsDb::open_at(&path).expect("upgrade v3 database");
-        assert_eq!(db.schema_version().expect("schema version"), 10);
+        assert_eq!(db.schema_version().expect("schema version"), 11);
         let run_id = db.begin(kind::AGENT_TURN, None).expect("begin run");
         let cursor = db
             .record_operation_intent(&run_id, None, "op-1", "edit", "write_file", &[])
@@ -2968,13 +3052,14 @@ mod tests {
                  ALTER TABLE operation_journal DROP COLUMN retry_worker;
                  DROP TRIGGER operation_snapshot_record_shape;
                  ALTER TABLE operation_journal DROP COLUMN snapshot_json;
+                 ALTER TABLE worker_run_state DROP COLUMN startup_retry_count;
                  PRAGMA user_version = 6;",
             )
             .expect("simulate existing v6 database");
         drop(db);
 
         let db = RunsDb::open_at(&path).expect("upgrade existing v6 database");
-        assert_eq!(db.schema_version().expect("upgraded schema version"), 10);
+        assert_eq!(db.schema_version().expect("upgraded schema version"), 11);
         let plan = explain_without_parameters(
             &db.conn,
             "SELECT id FROM operation_journal

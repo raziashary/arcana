@@ -655,7 +655,7 @@ impl RecipeRunner {
             Ok(Some((engine, working_dir, provider_id.to_owned())))
         }, |attempt| {
             let update = crate::db::runs::RunsDb::open().and_then(|db| {
-                db.update_worker_tick_phase(&retry_run_id, "retrying", None, None)
+                db.record_worker_startup_retry(&retry_run_id, attempt)
             });
             if let Err(error) = update {
                 warn!(target: "arcana::telemetry", event_type = "worker_startup_retry_state_failed", worker = %retry_worker_slug, run_id = %retry_run_id, attempt, error_class = "runs_db", "Could not persist startup retry phase");
@@ -3372,7 +3372,25 @@ mod dual_worker_failure_health_tests {
             json!(run_b.failure_code),
             "the persisted startup failure class reads back unchanged"
         );
-        assert_eq!(supervisor_run_b["outcome"], "failed");
+        assert_eq!(
+            supervisor_run_b["startup_retry_count"],
+            json!(STARTUP_MAX_ATTEMPTS - 1),
+            "startup exhaustion must expose the retries it actually scheduled"
+        );
+        assert_eq!(
+            run_b.startup_retry_count,
+            i64::from(STARTUP_MAX_ATTEMPTS - 1),
+            "the persisted retry counter must match the attempts the loop made"
+        );
+        assert_eq!(
+            supervisor_run_b["outcome"], "failed",
+            "startup exhaustion records a failed outcome"
+        );
+        assert_eq!(
+            supervisor_run_a["startup_retry_count"],
+            json!(0),
+            "a mid-run failure must not be reported as a startup retry"
+        );
         assert!(
             supervisor_run_b["task_id"].is_null(),
             "startup exhaustion never attached a task to the run"

@@ -364,6 +364,7 @@ impl Tool for ListWorkerHealthTool {
                         })).collect::<Vec<_>>(),
                         "checkpoints": checkpoints,
                         "failure_code": run.failure_code,
+                        "startup_retry_count": run.startup_retry_count,
                         "outcome": run.outcome,
                         "started_at": run.started_at,
                     }))

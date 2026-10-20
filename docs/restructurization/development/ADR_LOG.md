@@ -8021,3 +8021,48 @@ removing the Git comparison accepted the staged change; removing `node_modules` 
 made the generated-tree control refuse. All reverted. Receipt:
 `_verify/2026-10-20-P4-53-REPOSITORY-SNAPSHOT-BREADTH.md`. This unit also reconciled the P4-53 plan
 row, which had gone stale against receipts through 2026-10-18.
+
+---
+
+## ADR-LOG-RESTRUCT-0410 — A startup retry is a persisted count, written with its phase
+
+**Context / 2026-10-20 (P4-54, TG4-28).** The gate requires the Supervisor to read "retry/checkpoint"
+state and to distinguish a startup retry from a mid-run interruption. Startup retries already moved
+the durable phase to `retrying`, but nothing counted them: a Supervisor polling between two attempts
+saw a phase, and after exhaustion saw only `failed`/`io` — the number of attempts that had actually
+happened was gone. The plan row listed "retry counters" as open for exactly this reason.
+
+**Decision.** Persist the count, and write it atomically with the phase.
+
+1. **Migration v11** on `runs.db`: `worker_run_state.startup_retry_count INTEGER NOT NULL DEFAULT 0
+   CHECK(startup_retry_count >= 0)`. Additive; the ladder's simulated-v6 and simulated-v7 fixtures were
+   extended to drop the column before upgrading, so the upgrade paths stay honest.
+2. **One writer, one statement.** `RunsDb::record_worker_startup_retry(run_id, retry_count)` sets
+   `phase='retrying'`, the counter and the heartbeat in a single `UPDATE`. Two writes would let a
+   poller read `retrying` with a stale count, or a count with a phase already back at `running`; the
+   whole point of the field is that the Supervisor can trust the pair.
+3. **The counter counts retries, not attempts.** With `STARTUP_MAX_ATTEMPTS = 4` exhausted, the value
+   is 3 — the retries the loop actually scheduled after the first attempt. The field is named
+   `startup_retry_count` because mid-run retries are a different class: the gate asks that they be
+   distinguishable, and a mid-run failure reports 0.
+4. **Exposed through the Supervisor tool.** `WorkerRunState` carries it and `list_worker_health` adds
+   `run.startup_retry_count`, so the same run object that carries phase, failure class, journal and
+   checkpoints also carries how many startup attempts were spent.
+
+**Legacy rows read 0, and that is truthful.** A run created before v11 never recorded a retry, so 0
+states what is known; inventing an attempt count from elapsed time would be a fabrication. Existing
+rows were verified to survive the upgrade and to accept a later retry write.
+
+**Persistence stays best-effort.** The runner's on-retry callback still swallows a failed write with a
+`worker_startup_retry_state_failed` event rather than failing the tick: telemetry must never be able to
+block application work, and a missing count is visible as the stale value it is.
+
+**Consequences.** The startup class now has a production writer, a persisted reader and a
+Supervisor-visible value, matching the gate's three-part test. Mid-run retry counting, per-row
+`max_attempts`, worker parent/child links and bounded temporary-worker creation remain open.
+
+**Evidence.** `db::runs::tests` 31/31 (including the new v10→v11 legacy-row test and the two
+simulated-legacy upgrade fixtures), `list_worker_health` 9/9, and the dual-worker failure test
+(falsified three ways: writer removed → 0 vs 3; writer off by one → 4 vs 3; tool field removed → null
+vs 3, while the persisted assertion still passed). Receipt:
+`_verify/2026-10-20-P4-54-STARTUP-RETRY-COUNTER.md`.
