@@ -127,7 +127,7 @@ impl Tool for RequestSupervisorActionTool {
                     ))
                 }
             };
-            crate::recipes::scheduler::kick("supervisor");
+            crate::recipes::scheduler::kick_dispatched_by("supervisor", ctx.run_id.clone());
             emit_worker_request(WorkerRequestPayload {
                 id: request.id,
                 worker_slug: request.worker_slug.clone(),
@@ -187,7 +187,7 @@ impl Tool for RequestSupervisorActionTool {
         };
 
         // Wake the Supervisor immediately so it acts on this request on its next tick.
-        crate::recipes::scheduler::kick("supervisor");
+        crate::recipes::scheduler::kick_dispatched_by("supervisor", ctx.run_id.clone());
 
         // Push event to the frontend so the Worker Requests widget updates live.
         emit_worker_request(WorkerRequestPayload {

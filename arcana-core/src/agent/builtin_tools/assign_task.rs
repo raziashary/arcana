@@ -155,7 +155,12 @@ impl Tool for AssignTaskTool {
         // to a worker; wake that worker *now* instead of waiting up to its
         // cron cadence. This is the fix for the "serialised pickup" symptom
         // where 8 assigned tasks rolled in one at a time.
-        crate::recipes::scheduler::kick(&worker_slug);
+        //
+        // The run executing this tool is recorded as the dispatcher, so the
+        // worker tick it wakes reads back as this Supervisor tick's child
+        // (P4-54). A tool call with no run (for example a direct board edit from
+        // the UI) records no parent rather than a guessed one.
+        crate::recipes::scheduler::kick_dispatched_by(&worker_slug, ctx.run_id.clone());
 
         // Phase 3.0 R1 — task-board push event for the UI.
         crate::events::emit_task_changed(crate::events::TaskChangedPayload {

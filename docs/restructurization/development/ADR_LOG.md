@@ -8109,3 +8109,84 @@ parallel with only the documented `checked_in_ecosystem_corpora_...` Python-stag
 passes 1/1 serially. Falsified twice: restoring the old ordering and removing the branch check both
 let the request reach the installer guard. Receipt:
 `_verify/2026-10-20-P4-56-RUFF-INSTALL-CLAIM-BOUNDARY.md`.
+
+---
+
+## ADR-LOG-RESTRUCT-0412 — Dispatch lineage is written at the kick and read back in one health read
+
+**Context / 2026-10-28 (P4-54, TG4-28).** The gate asks the Supervisor to read "parent/child state".
+`runs.parent_run_id` had existed since the first ledger migration and `Run` read it, but
+`begin_worker_tick` never wrote a value: every worker tick on a real ledger had `NULL` there, so the
+column described a relationship the system never recorded. The health tool could therefore report a
+worker's phase and journal but not *which run asked it to start*, nor *which workers a supervisor tick
+woke* — the two facts a Supervisor needs to decide whether a stalled tick is its own child still
+running or an orphan it may reconcile.
+
+**Decision.** Carry the dispatch origin explicitly and read it in both directions.
+
+1. **The origin is a parameter, not an inference.** `RunsDb::begin_worker_tick_with_parent(slug,
+   session, Option<&str>)` writes it; `begin_worker_tick` delegates with `None`.
+   `RecipeRunner::run_recipe_dispatched_by` threads it into the tick,
+   `RecipeScheduler::kick_worker_dispatched_by` and the global `kick_dispatched_by` pass it to the
+   runner, and the tools that wake workers (`assign_task`, `assign_tasks_batch`,
+   `send_worker_message`, `update_task_status`, `request_supervisor_action`, `create_task`) pass
+   `ctx.run_id.clone()`. Cron and launch-time kicks pass `None`.
+2. **The global scheduler is deliberately not the source.** Resolving the origin from
+   `GLOBAL_SCHEDULER`/ambient state would make the value depend on which process installed the
+   scheduler first, and would be unobservable in a test. The origin is the run whose tool call did the
+   kick; it travels with the call, so it is true in-process, in a worker subprocess, and after a
+   restart-expiry of the scheduler. A tick with no origin states `None`, and that absence is data.
+3. **One index for the forward direction.** Migration v12 (`run-dispatch-parent-order-index`) adds
+   `idx_runs_parent_dispatch_order ON runs(parent_run_id, julianday(started_at) DESC, id DESC)`.
+   Measured before adding: `WHERE parent_run_id = ? ORDER BY ...` planned as a full `runs` scan plus a
+   temporary order B-tree. `RunsDb::children_of(run_id, limit)` reads newest-first through the index
+   and is bounded.
+4. **Both directions in one health read.** `LATEST_WORKER_TICK_BY_SLUG_SQL` and
+   `LATEST_WORKER_TICKS_SQL` carry `r.parent_run_id` through their existing `runs` join, so
+   `list_worker_health` adds `run.parent` (`state: known` with run id/kind/actor/started/outcome/open,
+   `none` for an origin-less tick, `missing` for a dangling id, `unknown` on a read failure) and
+   `run.dispatched_workers` (`state`, `count`, `complete`, and per-child run/slug/phase/task/outcome/
+   started). The dispatch list is bounded by `journal_limit` and reports whether the bound was hit
+   rather than silently truncating.
+5. **An invented lineage is refused, and the refusal is the domain's.** The writer probes
+   `SELECT 1 FROM runs WHERE id = ?1` inside the same transaction before inserting, and returns
+   "the dispatching run … is not in the run ledger" if it is absent.
+   **Fact corrected during this unit:** the earlier working note claimed `runs.db` does not enable
+   SQLite foreign keys, so the probe was the only guard. That is wrong — the bundled SQLite build
+   enforces declared foreign keys by default, and removing the probe still refuses the write, with a
+   raw `FOREIGN KEY constraint failed`. The probe is kept anyway, for two stated reasons: the
+   guarantee must not depend on a compile-time default that no code in this repository sets, and a
+   caller deserves a refusal naming the run rather than a storage-layer constraint violation. The test
+   asserts the *phrase*, so deleting the probe fails the test even though the FK would still refuse
+   the row; the test also pins `PRAGMA foreign_keys` so a build change is visible.
+6. **The newly production-used reader got a plan proof.** `RunsDb::get` had been registered as a
+   bounded exclusion ("no production caller"). It now resolves the parent for `list_worker_health`, so
+   its SQL was lifted into `RUN_BY_ID_SQL` and planned in the same fixture; `P4-58-QUERY-INVENTORY.md`
+   records the seek, the two changed `latest_worker_tick(s)` fingerprints and the new
+   `CHILDREN_OF_RUN_SQL` / guard entries.
+
+**Consequences.** P4-54/TG4-28's parent/child clause now has a production writer, a persisted reader
+in both directions and a Supervisor-visible value, proven inside one process and across the real CLI
+Fleet subprocess. Still open in P4-54: bounded temporary-worker creation, a populated model/token
+usage value proven end to end, two-worker interruption/resume without duplicate effects, and
+cross-process plus heartbeat fault injection.
+
+**Open risk observed while verifying this unit (not caused by it, not fixed here).**
+`src-cli/tests/fleet_offline.rs::offline_fleet_cli_completes_board_child_and_exports_observability`
+fails intermittently when the whole 7-test target runs in parallel: the board and lineage assertions
+pass, then "CLI log export must read the Fleet completion event" fails because
+`fleet_cli_run_completed` is missing from the exported structured log. Reproduced 2/3 runs **with the
+pre-change test file restored**, so it predates this work; serial runs are 7/7 across repeated
+attempts. The likely mechanism is the asynchronous writer's bounded shutdown drain (the code already
+documents that `WorkerGuard::drop` waits only a bounded time), so the last emitted event can be lost
+on a loaded machine. It needs its own unit: a completion event that exists in the process but not in
+the log is a telemetry-completeness defect, and until fixed this target's parallel result is not
+dependable evidence.
+
+**Evidence.** `db::runs::tests` 33/33 serially (144 s), `list_worker_health` lineage test,
+`recipes::runner::dispatch_lineage_tests`, `recipes::scheduler::dispatch_origin_tests`, TG8-12 gate,
+P4-58 registry 9/9, `cargo check --workspace --all-targets`, offline Fleet 7/7 serially. Falsified
+three ways: child written with `NULL` parent → persisted, health-tool and offline-CLI assertions fail;
+index replaced by an ineffective one of the same name → plan assertion fails with
+`SCAN s … USE TEMP B-TREE FOR ORDER BY`; explicit probe disabled → refusal becomes a raw SQLite error
+and the phrase assertion fails. Receipt: `_verify/2026-10-28-P4-54-PARENT-CHILD-LINKS.md`.

@@ -214,6 +214,80 @@ fn read_session_usage(
     }
 }
 
+fn read_parent(
+    parent_run_id: Option<&str>,
+    read: impl FnOnce(&str) -> crate::errors::Result<Option<crate::db::runs::Run>>,
+) -> Value {
+    let Some(parent_run_id) = parent_run_id else {
+        return json!({ "state": "none" });
+    };
+    match read(parent_run_id) {
+        Ok(Some(run)) => json!({
+            "state": "known",
+            "run_id": run.id,
+            "kind": run.kind,
+            "actor": run.actor,
+            "started_at": run.started_at,
+            "outcome": run.outcome,
+            "open": run.is_open(),
+        }),
+        Ok(None) => json!({
+            "state": "missing",
+            "run_id": parent_run_id,
+        }),
+        Err(error) => {
+            let error_class = match error {
+                crate::errors::ArcanaError::Database(_) => "database",
+                crate::errors::ArcanaError::Io(_) => "io",
+                _ => "run_store",
+            };
+            json!({
+                "state": "unknown",
+                "run_id": parent_run_id,
+                "error_class": error_class,
+            })
+        }
+    }
+}
+
+/// The worker ticks this run dispatched.
+///
+/// Bounded on purpose: the Supervisor gets the newest `limit` dispatches and an
+/// explicit statement that more exist, never a silent truncation it could read
+/// as the whole set.
+fn read_dispatched_workers(
+    run_id: &str,
+    limit: i64,
+    read: impl FnOnce(&str, i64) -> crate::errors::Result<Vec<crate::db::runs::WorkerRunState>>,
+) -> Value {
+    match read(run_id, limit) {
+        Ok(states) => {
+            let complete = states.len() < limit.max(1) as usize;
+            json!({
+                "state": "known",
+                "count": states.len(),
+                "complete": complete,
+                "workers": states.iter().map(|state| json!({
+                    "run_id": state.run_id,
+                    "worker_slug": state.worker_slug,
+                    "phase": state.phase,
+                    "task_id": state.task_id,
+                    "outcome": state.outcome,
+                    "started_at": state.started_at,
+                })).collect::<Vec<_>>(),
+            })
+        }
+        Err(error) => {
+            let error_class = match error {
+                crate::errors::ArcanaError::Database(_) => "database",
+                crate::errors::ArcanaError::Io(_) => "io",
+                _ => "run_store",
+            };
+            json!({ "state": "unknown", "error_class": error_class })
+        }
+    }
+}
+
 pub struct ListWorkerHealthTool;
 
 #[async_trait]
@@ -227,7 +301,7 @@ impl Tool for ListWorkerHealthTool {
     }
 
     fn description(&self) -> &str {
-        "Read the fleet's durable worker health, latest run phase, current task, last safe completed operation, heartbeat, and failure code. Use this before reassigning or retrying work so you can reconcile task and workspace state first. Available only to the Supervisor."
+        "Read the fleet's durable worker health, latest run phase, dispatch lineage (the run that woke this worker and the runs it woke), current task, last safe completed operation, heartbeat, and failure code. Use this before reassigning or retrying work so you can reconcile task and workspace state first. Available only to the Supervisor."
     }
 
     fn input_schema(&self) -> Value {
@@ -300,6 +374,17 @@ impl Tool for ListWorkerHealthTool {
                     |run_id| runs_db.active_worker_operation(run_id),
                 );
                 let task_health = read_task_health(run.and_then(|run| run.task_id), &tasks_db);
+                let parent = read_parent(run.and_then(|run| run.parent_run_id.as_deref()), |id| {
+                    runs_db.get(id)
+                });
+                let dispatched_workers = run.map_or_else(
+                    || json!({ "state": "not_applicable" }),
+                    |run| {
+                        read_dispatched_workers(&run.run_id, journal_limit, |id, count| {
+                            runs_db.children_of(id, count)
+                        })
+                    },
+                );
                 let token_usage = read_session_usage(
                     run.map(|run| run.session_id.as_str()),
                     &analytics_db,
@@ -367,6 +452,8 @@ impl Tool for ListWorkerHealthTool {
                         "startup_retry_count": run.startup_retry_count,
                         "outcome": run.outcome,
                         "started_at": run.started_at,
+                        "parent": parent,
+                        "dispatched_workers": dispatched_workers,
                     }))
                 })
             })
@@ -701,6 +788,120 @@ mod tests {
             .active_worker_operation(&run_id)
             .expect("read closed active operation")
             .is_none());
+    }
+
+    /// The Supervisor must be able to walk dispatch lineage in both directions
+    /// from one health read: a worker tick names the run that woke it, and the
+    /// dispatching tick names the workers it woke. An origin-less tick (cron or
+    /// launch kick) says so explicitly rather than leaving the field blank.
+    #[tokio::test]
+    async fn supervisor_reads_dispatch_lineage_in_both_directions() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        crate::db::workers::WorkersDb::open().expect("seed worker roster");
+        let runs = crate::db::runs::RunsDb::open().expect("open runs DB");
+
+        let supervisor_run = runs
+            .begin_worker_tick("supervisor", "lineage-supervisor-session")
+            .expect("begin supervisor tick");
+        let backend_run = runs
+            .begin_worker_tick_with_parent(
+                "worker-backend",
+                "lineage-backend-session",
+                Some(&supervisor_run),
+            )
+            .expect("begin dispatched backend tick");
+        let frontend_run = runs
+            .begin_worker_tick_with_parent(
+                "worker-frontend",
+                "lineage-frontend-session",
+                Some(&supervisor_run),
+            )
+            .expect("begin dispatched frontend tick");
+        let launch_run = runs
+            .begin_worker_tick("worker-platform", "lineage-launch-session")
+            .expect("begin origin-less launch tick");
+
+        let ctx = ToolContext {
+            session_id: "supervisor-session".into(),
+            working_dir: home.path().to_string_lossy().into_owned(),
+            call_id: "call-lineage".into(),
+            run_id: None,
+            task_id: None,
+            permission_mode: crate::agent::permission::PermissionMode::Autonomous,
+            depth: 0,
+            agent_role: AgentIdentity::supervisor().role,
+
+            run_token_budget: None,
+        };
+        let result = ListWorkerHealthTool
+            .execute(json!({ "journal_limit": 10 }), &ctx)
+            .await;
+        assert!(!result.is_error, "{}", result.output);
+        let output: Value =
+            serde_json::from_str(&result.output).expect("structured health response");
+        let find = |slug: &str| {
+            output["workers"]
+                .as_array()
+                .expect("worker list")
+                .iter()
+                .find(|worker| worker["slug"] == slug)
+                .unwrap_or_else(|| panic!("{slug} in the roster"))
+                .clone()
+        };
+
+        // The dispatching tick: it woke exactly two workers, out of its own
+        // view of the ledger, and had no parent of its own.
+        let dispatcher = find("supervisor");
+        assert_eq!(dispatcher["run"]["run_id"], supervisor_run);
+        assert_eq!(dispatcher["run"]["parent"]["state"], "none");
+        let dispatched = &dispatcher["run"]["dispatched_workers"];
+        assert_eq!(dispatched["state"], "known");
+        assert_eq!(dispatched["count"], 2);
+        assert_eq!(dispatched["complete"], true);
+        let dispatched_workers = dispatched["workers"].as_array().expect("dispatch list");
+        assert_eq!(dispatched_workers.len(), 2);
+        let backend_entry = dispatched_workers
+            .iter()
+            .find(|entry| entry["run_id"] == backend_run)
+            .expect("dispatched backend tick");
+        assert_eq!(backend_entry["worker_slug"], "worker-backend");
+        assert_eq!(backend_entry["phase"], "starting");
+        assert!(dispatched_workers
+            .iter()
+            .any(|entry| entry["run_id"] == frontend_run
+                && entry["worker_slug"] == "worker-frontend"));
+        assert!(!dispatched_workers
+            .iter()
+            .any(|entry| entry["run_id"] == launch_run));
+
+        // A dispatched worker: the parent is resolved from the ledger, not
+        // echoed back from the request, and it woke nobody itself.
+        let backend = find("worker-backend");
+        assert_eq!(backend["run"]["run_id"], backend_run);
+        let parent = &backend["run"]["parent"];
+        assert_eq!(parent["state"], "known");
+        assert_eq!(parent["run_id"], supervisor_run);
+        assert_eq!(parent["kind"], "fleet-tick");
+        assert_eq!(parent["actor"], "supervisor");
+        assert_eq!(parent["open"], true);
+        assert_eq!(backend["run"]["dispatched_workers"]["state"], "known");
+        assert_eq!(backend["run"]["dispatched_workers"]["count"], 0);
+        assert_eq!(backend["run"]["dispatched_workers"]["complete"], true);
+
+        // An origin-less tick states that it had no dispatcher. That absence is
+        // the answer; it must not be rendered as a missing or unknown value.
+        let launch = find("worker-platform");
+        assert_eq!(launch["run"]["run_id"], launch_run);
+        assert_eq!(launch["run"]["parent"]["state"], "none");
+        assert_eq!(launch["run"]["dispatched_workers"]["count"], 0);
+
+        // Neither the private session ids nor the home path leak into the
+        // health payload the model reads.
+        assert!(!output.to_string().contains("lineage-supervisor-session"));
+        assert!(!output
+            .to_string()
+            .contains(home.path().to_string_lossy().as_ref()));
     }
 
     #[tokio::test]

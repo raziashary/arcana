@@ -5734,14 +5734,21 @@ let x = 1;
             "interactive lease must live at the async run closure scope"
         );
 
-        let recipe = read_source(&repo_root().join("arcana-core/src/recipes/runner.rs"));
-        let recipe = rust_item_body(&recipe, "pub async fn run_recipe(");
+        let recipe_source = read_source(&repo_root().join("arcana-core/src/recipes/runner.rs"));
+        let recipe = rust_item_body(&recipe_source, "pub async fn run_recipe_dispatched_by(");
         assert!(recipe.contains("global().admit(worker_slug, &session_id)?"));
         assert!(recipe.contains("let _runtime_lease"));
         assert_eq!(
             rust_brace_depth_before(recipe, "let _runtime_lease"),
             0,
             "recipe lease must live in the run function scope"
+        );
+        // `run_recipe` is the no-dispatch-origin entry point and must stay a
+        // delegation, not a second copy of the body that could drift.
+        let recipe_entry = rust_item_body(&recipe_source, "pub async fn run_recipe(");
+        assert!(
+            recipe_entry.contains("run_recipe_dispatched_by(recipe, worker_slug, None)"),
+            "the origin-less entry point must delegate with no dispatch parent"
         );
 
         let subagent = read_source(&repo_root().join("arcana-core/src/subagent/native_runner.rs"));

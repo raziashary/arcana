@@ -454,8 +454,10 @@ impl Tool for SendWorkerMessageTool {
 
             // Request an immediate tick so a scheduled target reads the inbox
             // promptly. If no schedule is active (including an unbound worker),
-            // the durable message remains pending until a consumer runs.
-            scheduler::kick(target);
+            // the durable message remains pending until a consumer runs. The
+            // tick records the run that sent the message as its dispatcher
+            // (P4-54).
+            scheduler::kick_dispatched_by(target, ctx.run_id.clone());
 
             delivered.push(msg.id);
         }

@@ -477,6 +477,16 @@ impl RecipeRunner {
 
     /// Execute a recipe for the given worker slug.
     /// Updates worker status in DB: idle → working → idle/error.
+    pub async fn run_recipe(&self, recipe: &Recipe, worker_slug: &str) -> Result<()> {
+        self.run_recipe_dispatched_by(recipe, worker_slug, None).await
+    }
+
+    /// As `run_recipe`, storing which run dispatched this tick.
+    ///
+    /// `dispatch_run_id` is the run whose tool call woke this worker; it is
+    /// persisted on the worker run so the Supervisor can read the lineage back
+    /// (P4-54). `None` means nothing dispatched this tick (cron, launch) and
+    /// the ledger records no parent instead of an invented one.
     #[tracing::instrument(
         target = "arcana::telemetry",
         skip_all,
@@ -487,7 +497,12 @@ impl RecipeRunner {
             worker = %worker_slug
         )
     )]
-    pub async fn run_recipe(&self, recipe: &Recipe, worker_slug: &str) -> Result<()> {
+    pub async fn run_recipe_dispatched_by(
+        &self,
+        recipe: &Recipe,
+        worker_slug: &str,
+        dispatch_run_id: Option<String>,
+    ) -> Result<()> {
         // ── P3-65 · a schedule and a prompt are mutually exclusive ──────────
         //
         // `TG-P3-65` holds this for the nine shipped recipes, but users author
@@ -560,7 +575,11 @@ impl RecipeRunner {
         // Ephemeral session id — used by Mode 1 if reached
         let session_id = format!("recipe-{}-{}", worker_slug, Uuid::new_v4());
         let runs_db = crate::db::runs::RunsDb::open()?;
-        let worker_run_id = runs_db.begin_worker_tick(worker_slug, &session_id)?;
+        let worker_run_id = runs_db.begin_worker_tick_with_parent(
+            worker_slug,
+            &session_id,
+            dispatch_run_id.as_deref(),
+        )?;
         // Track the native run under its worker/session pair for its entire
         // lifetime. This does not retain the engine or persist the session.
         let _runtime_lease =
@@ -4822,5 +4841,94 @@ mod startup_retry_tests {
             "prepared"
         );
         assert_eq!(attempts, 2);
+    }
+}
+
+#[cfg(test)]
+mod dispatch_lineage_tests {
+    use super::*;
+    use crate::db::runs::RunsDb;
+    use crate::db::tasks::{CreateTaskInput, TasksDb};
+    use std::sync::Mutex;
+
+    #[tokio::test]
+    async fn a_dispatched_worker_tick_records_the_run_that_woke_it() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+
+        let tasks = TasksDb::open().expect("open isolated TasksDb");
+        let task_id = tasks
+            .create(CreateTaskInput {
+                title: "Carry the dispatch lineage".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "The worker tick names the run that woke it.".into(),
+                created_by: Some("p4-54-test".into()),
+            })
+            .expect("create dispatched task")
+            .id;
+        tasks
+            .update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign the task so the worker has real work");
+
+        let runs = RunsDb::open().expect("open the run ledger");
+        let supervisor = runs
+            .begin_worker_tick("supervisor", "dispatch-lineage-supervisor")
+            .expect("open the dispatching Supervisor tick");
+        runs.update_worker_tick_phase(&supervisor, "running", None, None)
+            .expect("mark the Supervisor tick running");
+
+        // No provider is configured: the tick stops after setup. That is enough
+        // to prove the ledger writer, and it keeps this test off the network.
+        let runner = RecipeRunner::new_with_workspace_override(
+            Arc::new(Mutex::new(AppState::default())),
+            Arc::new(SessionManager::new().expect("open isolated session manager")),
+            crate::agent::permission::new_pending_permissions(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+        );
+        let recipes = home.path().join(".arcana").join("recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes).expect("persist shipped recipes");
+        let recipe: Recipe = serde_yaml::from_str(
+            &std::fs::read_to_string(recipes.join("worker-backend-poll.yaml"))
+                .expect("read the shipped backend recipe"),
+        )
+        .expect("parse the shipped backend recipe");
+
+        runner
+            .run_recipe_dispatched_by(&recipe, "worker-backend", Some(supervisor.clone()))
+            .await
+            .expect("a provider-less tick completes");
+
+        let worker = runs
+            .latest_worker_tick("worker-backend")
+            .expect("read the worker tick")
+            .expect("the dispatched tick must be recorded");
+        assert_ne!(worker.run_id, supervisor);
+        assert_eq!(
+            worker.parent_run_id.as_deref(),
+            Some(supervisor.as_str()),
+            "the worker tick must record the run whose dispatch woke it"
+        );
+
+        let parent = runs
+            .get(&supervisor)
+            .expect("read the dispatching run")
+            .expect("the dispatching run exists");
+        assert_eq!(parent.kind, crate::db::runs::kind::FLEET_TICK);
+        assert_eq!(parent.actor.as_deref(), Some("supervisor"));
+
+        let children = runs
+            .children_of(&supervisor, 10)
+            .expect("read the ticks this run dispatched");
+        assert_eq!(
+            children
+                .iter()
+                .map(|state| (state.run_id.clone(), state.worker_slug.clone()))
+                .collect::<Vec<_>>(),
+            vec![(worker.run_id.clone(), "worker-backend".to_string())],
+            "the dispatching run must read back the tick it woke"
+        );
     }
 }

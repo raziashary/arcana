@@ -311,7 +311,7 @@ impl Tool for UpdateTaskStatusTool {
 
         let unblocked_task_ids: Vec<i64> = if status == "done" {
             match unblock_completed_task(&db, id, || {
-                crate::recipes::scheduler::kick("supervisor");
+                crate::recipes::scheduler::kick_dispatched_by("supervisor", ctx.run_id.clone());
             }) {
                 Ok(unblocked_ids) => unblocked_ids,
                 Err(e) => {
@@ -329,12 +329,15 @@ impl Tool for UpdateTaskStatusTool {
         //   qc_review → wake QC agent immediately
         //   assigned  → wake the worker immediately (stall resets / re-queues)
         // The `working` gate inside kick_worker prevents duplicate ticks if
-        // the target is already running.
+        // the target is already running. Each tick records this run as its
+        // dispatcher (P4-54).
         match status.as_str() {
-            "qc_review" => crate::recipes::scheduler::kick("qc-agent"),
+            "qc_review" => {
+                crate::recipes::scheduler::kick_dispatched_by("qc-agent", ctx.run_id.clone())
+            }
             "assigned" => {
                 if let Some(ref w) = assigned_worker {
-                    crate::recipes::scheduler::kick(w);
+                    crate::recipes::scheduler::kick_dispatched_by(w, ctx.run_id.clone());
                 }
             }
             // Wake the originally assigned worker immediately so they see the rejection
@@ -346,7 +349,7 @@ impl Tool for UpdateTaskStatusTool {
                     .as_deref()
                     .or_else(|| task.assigned_worker.as_deref());
                 if let Some(w) = worker_to_kick {
-                    crate::recipes::scheduler::kick(w);
+                    crate::recipes::scheduler::kick_dispatched_by(w, ctx.run_id.clone());
                 }
             }
             _ => {}

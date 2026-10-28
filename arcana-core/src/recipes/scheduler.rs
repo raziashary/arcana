@@ -436,6 +436,17 @@ impl RecipeScheduler {
     ///     stays exactly as it was for idle/recovery polling.
     ///   - Never blocks the caller: the tick runs on the Tauri async runtime.
     pub fn kick_worker(&self, worker_slug: &str) {
+        self.kick_worker_dispatched_by(worker_slug, None);
+    }
+
+    /// As `kick_worker`, recording the run that dispatched this tick.
+    ///
+    /// A tool that wakes a worker on behalf of the run it is executing passes
+    /// that run's id here, so the worker tick it causes is stored as a child of
+    /// the run that asked for it (P4-54). Cron and launch-time kicks pass
+    /// `None`: nothing dispatched them, and the ledger says so rather than
+    /// inventing a lineage.
+    pub fn kick_worker_dispatched_by(&self, worker_slug: &str, dispatch_run_id: Option<String>) {
         match worker_has_recoverable_work(worker_slug) {
             Ok(true) => {}
             Ok(false) => {
@@ -579,7 +590,12 @@ impl RecipeScheduler {
                 "[RecipeScheduler] kick_worker: firing '{}' immediately (push-based dispatch)",
                 slug
             );
-            match tokio::time::timeout(PUSH_RUN_TIMEOUT, runner.run_recipe(&recipe, &slug)).await {
+            match tokio::time::timeout(
+                PUSH_RUN_TIMEOUT,
+                runner.run_recipe_dispatched_by(&recipe, &slug, dispatch_run_id),
+            )
+            .await
+            {
                 Ok(Ok(())) => run_guard.skip_recovery(),
                 Ok(Err(e)) => {
                     error!(
@@ -943,8 +959,18 @@ pub fn install_global(scheduler: Arc<RecipeScheduler>) {
 /// been installed yet. This is the public API called from the task-board tools
 /// — they never hold an `Arc<RecipeScheduler>` directly.
 pub fn kick(worker_slug: &str) {
+    kick_dispatched_by(worker_slug, None);
+}
+
+/// Fire an immediate tick for `worker_slug` and record the run that dispatched
+/// it on the worker tick this causes.
+///
+/// A tool executing inside a run passes that run's id, so a Supervisor can read
+/// back which of its ticks woke which worker (P4-54). A kick with no dispatch
+/// origin passes `None`.
+pub fn kick_dispatched_by(worker_slug: &str, dispatch_run_id: Option<String>) {
     if let Some(s) = GLOBAL_SCHEDULER.get() {
-        s.kick_worker(worker_slug);
+        s.kick_worker_dispatched_by(worker_slug, dispatch_run_id);
     } else {
         // Early-boot or test environment — tick will be handled by the next
         // cron fire once the scheduler is installed.
@@ -3995,5 +4021,167 @@ mod tests {
         assert_eq!(task.status, crate::db::tasks::TaskStatus::Ready);
         assert!(task.assigned_worker.is_none());
         assert!(task.claimed_by_pid.is_none());
+    }
+}
+
+#[cfg(test)]
+mod dispatch_origin_tests {
+    use super::*;
+    use crate::db::runs::RunsDb;
+    use crate::db::tasks::{CreateTaskInput, TasksDb};
+    use crate::recipes::runner::RecipeRunner;
+    use std::sync::Mutex;
+
+    /// The scheduler is what actually spawns a tick, so the dispatch origin has
+    /// to survive the hop from the caller into the spawned recipe run. This test
+    /// drives the real `kick_worker_dispatched_by` on a real scheduler and reads
+    /// the worker run back from the ledger.
+    #[tokio::test]
+    async fn a_kick_carries_its_dispatch_run_into_the_spawned_worker_tick() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+
+        let tasks = TasksDb::open().expect("open isolated TasksDb");
+        let task_id = tasks
+            .create(CreateTaskInput {
+                title: "Carry the dispatch origin through the kick".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "The spawned tick names the run that kicked it.".into(),
+                created_by: Some("p4-54-kick-test".into()),
+            })
+            .expect("create dispatched task")
+            .id;
+        tasks
+            .update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign the task so the worker has real work");
+
+        let recipes = home.path().join(".arcana").join("recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes).expect("persist shipped recipes");
+        let workers = crate::db::workers::WorkersDb::open().expect("open worker roster");
+        let backend = workers
+            .get_by_slug("worker-backend")
+            .expect("read the backend worker")
+            .expect("the shipped backend worker is seeded");
+        workers
+            .update_status(backend.id, crate::db::workers::WorkerStatus::Idle)
+            .expect("leave the backend worker runnable");
+
+        let runs = RunsDb::open().expect("open the run ledger");
+        let supervisor = runs
+            .begin_worker_tick("supervisor", "dispatch-origin-supervisor")
+            .expect("open the dispatching Supervisor tick");
+
+        // No provider: the tick stops after setup, which is all this test needs.
+        let runner = RecipeRunner::new_with_workspace_override(
+            std::sync::Arc::new(Mutex::new(crate::state::AppState::default())),
+            std::sync::Arc::new(
+                crate::session::manager::SessionManager::new()
+                    .expect("open isolated session manager"),
+            ),
+            crate::agent::permission::new_pending_permissions(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+        );
+        let scheduler = RecipeScheduler::new(std::sync::Arc::new(runner));
+
+        scheduler.kick_worker_dispatched_by("worker-backend", Some(supervisor.clone()));
+
+        let worker_run = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if let Some(state) = runs
+                    .latest_worker_tick("worker-backend")
+                    .expect("read the kicked worker tick")
+                {
+                    break state;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("the kick must spawn a worker tick");
+
+        assert_ne!(worker_run.run_id, supervisor);
+        assert_eq!(
+            worker_run.parent_run_id.as_deref(),
+            Some(supervisor.as_str()),
+            "the spawned tick must record the run whose kick dispatched it"
+        );
+        scheduler.shutdown().await;
+    }
+
+    /// A kick with no dispatch origin still records no parent: cron and
+    /// launch-time dispatch must not inherit a lineage from a neighbour.
+    #[tokio::test]
+    async fn a_kick_without_a_dispatch_origin_records_no_parent() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated selected workspace");
+
+        let tasks = TasksDb::open().expect("open isolated TasksDb");
+        let task_id = tasks
+            .create(CreateTaskInput {
+                title: "Kick without a dispatch origin".into(),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "No parent is invented.".into(),
+                created_by: Some("p4-54-kick-test".into()),
+            })
+            .expect("create dispatched task")
+            .id;
+        tasks
+            .update_status(task_id, "assigned", Some("worker-backend"))
+            .expect("assign the task so the worker has real work");
+
+        let recipes = home.path().join(".arcana").join("recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes).expect("persist shipped recipes");
+        let workers = crate::db::workers::WorkersDb::open().expect("open worker roster");
+        let backend = workers
+            .get_by_slug("worker-backend")
+            .expect("read the backend worker")
+            .expect("the shipped backend worker is seeded");
+        workers
+            .update_status(backend.id, crate::db::workers::WorkerStatus::Idle)
+            .expect("leave the backend worker runnable");
+
+        let runs = RunsDb::open().expect("open the run ledger");
+        // A neighbouring run exists; it must not be adopted as a parent.
+        runs.begin_worker_tick("supervisor", "dispatch-origin-neighbour")
+            .expect("open an unrelated Supervisor tick");
+
+        let runner = RecipeRunner::new_with_workspace_override(
+            std::sync::Arc::new(Mutex::new(crate::state::AppState::default())),
+            std::sync::Arc::new(
+                crate::session::manager::SessionManager::new()
+                    .expect("open isolated session manager"),
+            ),
+            crate::agent::permission::new_pending_permissions(),
+            Some(workspace.path().to_string_lossy().into_owned()),
+        );
+        let scheduler = RecipeScheduler::new(std::sync::Arc::new(runner));
+
+        scheduler.kick_worker("worker-backend");
+
+        let worker_run = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                if let Some(state) = runs
+                    .latest_worker_tick("worker-backend")
+                    .expect("read the kicked worker tick")
+                {
+                    break state;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("the kick must spawn a worker tick");
+
+        assert_eq!(
+            worker_run.parent_run_id, None,
+            "an origin-less kick must not inherit a neighbouring run as its parent"
+        );
+        scheduler.shutdown().await;
     }
 }

@@ -55,7 +55,7 @@ impl Tool for CreateTaskTool {
         })
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext) -> ToolResult {
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> ToolResult {
         let title = match input["title"].as_str() {
             Some(t) if !t.trim().is_empty() => t.trim().to_string(),
             _ => return ToolResult::error("'title' is required and must not be empty"),
@@ -93,8 +93,9 @@ impl Tool for CreateTaskTool {
 
         // Phase 3.0 R1 — push-based dispatch. Wake the Supervisor immediately
         // so it dispatches this task on the next event-loop tick instead of
-        // waiting up to one cron cycle (previously ~21 s dead window).
-        crate::recipes::scheduler::kick("supervisor");
+        // waiting up to one cron cycle (previously ~21 s dead window). The tick
+        // records this run as its dispatcher (P4-54).
+        crate::recipes::scheduler::kick_dispatched_by("supervisor", ctx.run_id.clone());
 
         // Phase 3.0 R1 — notify the UI (Arcana Panel kanban) that the board
         // changed without requiring a poll. The frontend `taskStore` listens

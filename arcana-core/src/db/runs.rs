@@ -76,6 +76,10 @@ pub struct Run {
 pub struct WorkerRunState {
     pub run_id: String,
     pub worker_slug: String,
+    /// The run that dispatched this tick, when one did. `None` for a tick
+    /// started by cron or by a launch-time kick, where no other run asked for
+    /// it; that absence is data, not a missing value.
+    pub parent_run_id: Option<String>,
     pub session_id: String,
     pub phase: String,
     pub task_id: Option<i64>,
@@ -211,10 +215,15 @@ impl Run {
     }
 }
 
+const RUN_BY_ID_SQL: &str =
+    "SELECT id, kind, actor, started_at, ended_at, outcome, host, pid, parent_run_id, detail \
+     FROM runs WHERE id = ?1";
+
 const LATEST_WORKER_TICK_BY_SLUG_SQL: &str =
     "SELECT s.run_id, s.worker_slug, s.session_id, s.phase, s.task_id,
                         s.heartbeat_at, s.last_progress_at, s.last_progress,
-                        s.failure_code, s.startup_retry_count, r.outcome, r.started_at
+                        s.failure_code, s.startup_retry_count, r.outcome, r.started_at,
+                        r.parent_run_id
                  FROM worker_run_state s
                  JOIN runs r ON r.id = s.run_id
                  WHERE s.worker_slug = ?1
@@ -228,7 +237,8 @@ const LATEST_WORKER_RUN_OWNER_SQL: &str = "SELECT s.run_id, r.host, r.pid, s.pha
 const LATEST_WORKER_TICKS_SQL: &str =
     "SELECT s.run_id, s.worker_slug, s.session_id, s.phase, s.task_id,
             s.heartbeat_at, s.last_progress_at, s.last_progress,
-            s.failure_code, s.startup_retry_count, r.outcome, r.started_at
+            s.failure_code, s.startup_retry_count, r.outcome, r.started_at,
+            r.parent_run_id
      FROM worker_run_state s
      JOIN runs r ON r.id = s.run_id
      WHERE s.run_id = (
@@ -238,6 +248,20 @@ const LATEST_WORKER_TICKS_SQL: &str =
          ORDER BY julianday(r2.started_at) DESC, r2.id DESC LIMIT 1
      )
      ORDER BY julianday(r.started_at) DESC, r.id DESC LIMIT ?1";
+
+/// Worker ticks one run dispatched, newest first.
+///
+/// This is the other half of the parent link: the dispatching run (the
+/// Supervisor tick that assigned the task) reads back the ticks it woke.
+const CHILDREN_OF_RUN_SQL: &str =
+    "SELECT s.run_id, s.worker_slug, s.session_id, s.phase, s.task_id,
+            s.heartbeat_at, s.last_progress_at, s.last_progress,
+            s.failure_code, s.startup_retry_count, r.outcome, r.started_at,
+            r.parent_run_id
+     FROM runs r
+     JOIN worker_run_state s ON s.run_id = r.id
+     WHERE r.parent_run_id = ?1
+     ORDER BY julianday(r.started_at) DESC, r.id DESC LIMIT ?2";
 
 const RECENT_WORKER_PROGRESS_SQL: &str =
     "SELECT event_at, operation, outcome FROM worker_run_events
@@ -710,6 +734,19 @@ const LADDER: &[Migration] = &[
                 CHECK(startup_retry_count >= 0);
         "#,
     },
+    Migration {
+        version: 12,
+        name: "run-dispatch-parent-order-index",
+        // Measured before adding: on a populated ledger the children read
+        // (`WHERE parent_run_id = ? ORDER BY julianday(started_at) DESC, id DESC`)
+        // scanned the whole `runs` table and then sorted it. `parent_run_id` is a
+        // foreign key, and SQLite does not index a foreign key for you. This
+        // index seeks the dispatching run's children in newest-first order.
+        sql: r#"
+            CREATE INDEX idx_runs_parent_dispatch_order
+                ON runs(parent_run_id, julianday(started_at) DESC, id DESC);
+        "#,
+    },
 ];
 
 impl RunsDb {
@@ -802,6 +839,30 @@ impl RunsDb {
 
     /// Atomically create a fleet run and its initial durable health row.
     pub fn begin_worker_tick(&self, worker_slug: &str, session_id: &str) -> Result<String> {
+        self.begin_worker_tick_with_parent(worker_slug, session_id, None)
+    }
+
+    /// Open a worker tick and record which run dispatched it.
+    ///
+    /// `parent_run_id` is the run whose tool call woke this worker — the
+    /// Supervisor tick that assigned the task, or the run that sent it a
+    /// message. A tick started by cron or by a launch-time kick has no
+    /// dispatcher and records `None`; nothing is inferred to have requested it.
+    ///
+    /// The parent is verified against the ledger in the same transaction before
+    /// the row is written, so an invented dispatch lineage is refused rather than
+    /// stored and later read back as though it were real. `runs.parent_run_id`
+    /// declares a foreign key and the bundled SQLite build enforces foreign keys
+    /// by default, but that default is a build property no code here sets: the
+    /// explicit probe keeps the guarantee local, and it also refuses with a
+    /// domain error naming the run instead of surfacing a raw SQLite constraint
+    /// failure to the Fleet.
+    pub fn begin_worker_tick_with_parent(
+        &self,
+        worker_slug: &str,
+        session_id: &str,
+        parent_run_id: Option<&str>,
+    ) -> Result<String> {
         let id = uuid::Uuid::new_v4().to_string();
         let timing = OperationTimer::start("database_worker_tick_begin")
             .with_database("runs")
@@ -810,16 +871,32 @@ impl RunsDb {
             .with_run_id(&id);
         let now = now_rfc3339();
         let tx = self.conn.unchecked_transaction()?;
+        if let Some(parent_run_id) = parent_run_id {
+            let exists: Option<i64> = tx
+                .query_row(
+                    "SELECT 1 FROM runs WHERE id = ?1",
+                    params![parent_run_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| ArcanaError::Agent(format!("checking the dispatching run: {e}")))?;
+            if exists.is_none() {
+                return Err(ArcanaError::Agent(format!(
+                    "the dispatching run {parent_run_id} is not in the run ledger"
+                )));
+            }
+        }
         tx.execute(
-            "INSERT INTO runs (id, kind, actor, started_at, host, pid)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO runs (id, kind, actor, started_at, host, pid, parent_run_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 &id,
                 kind::FLEET_TICK,
                 worker_slug,
                 &now,
                 hostname(),
-                std::process::id() as i64
+                std::process::id() as i64,
+                parent_run_id
             ],
         )
         .map_err(|e| ArcanaError::Agent(format!("opening worker run: {e}")))?;
@@ -1824,6 +1901,31 @@ impl RunsDb {
         Ok(states)
     }
 
+    /// Read the worker ticks one run dispatched, newest first.
+    ///
+    /// The Supervisor uses this to see the work its own tick woke, including
+    /// ticks that have already ended — a dispatch that produced a failed run is
+    /// exactly the thing it must not lose.
+    pub fn children_of(&self, run_id: &str, limit: i64) -> Result<Vec<WorkerRunState>> {
+        let mut timing = OperationTimer::start("database_run_children_read").with_database("runs");
+        timing = timing.with_run_id(run_id);
+        let mut stmt = self
+            .conn
+            .prepare(CHILDREN_OF_RUN_SQL)
+            .map_err(|e| ArcanaError::Agent(format!("preparing dispatched worker ticks: {e}")))?;
+        let rows = stmt
+            .query_map(
+                params![run_id, limit.clamp(1, 100)],
+                row_to_worker_run_state,
+            )
+            .map_err(|e| ArcanaError::Agent(format!("querying dispatched worker ticks: {e}")))?;
+        let states = rows
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| ArcanaError::Agent(format!("collecting dispatched worker ticks: {e}")))?;
+        timing.with_result_count(states.len()).succeed();
+        Ok(states)
+    }
+
     /// Close a run.
     ///
     /// Closing a run that does not exist, or one already closed, is an error
@@ -1854,13 +1956,7 @@ impl RunsDb {
         let timing = OperationTimer::start("database_run_read").with_database("runs");
         let run = self
             .conn
-            .query_row(
-                "SELECT id, kind, actor, started_at, ended_at, outcome, host, pid, \
-                        parent_run_id, detail \
-                 FROM runs WHERE id = ?1",
-                params![run_id],
-                row_to_run,
-            )
+            .query_row(RUN_BY_ID_SQL, params![run_id], row_to_run)
             .optional()
             .map_err(|e| ArcanaError::Agent(format!("reading run {run_id}: {e}")))?;
         if let Some(run) = &run {
@@ -2006,6 +2102,7 @@ fn row_to_worker_run_state(row: &rusqlite::Row<'_>) -> rusqlite::Result<WorkerRu
         startup_retry_count: row.get(9)?,
         outcome: row.get(10)?,
         started_at: row.get(11)?,
+        parent_run_id: row.get(12)?,
     })
 }
 
@@ -2308,6 +2405,7 @@ mod tests {
             .execute_batch(
                 "DROP INDEX idx_runs_started_instant;
                  DROP INDEX idx_runs_open_instant;
+                 DROP INDEX idx_runs_parent_dispatch_order;
                  DROP TRIGGER operation_retry_consume_guard;
                  DROP TRIGGER operation_retry_grant_shape;
                  DROP INDEX idx_operation_retry_single_use;
@@ -2322,7 +2420,7 @@ mod tests {
         drop(db);
 
         let upgraded = RunsDb::open_at(&path).expect("upgrade populated v7 RunsDb");
-        assert_eq!(upgraded.schema_version().expect("schema version"), 11);
+        assert_eq!(upgraded.schema_version().expect("schema version"), 12);
         let rows = upgraded
             .conn
             .prepare("SELECT id, started_at FROM runs ORDER BY id")
@@ -2376,6 +2474,234 @@ mod tests {
     }
 
     #[test]
+    fn worker_ticks_record_their_dispatch_run_and_the_dispatcher_reads_them_back() {
+        let path = temp_db("dispatch-lineage");
+        let db = RunsDb::open_at(&path).expect("open isolated RunsDb");
+
+        let supervisor = db
+            .begin_worker_tick("supervisor", "dispatch-lineage-supervisor")
+            .expect("open the dispatching Supervisor tick");
+        let backend = db
+            .begin_worker_tick_with_parent(
+                "worker-backend",
+                "dispatch-lineage-backend",
+                Some(&supervisor),
+            )
+            .expect("open a dispatched backend tick");
+        let qc = db
+            .begin_worker_tick_with_parent("qc-agent", "dispatch-lineage-qc", Some(&supervisor))
+            .expect("open a dispatched QC tick");
+        let launched = db
+            .begin_worker_tick("worker-frontend", "dispatch-lineage-launch")
+            .expect("open a tick nothing dispatched");
+
+        let backend_state = db
+            .latest_worker_tick("worker-backend")
+            .expect("read the backend tick")
+            .expect("the backend tick exists");
+        assert_eq!(
+            backend_state.parent_run_id.as_deref(),
+            Some(supervisor.as_str()),
+            "a dispatched tick must name the run that woke it"
+        );
+        assert_eq!(
+            db.latest_worker_tick("worker-frontend")
+                .expect("read the launch tick")
+                .expect("the launch tick exists")
+                .parent_run_id,
+            None,
+            "a cron or launch kick has no dispatcher and must not invent one"
+        );
+
+        let mut children = db
+            .children_of(&supervisor, 10)
+            .expect("read the ticks this run dispatched")
+            .into_iter()
+            .map(|state| (state.run_id, state.worker_slug))
+            .collect::<Vec<_>>();
+        children.sort();
+        let mut expected = vec![
+            (backend.clone(), "worker-backend".to_string()),
+            (qc.clone(), "qc-agent".to_string()),
+        ];
+        expected.sort();
+        assert_eq!(children, expected, "only the dispatched ticks are children");
+        assert!(
+            !children.iter().any(|(run_id, _)| run_id == &launched),
+            "a tick nothing dispatched must not appear as a child"
+        );
+
+        // Bounded read: the cap is honoured and the caller can tell it was hit.
+        assert_eq!(
+            db.children_of(&supervisor, 1)
+                .expect("read a bounded page")
+                .len(),
+            1
+        );
+        assert!(db
+            .children_of("no-such-run", 10)
+            .expect("an unknown parent is empty, not an error")
+            .is_empty());
+
+        // The writer refuses a lineage it cannot verify. `parent_run_id` declares
+        // a foreign key, and the bundled SQLite enforces it by default — but the
+        // guarantee must not depend on a compile-time default, so the explicit
+        // probe owns the refusal and names the run. The worker is one with no
+        // active run, so the one-active-run trigger cannot be what refuses this.
+        let foreign_keys: i64 = db
+            .conn
+            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+            .expect("read the foreign-key pragma");
+        assert_eq!(
+            foreign_keys, 1,
+            "the ledger connection is expected to enforce declared foreign keys; \
+             if this build does not, the explicit lineage probe is the only guard"
+        );
+        let before = db.recent(50).expect("count runs before the refusal").len();
+        let refused = db.begin_worker_tick_with_parent(
+            "worker-platform",
+            "dispatch-lineage-forged",
+            Some("run-that-was-never-written"),
+        );
+        let refusal = refused.expect_err("an invented dispatch lineage must fail");
+        assert!(
+            refusal.to_string().contains("is not in the run ledger"),
+            "the refusal must come from the lineage check, not a raw SQLite guard: {refusal}"
+        );
+        assert_eq!(
+            db.recent(50).expect("count runs after the refusal").len(),
+            before,
+            "a refused lineage must not leave a half-written worker run"
+        );
+    }
+
+    #[test]
+    fn dispatched_ticks_read_through_the_dispatch_index_without_a_sort() {
+        let path = temp_db("dispatch-children-plan");
+        let db = RunsDb::open_at(&path).expect("open isolated RunsDb");
+        let supervisor = db
+            .begin_worker_tick("supervisor", "children-plan-supervisor")
+            .expect("open the dispatching Supervisor tick");
+        let mut child_ids = Vec::new();
+        for index in 0..64 {
+            // Distinct workers: `worker_run_state` permits one active run per
+            // worker, and these ticks stay open for the plan fixture.
+            let child = db
+                .begin_worker_tick_with_parent(
+                    &format!("worker-child-{index}"),
+                    &format!("children-plan-{index}"),
+                    Some(&supervisor),
+                )
+                .expect("open a dispatched child tick");
+            child_ids.push(child);
+        }
+        // Unrelated ledger traffic: without an index the children read would have
+        // to walk all of this to find eight dozen children.
+        for index in 0..512 {
+            db.begin_with(
+                kind::AGENT_TURN,
+                Some("children-plan-unrelated"),
+                None,
+                Some(&format!("unrelated-{index}")),
+            )
+            .expect("open an unrelated run");
+        }
+        db.conn.execute_batch("ANALYZE").expect("analyze fixture");
+
+        db.conn
+            .execute_batch("DROP INDEX idx_runs_parent_dispatch_order")
+            .expect("drop the dispatch index to measure the baseline");
+        let baseline = explain_with_text_and_integer_parameters(
+            &db.conn,
+            CHILDREN_OF_RUN_SQL,
+            &supervisor,
+            100,
+        );
+        assert!(
+            baseline
+                .iter()
+                .any(|step| step.contains("SCAN s") || step.contains("SCAN runs")),
+            "baseline evidence: without the dispatch index the children read walks the whole ledger (and sorts it); plan: {baseline:?}"
+        );
+
+        // Reopen through the real ladder so the index under test is the one the
+        // migration installs, not a hand-written copy.
+        db.conn
+            .execute_batch("PRAGMA user_version = 11")
+            .expect("rewind one rung");
+        drop(db);
+        let db = RunsDb::open_at(&path).expect("re-apply the dispatch index migration");
+        assert_eq!(db.schema_version().expect("schema version"), 12);
+
+        let plan = explain_with_text_and_integer_parameters(
+            &db.conn,
+            CHILDREN_OF_RUN_SQL,
+            &supervisor,
+            100,
+        );
+        assert!(
+            plan.iter()
+                .any(|step| step.contains("idx_runs_parent_dispatch_order")),
+            "dispatched children must seek their parent's index; plan: {plan:?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.contains("SCAN runs") || step.contains("SCAN r ")),
+            "dispatched children must not scan the run ledger; plan: {plan:?}"
+        );
+        assert!(
+            !plan
+                .iter()
+                .any(|step| step.contains("USE TEMP B-TREE FOR ORDER BY")),
+            "the dispatch index must provide newest-first order; plan: {plan:?}"
+        );
+
+        let children = db
+            .children_of(&supervisor, 100)
+            .expect("read the dispatched ticks through the migration index");
+        assert_eq!(children.len(), child_ids.len());
+        let mut read = children
+            .iter()
+            .map(|state| state.run_id.clone())
+            .collect::<Vec<_>>();
+        read.sort();
+        child_ids.sort();
+        assert_eq!(read, child_ids);
+
+        // The other direction of the lineage read: the Supervisor resolves a
+        // worker's dispatcher with `RUN_BY_ID_SQL`. `runs.id` is a text column
+        // with a unique index, so this must be an index seek — never a walk of
+        // the ledger.
+        let parent_plan = explain_with_text_parameter(&db.conn, RUN_BY_ID_SQL, &supervisor);
+        assert!(
+            parent_plan
+                .iter()
+                .any(|step| step.contains("SEARCH runs USING")),
+            "the parent read must seek the run ledger identity index; plan: {parent_plan:?}"
+        );
+        assert!(
+            !parent_plan.iter().any(|step| step.contains("SCAN runs")),
+            "the parent read must not scan the run ledger; plan: {parent_plan:?}"
+        );
+        let parent = db
+            .get(&supervisor)
+            .expect("read the dispatching run back")
+            .expect("the dispatching run exists");
+        assert_eq!(parent.parent_run_id, None);
+        let first_child = child_ids.first().expect("a dispatched child tick").clone();
+        assert_eq!(
+            db.get(&first_child)
+                .expect("read the dispatched run back")
+                .expect("the dispatched run exists")
+                .parent_run_id
+                .as_deref(),
+            Some(supervisor.as_str()),
+            "the parent read must return the stored dispatcher"
+        );
+    }
+
+    #[test]
     fn worker_run_state_upgrade_defaults_startup_retry_count_for_existing_rows() {
         let path = temp_db("runs-v11-retry-count-migration");
         let db = RunsDb::open_at(&path).expect("open isolated RunsDb");
@@ -2385,13 +2711,14 @@ mod tests {
         db.conn
             .execute_batch(
                 "ALTER TABLE worker_run_state DROP COLUMN startup_retry_count;
+                 DROP INDEX idx_runs_parent_dispatch_order;
                  PRAGMA user_version = 10;",
             )
             .expect("simulate a populated v10 database");
         drop(db);
 
         let upgraded = RunsDb::open_at(&path).expect("upgrade a populated v10 RunsDb");
-        assert_eq!(upgraded.schema_version().expect("schema version"), 11);
+        assert_eq!(upgraded.schema_version().expect("schema version"), 12);
         let state = upgraded
             .latest_worker_tick("worker-backend")
             .expect("read the upgraded worker tick")
@@ -2420,7 +2747,7 @@ mod tests {
     fn a_run_is_recorded_and_read_back() {
         let path = temp_db("roundtrip");
         let db = RunsDb::open_at(&path).expect("open");
-        assert_eq!(db.schema_version().unwrap(), 11);
+        assert_eq!(db.schema_version().unwrap(), 12);
 
         let id = db.begin(kind::APP, None).expect("begin");
 
@@ -3003,7 +3330,7 @@ mod tests {
             );
         }
         let db = RunsDb::open_at(&path).expect("upgrade v3 database");
-        assert_eq!(db.schema_version().expect("schema version"), 11);
+        assert_eq!(db.schema_version().expect("schema version"), 12);
         let run_id = db.begin(kind::AGENT_TURN, None).expect("begin run");
         let cursor = db
             .record_operation_intent(&run_id, None, "op-1", "edit", "write_file", &[])
@@ -3045,6 +3372,7 @@ mod tests {
                 "DROP INDEX idx_operation_journal_task_cursor;
                  DROP INDEX idx_runs_started_instant;
                  DROP INDEX idx_runs_open_instant;
+                 DROP INDEX idx_runs_parent_dispatch_order;
                  DROP TRIGGER operation_retry_consume_guard;
                  DROP TRIGGER operation_retry_grant_shape;
                  DROP INDEX idx_operation_retry_single_use;
@@ -3059,7 +3387,7 @@ mod tests {
         drop(db);
 
         let db = RunsDb::open_at(&path).expect("upgrade existing v6 database");
-        assert_eq!(db.schema_version().expect("upgraded schema version"), 11);
+        assert_eq!(db.schema_version().expect("upgraded schema version"), 12);
         let plan = explain_without_parameters(
             &db.conn,
             "SELECT id FROM operation_journal

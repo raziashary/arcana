@@ -720,6 +720,32 @@ fn offline_fleet_cli_completes_board_child_and_exports_observability() {
         worker.outcome.is_some(),
         "a finished worker tick must record an outcome"
     );
+
+    // Dispatch lineage across processes: the CLI launch kick was not dispatched
+    // by anything, and the worker tick it woke names the supervisor tick that
+    // asked for it — read back through the forwarding direction too.
+    assert_eq!(
+        supervisor.parent_run_id, None,
+        "a launch-time kick has no dispatcher and must not claim one"
+    );
+    assert_eq!(
+        worker.parent_run_id.as_deref(),
+        Some(supervisor.run_id.as_str()),
+        "the worker tick must record the supervisor tick that dispatched it"
+    );
+    let dispatched = runs
+        .children_of(&supervisor.run_id, 10)
+        .expect("read the ticks this supervisor run dispatched");
+    assert!(
+        dispatched.iter().any(|child| child.run_id == worker.run_id),
+        "the supervisor tick must read back the worker tick it woke: {dispatched:?}"
+    );
+    assert!(
+        dispatched
+            .iter()
+            .all(|child| child.parent_run_id.as_deref() == Some(supervisor.run_id.as_str())),
+        "every dispatch-index row must carry the dispatcher it was read through"
+    );
 }
 
 #[test]

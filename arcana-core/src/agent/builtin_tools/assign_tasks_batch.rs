@@ -298,9 +298,10 @@ impl Tool for AssignTasksBatchTool {
 
         // One kick per unique worker, even if we assigned 8 tasks to it.
         // Push-based dispatch is per-worker; multiple kicks just trigger the
-        // "already working" skip log so they're wasted noise.
+        // "already working" skip log so they're wasted noise. Each tick this
+        // wakes records this run as its dispatcher (P4-54).
         for slug in &kicked {
-            crate::recipes::scheduler::kick(slug);
+            crate::recipes::scheduler::kick_dispatched_by(slug, ctx.run_id.clone());
         }
 
         let summary = format!(
