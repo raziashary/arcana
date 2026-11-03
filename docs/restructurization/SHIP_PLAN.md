@@ -4,11 +4,11 @@
 |---|---|
 | **Owner** | Razi (sole developer) |
 | **Written** | 2026-11-03, replacing the P0–P9 master plan (now in [`archive/`](archive/README.md)) |
-| **Status** | **DRAFT for Razi's confirmation.** Items marked ◇ are proposed cuts or additions that nobody has ruled on yet. Restructuring work resumes only when Razi says go. |
+| **Status** | Cuts confirmed by Razi 2026-11-03. One ruling still open: `P9-02`, Windows code signing (see R4). Restructuring work resumes only when Razi says go. |
 
 ## 1. What "shipped" means
 
-**Arcana v1 is a Windows-only installer.** On a clean Windows machine a user installs it,
+**Arcana v1 is a Windows-only installer** (Razi's whole company runs Windows). On a clean Windows machine a user installs it,
 enters a provider key, hands it a coding task, and receives a build-verified result,
 without reading documentation. That is the old headline acceptance test (`P9-15`), cut to
 one platform.
@@ -25,8 +25,10 @@ evidence and recovery. Outcomes AC-01..AC-07 stand; AC-07 (installable app) is W
    gates `TG4-09`/`TG4-18`/`TG4-31`) because it is a safety boundary. Observability depth,
    mid-run continuity and worker-health depth (`P4-50/51/53/54/56`, `P4_EXPANDED_GOAL.md`) move to the backlog.
 3. The old MDP `§0` process is **slimmed** to the rules in §3 below.
-4. Uncommitted Linux/macOS sandbox work is **parked** (not deleted); see the backlog.
+4. The Linux/macOS sandbox work is **parked** on the local branch `park/linux-macos-sandbox` (commit `bc54874`, not
+   pushed); see the backlog. All Windows harness code (process sandbox, `project_command`, egress consent, IDE Run) stays on `main`.
 5. Razi may have docs changed and pushed to `main` directly. This does not extend to code pushes (`AGENTS.md`).
+6. The proposed cuts in §4 were reviewed and confirmed.
 
 ## 3. Working rules (replace MDP §0)
 
@@ -58,7 +60,7 @@ R0 baseline green → R1 close P4 (Windows) → R2 graph (P5) → R3 UI + experi
 ```
 
 A proof column names the check that closes each row. IDs are the old task IDs so existing code comments
-and archived receipts stay traceable. `v1` means required; ◇ means proposed cut or add.
+and archived receipts stay traceable. `v1` means required; means proposed cut or add.
 
 ### R0 · Baseline green
 
@@ -90,7 +92,7 @@ Goal: the graph is compiled, correct, and read when the agent selects context.
 | `P5-04..07` v1 | Stop `INSERT OR REPLACE` cascade-deleting edges; real upsert; edge-conservation test; backup on the destructive ladder step | `S5-02` |
 | `P5-14..17` v1 | Graph is read during context selection, scoped by graph distance, bounded; a recalled node appears in the outbound prompt bytes | `S5-05` |
 | `P5-18..19` v1 | The 27 `graph_tools.rs` structs implement `Tool` and are registered; descriptions written to the `P3-20` standard (this absorbs `P5-21`) | `S5-04` |
-| `P5-08..13` ◇ | Incremental re-cluster, rename, convergence: **defer; re-index in full on change** unless full re-index is too slow on a real repo | If kept: `S5-03` |
+| `P5-08..13` | Incremental re-cluster, rename, convergence: **defer; re-index in full on change** unless full re-index is too slow on a real repo | If kept: `S5-03` |
 | `P5-20` | Bookkeeping only; dropped | — |
 
 ### R3 · UI and experience (P6, P7)
@@ -101,23 +103,23 @@ Goal: a new user reaches a working agent turn, errors are visible, nothing is lo
 |---|---|---|
 | `P6-02` v1 | Self-host the font (the CSP blocks the external fetch, which is why Graph City hangs) | `S6-01` |
 | `P6-01`, `P6-04` v1 | Token set from [`reference/ui-anchor.md`](reference/ui-anchor.md), defined once, no literal hex in components | Static gate |
-| `P6-03` ◇, `P6-05` ◇ | Dark mode and a drift gate for every surface: defer | — |
+| `P6-03`, `P6-05` | Dark mode and a drift gate for every surface: defer | — |
 | `P6-06/07/09` v1 | Event subscription above the tab boundary; no event lost on tab switch; dead listeners removed | `S6-02` |
-| `P6-08` ◇ | Reconnect replay: defer | — |
+| `P6-08` | Reconnect replay: defer | — |
 | `P6-10..13` v1 | Add the 2 missing commands, remove the 47 dead commands and 10 dead listeners, gate that both sides agree | Contract test |
-| `P6-14` ◇ | Argument/return type checking: defer | — |
+| `P6-14` | Argument/return type checking: defer | — |
 | `P6-15..18` v1 | Every setting persists and hydrates; provider/model survive restart; `ModelConfigsDb` read as well as written; no inert controls | `S6-03` |
-| `P6-19..20` v1 | Graph City renders and reads the real graph; `P6-21` ◇ performance bench deferred | `S6-01` |
-| `P6-22..23` v1 | Route or delete ~3,700 orphaned frontend lines; every route reachable from a cold start; `P6-24` ◇ gate deferred | `S6-04` |
+| `P6-19..20` v1 | Graph City renders and reads the real graph; `P6-21` performance bench deferred | `S6-01` |
+| `P6-22..23` v1 | Route or delete ~3,700 orphaned frontend lines; every route reachable from a cold start; `P6-24` gate deferred | `S6-04` |
 | `P7-01..04` v1 | BYOK first run: enter a key, see it accepted, reach a turn, key never echoed, every failure names its next action | `S7-01` |
 | `P7-05..08` v1 | Fix the two toast producers; errors surface once in one place; provider errors say what the user can do; completion, cancel, provider error and tool error are distinguishable | Smoke |
 | `P7-09..11` v1 | Honest progress; cancellation actually cancels; long operations say what they are doing | `S7-03` |
 | `P7-12..14` v1 | The 10 unconfirmed destructive actions ask first and say what is lost; undo where `git/checkpoint.rs` supports it | `S7-02` |
 | `P7-15`, `P7-17` v1 | One vocabulary (worker, task, run, session); empty states that teach | Doc/UI check |
-| `P7-16` ◇ | Interaction-grammar doc gate: drop | — |
+| `P7-16` | Interaction-grammar doc gate: drop | — |
 | `P7-18` | Capstone walkthrough without docs: folded into `S7-01` | `S7-01` |
 | `P7-19` | Automatic recovery after process loss: backlog | — |
-| `P2-21` ◇ | Daily spend ceiling (M-42), the one open P2 task. Unpriced models are invisible to the cap, so a paid-key app should not ship without it | Test |
+| `P2-21` | Daily spend ceiling (M-42), the one open P2 task. Unpriced models are invisible to the cap, so a paid-key app should not ship without it | Test |
 
 ### R4 · Windows delivery (P9)
 
@@ -126,8 +128,8 @@ Goal: a new user reaches a working agent turn, errors are visible, nothing is lo
 | `P9-05` v1 | Windows installer (`installers/wix/`) builds, installs, launches | Smoke |
 | `P9-09`, `P9-10` v1 | No `.py`, sidecar or dev `.env` inside the installer; installed size recorded | Gate |
 | `P9-15` v1 | **Headline acceptance** on a clean Windows machine, from the shipped installer: install, enter key, hand over a task, receive a build-verified artifact (`S9-01`, `S9-03`) | Smoke |
-| `P9-02` ◇ | Windows code-signing certificate (Razi's action). Without it the installer works but shows a SmartScreen warning. Ruling needed | — |
-| `P9-03`, `P9-04`, `P9-11..14` ◇ | Production updater key, signed updates, rollback: **ship v1 with the updater inert** (the README already says no feed exists). `S9-02` goes with it | — |
+| `P9-02` | Windows code-signing certificate (Razi's action). Without it the installer works but shows a SmartScreen warning, which matters now that the whole company runs Windows. Ruling needed | — |
+| `P9-03`, `P9-04`, `P9-11..14` | Production updater key, signed updates, rollback: **ship v1 with the updater inert** (the README already says no feed exists). `S9-02` goes with it | — |
 | `P9-01`, `P9-06..08`, `P9-16` | Apple/Linux installers, notarisation, cross-platform parity: backlog | — |
 
 ## 5. Status snapshot

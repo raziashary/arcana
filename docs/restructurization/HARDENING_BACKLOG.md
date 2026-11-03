@@ -11,10 +11,14 @@ Linux and macOS must stay **fail-closed**: unsupported execution is refused unti
 - Linux and macOS installers and launch smoke (`P9-06`, `P9-07`), macOS notarisation (`P9-08`), Apple Developer ID (`P9-01`).
 - Prove the P4 Fleet boundary on Linux/macOS: real build/test/lint/run intents, dependency staging,
   descendant read/write and network denial, timestamp corpus (`P9-16`).
-- **Parked, uncommitted work in the working tree** (as of 2026-11-03): `arcana-core/src/platform/process_sandbox/linux_smoke.rs`
-  and `linux_smoke/` (about 4,400 lines), `native/macos-sandbox/` (macOS XPC helper, 126 lines of C),
-  `scripts/build-macos-sandbox.sh`, `e2e/specs/workspace-consent.spec.ts` and an `e2e/wdio.conf.ts` edit.
-  Razi ruled they be parked on a side branch. That has **not been done yet**; the files are still untracked.
+- **Parked on the local branch `park/linux-macos-sandbox`** (commit `bc54874`, 2026-11-03, **not pushed**):
+  `arcana-core/src/platform/process_sandbox/linux_smoke.rs` and `linux_smoke/` (about 4,400 lines, a
+  `cfg(all(test, linux))` harness registered by 3 lines in `process_sandbox/mod.rs`), `native/macos-sandbox/`
+  (macOS XPC helper, 126 lines of C) and `scripts/build-macos-sandbox.sh`. The branch is additive (9 files, no
+  deletions) and unvalidated: it only compiles on Linux, rustfmt reports drift in `staging.rs`, and the macOS helper
+  was never built. The Linux/macOS code already on `main` (`linux.rs`, the macOS paths in `mod.rs`) is unchanged.
+- Not parked: `e2e/specs/workspace-consent.spec.ts` and the `e2e/wdio.conf.ts` edit are workspace-consent test
+  tooling, still uncommitted in the working tree and not tied to Linux/macOS. Decide separately whether to commit them.
 
 ## B. Reliability and observability depth (old `P4_EXPANDED_GOAL.md`, `P4-50/51/53/54/56`)
 
@@ -49,7 +53,7 @@ Re-derive which still matter from the code before opening any. Notable: `P0-21` 
 
 ## E. Items deferred from the v1 roadmap
 
-Everything marked ◇ in `SHIP_PLAN.md`, if Razi confirms the cut: incremental graph updates (`P5-08..13`), dark mode,
+Cuts Razi confirmed on 2026-11-03 (rows without `v1` in `SHIP_PLAN.md`): incremental graph updates (`P5-08..13`), dark mode,
 UI drift gate, reconnect replay, command type checking, Graph City performance bench, frontend reachability gate,
 interaction-grammar gate, production updater key and signed updates (`P9-03/04/11..14`).
 

@@ -35,3 +35,12 @@ to `archive/` with `git mv`; nothing deleted. `ui-anchor.md`, `memory-anchor.md`
 and the project map moved to `reference/`. Two files that tests read were repointed: the gate register
 (`archive/development/TESTING_GATES.md`, read by a `ci_gate.rs` test) and the P4-58 query inventory
 (now `arcana-core/tests/fixtures/p4-58-query-inventory.md`).
+
+## D-005 · Cuts confirmed, Linux/macOS work parked, Windows-first reaffirmed — 2026-11-03, Razi
+
+Razi confirmed the proposed cuts in `SHIP_PLAN.md` (deferred: incremental graph updates `P5-08..13`, dark mode,
+UI drift gate, reconnect replay, command type checking, performance bench, frontend reachability gate,
+interaction-grammar gate, the production updater; kept: the daily spend ceiling `P2-21`). `P9-02`
+(Windows code signing) is still an open ruling. The Linux smoke harness and macOS helper are committed on the
+local branch `park/linux-macos-sandbox` (`bc54874`, unpushed). **Why Windows-only:** Razi's whole company runs
+Windows, so the Windows harness is the product; nothing on `main` was removed to park the other platforms.
