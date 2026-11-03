@@ -74,3 +74,8 @@ install except pinned Ruff, so a fresh project cannot build. The host will stage
 lockfile, outside the sandbox and with the network open only for that step, then the build runs inside the
 sandbox with the network denied. Design, the consent model and the first proof (a fresh npm and a fresh Cargo
 project build under the sandbox) are the next R1 work; the refusal test stays until staging replaces it.
+
+Razi confirmed (2026-11-03) that staged dependencies live in a **host-owned cache outside the workspace**, which the sandbox
+reads through a read-only grant (a sandbox contract change). An independent audit of the first design (Haiku 5.5 High) found that a
+cache inside the workspace would let the sandboxed build plant a config file that the next host staging run reads. Still open:
+whether the approval shows and binds the package list and lockfile digest, and which toolchain comes first.
