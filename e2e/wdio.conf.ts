@@ -18,8 +18,17 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import os from 'node:os'
 import path from 'node:path'
+import { mkdtempSync, mkdirSync } from 'node:fs'
 
 let tauriDriver: ChildProcess | undefined
+let fixtureRoot: string | undefined
+const originalEnvironment = new Map<string, string | undefined>()
+
+function setFixtureEnvironment(key: string, value: string | undefined) {
+  originalEnvironment.set(key, process.env[key])
+  if (value === undefined) delete process.env[key]
+  else process.env[key] = value
+}
 
 const isWindows = os.platform() === 'win32'
 const binaryName = isWindows ? 'arcana.exe' : 'arcana'
@@ -40,7 +49,6 @@ export const config: WebdriverIO.Config = {
 
   capabilities: [
     {
-      maxInstances: 1,
       // tauri-driver proxies to the platform's native webview driver, forwarding
       // everything except `tauri:options` to it.
       //
@@ -49,7 +57,7 @@ export const config: WebdriverIO.Config = {
       // an unknown browserName with "Failed to match capabilities" — which is
       // exactly how this failed on its first CI run. tauri-driver's own examples
       // set only `tauri:options`.
-      // @ts-expect-error — tauri:options is a tauri-driver extension, not in the W3C types
+      // @ts-expect-error — native tauri-driver capability is outside WDIO's browser capability types
       'tauri:options': { application },
     },
   ],
@@ -61,9 +69,10 @@ export const config: WebdriverIO.Config = {
   // listeners before anything is assertable, so these are deliberately
   // generous compared with a browser-only suite.
   waitforTimeout: 20_000,
-  // 120s was long enough that a hung launch cost 8 minutes before reporting.
-  connectionRetryTimeout: 60_000,
-  connectionRetryCount: 3,
+  // Bound transport waiting without replaying session-creation mutations.
+  // The native adapter has its own attachment deadline.
+  connectionRetryTimeout: 120_000,
+  connectionRetryCount: 0,
 
   framework: 'mocha',
   reporters: ['spec'],
@@ -74,7 +83,7 @@ export const config: WebdriverIO.Config = {
 
   // Fail loudly and early when the prerequisites are missing, rather than
   // timing out against a driver that was never started.
-  onPrepare: () => {
+  onPrepare: async (_config, capabilities) => {
     const probe = spawnSync('tauri-driver', ['--help'], { encoding: 'utf8' })
     if (probe.error) {
       throw new Error(
@@ -99,10 +108,72 @@ export const config: WebdriverIO.Config = {
       )
     }
 
-    tauriDriver = spawn('tauri-driver', [], { stdio: [null, process.stdout, process.stderr] })
+    // The real desktop must never migrate/prune the developer's profile or
+    // persist scenario consent against their selected workspace.
+    fixtureRoot = mkdtempSync(path.join(os.tmpdir(), 'arcana-desktop-e2e-'))
+    const profile = path.join(fixtureRoot, 'profile')
+    const workspaceA = path.join(fixtureRoot, 'workspace-a')
+    const workspaceB = path.join(fixtureRoot, 'workspace-b')
+    for (const directory of [profile, workspaceA, workspaceB]) mkdirSync(directory)
+    if (isWindows) {
+      if (!Array.isArray(capabilities)) throw new Error('The desktop harness requires standalone capabilities.')
+      for (const capability of capabilities) {
+        const native = capability as unknown as {
+          'tauri:options': { application: string; webviewOptions?: { userDataFolder: string } }
+        }
+        // Keep the driver's declared profile aligned with the actual WebView
+        // environment. Alignment alone did not solve first-session attachment.
+        native['tauri:options'].webviewOptions = {
+          userDataFolder: path.join(profile, 'webview'),
+        }
+      }
+    }
+    for (const [key, value] of Object.entries({
+      HOME: profile,
+      USERPROFILE: profile,
+      XDG_CONFIG_HOME: path.join(profile, '.config'),
+      XDG_DATA_HOME: path.join(profile, '.local', 'share'),
+      XDG_CACHE_HOME: path.join(profile, '.cache'),
+      WEBVIEW2_USER_DATA_FOLDER: path.join(profile, 'webview'),
+      RUST_LOG: 'info',
+      ARCANA_E2E_FIXTURE_ROOT: fixtureRoot,
+      ARCANA_E2E_WORKSPACE_A: workspaceA,
+      ARCANA_E2E_WORKSPACE_B: workspaceB,
+    })) setFixtureEnvironment(key, value)
+    for (const key of ['GOOGLE_API_KEY', 'GEMINI_API_KEY', 'ANTHROPIC_API_KEY',
+      'OPENAI_API_KEY', 'DATABASE_URL', 'ARCANA_LIVE_SMOKE']) {
+      setFixtureEnvironment(key, undefined)
+    }
+    console.info(`Disposable desktop fixture: ${fixtureRoot}`)
+    const nativeOverride = process.env.ARCANA_E2E_NATIVE_DRIVER
+    tauriDriver = spawn('tauri-driver', nativeOverride ? ['--native-driver', nativeOverride] : [], {
+      stdio: [null, process.stdout, process.stderr],
+      windowsHide: true,
+    })
   },
 
   onComplete: () => {
-    tauriDriver?.kill()
+    try {
+      if (tauriDriver?.pid && tauriDriver.exitCode === null) {
+        if (isWindows) {
+          const stopped = spawnSync('taskkill', ['/PID', String(tauriDriver.pid), '/T', '/F'], {
+            windowsHide: true, encoding: 'utf8',
+          })
+          if (stopped.status !== 0 && tauriDriver.exitCode === null) {
+            throw new Error('Could not terminate the owned desktop WebDriver process tree.')
+          }
+        } else {
+          tauriDriver.kill()
+        }
+      }
+    } finally {
+      for (const [key, value] of originalEnvironment) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      originalEnvironment.clear()
+      // Retain only this disposable fixture for native logs/failure diagnosis.
+      if (fixtureRoot) console.info(`Desktop evidence retained at: ${fixtureRoot}`)
+    }
   },
 }
