@@ -6,29 +6,26 @@ layer: what governs work, what proves it, and what is currently red.
 
 ## What governs work
 
-`docs/restructurization/` is the active programme. The documents are the contract:
+`docs/restructurization/` holds the plan. Since 2026-11-03 it is one live plan plus an archive:
 
 | Document | Role |
 |---|---|
-| `docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md` | **The anchor.** Atomic checkboxed tasks by phase (P0–P9). `§0` rules are always-on. |
-| `docs/restructurization/development/TESTING_GATES.md` | Named automated gate tests (`TG-P<p>-<nn>`) per phase — the definition of done. |
-| `docs/restructurization/development/ADR_LOG.md` | Runtime decision journal. Any build-time decision is logged **in the same step as the decision**. |
-| `docs/restructurization/development/_verify/` | Evidence receipts. A claim without a receipt here is not proven. |
+| `docs/restructurization/SHIP_PLAN.md` | **The anchor.** What v1 (Windows-only) means, the nine working rules, the roadmap R0–R4 and the status snapshot. |
+| `docs/restructurization/HARDENING_BACKLOG.md` | Work deferred until after v1. |
+| `docs/restructurization/DECISIONS.md` | Decisions from 2026-11-03 on. Log a real choice in the same step as the decision. |
+| `docs/restructurization/reference/` | UI and memory anchors, code map, engineering learnings. |
+| `docs/restructurization/archive/` | Retired master plan, gate register, 412 ADRs, receipts. History, not instructions. |
 | `src-tauri/src/ci_gate.rs` | The codified gate tests (TG-P* family, run via `cargo test`). |
 
-Rules that bite (see MDP `§0` for the full register):
+Work resumes only when the owner says go. Rules that bite (full text: `SHIP_PLAN.md` §3):
 
-- **The shipped codebase is the anchor point.** The plan bends to code, never the reverse.
-- **Re-read the plan section before you build.** If faithful implementation still fails, the docs are wrong — fix the docs, not around them.
+- **The shipped codebase is the anchor point.** The plan bends to code, never the reverse; if faithful work contradicts a doc, fix the doc.
 - **No stale docs.** A change that makes any doc line stale fixes that line in the same step.
-- **Adversarially verify before building a phase** (§0.2m): dispatch refutation-briefed subagents, then re-verify every load-bearing result in the main session.
-- **Two audit subagents after every phase** (§0.2a), read-only, self-contained briefs, and every finding is reported to the owner — not summarised away.
-- **Every task names its proof** (§0.2e): an evidence class + the gate or smoke check that proves it. "It compiles" is not proof.
-- **Never stop a phase midway** (§0.2d): ask in-flight and continue from the answer.
-- **Continuation is the default** (§0.7): a phase boundary is a checkpoint — commit, update trackers — never an exit.
-- **Search order on a blocker** (§0.2j): codebase → web → ask. Escalate a *decision*, never a *fact*.
-- **Live-data discipline** (§0.8): every stateful resource is irreplaceable until the owner says otherwise. Back up before schema-mutating or destructive operations — including ones reachable through tests. Suites run **without** live provider credentials by default.
-- **Stage by explicit path — never `git add -A`** (§0.8/§0.9). `.env` and `target/` must never be staged.
+- **Every task names a proof that can fail.** "It compiles" is not proof; a checkbox is a claim until the owning check is re-run.
+- **One independent read-only review at the end of each phase**, plus an independent review before security-sensitive code (vault, sandbox, egress consent, commit safety) lands.
+- **A phase boundary is a checkpoint, not an exit.** Commit, update the status snapshot, continue.
+- **Live-data discipline:** every stateful resource is irreplaceable until the owner says otherwise. Back up before schema-mutating or destructive operations, including ones reachable through tests. Suites run **without** live provider credentials by default.
+- **Stage by explicit path — never `git add -A`.** `.env` and `target/` must never be staged.
 
 ## Commands
 
@@ -44,7 +41,7 @@ cargo clippy --workspace --all-targets          # CI runs this WITHOUT -D warnin
 cargo test --workspace --all-targets --locked -- --test-threads=4
 
 # App
-npm run tauri dev   # dev server (kill it when done — §0.10)
+npm run tauri dev   # dev server (kill it when done and confirm the port is free)
 ```
 
 CI (`.github/workflows/ci.yml`) splits into `rust-checks`, `frontend-checks`,
@@ -54,10 +51,7 @@ locally before claiming a gate.
 ## Status claims
 
 - **A recorded phase closure is not proof the current workflows pass.** Checkboxes are history; re-run the owning gate before relying on any claim.
-- Concrete verified-broken-as-of-2026-10-17 local state (fix on contact):
-  - `cargo fmt --check`: drift in `arcana-core/src/platform/process_sandbox/linux_smoke/staging.rs`, `src-tauri/src/commands/{settings,updater,vault}_commands.rs`.
-  - `npm run lint`: `e2e/**` and `scripts/**` lack node/browser globals in `eslint.config.js` (`no-undef` on the receipt tooling).
-  - `cargo clippy -D warnings`: `needless_borrow` in `src-shared/src/db/analytics.rs`. CI clippy is warning-only, so this is stricter than CI.
+- Verified 2026-11-03 (current status lives in `SHIP_PLAN.md` §5): `npm run typecheck` passes; `npm run lint` has 0 errors and 40 warnings; `cargo fmt --check` shows drift in `arcana-core/src/recipes/{runner,scheduler}.rs` and the untracked `linux_smoke/staging.rs`. `cargo clippy`, `cargo test` and `npm test` were not re-run; the `-D warnings` `needless_borrow` in `src-shared/src/db/analytics.rs` reported on 2026-10-17 is unconfirmed.
 - Known, documented suite failures on Windows: AppContainer/PSEC canonicalization (`OS error 5`) in a small number of sandbox tests. They are recorded platform limits, not regressions — confirm the failure *set* matches the docs before treating anything as new.
 
 ## Provider layer conventions

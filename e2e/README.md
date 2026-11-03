@@ -46,6 +46,6 @@ assertion in it can fail.
 
 The full acceptance test — *a user installs on a clean machine, enters their own
 API key, points at a repo, types one sentence, and receives a build-verified
-change* (`docs/restructurization/vision/10-PROOF.md §2`) — is built on this
+change* (`docs/restructurization/archive/vision/10-PROOF.md §2`) — is built on this
 foundation in P9. The harness lands in P0 because P4's exit gate needs it to
 exist.

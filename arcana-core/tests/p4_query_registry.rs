@@ -806,8 +806,7 @@ fn scoped_source_discovery_includes_new_production_database_modules() {
 
 #[test]
 fn query_inventory_documents_each_source_scope_exception() {
-    let inventory =
-        include_str!("../../docs/restructurization/development/_verify/P4-58-QUERY-INVENTORY.md");
+    let inventory = include_str!("fixtures/p4-58-query-inventory.md");
     for excluded in [
         "src/db/annotations.rs",
         "src/db/app_settings.rs",
@@ -906,8 +905,7 @@ fn query_fingerprint(sql: &str) -> String {
 // This guards source registration only; populated-fixture EXPLAIN assertions
 // remain the responsibility of the per-query plan regressions.
 fn production_readers_are_registered_in_the_p4_query_inventory() {
-    let inventory =
-        include_str!("../../docs/restructurization/development/_verify/P4-58-QUERY-INVENTORY.md");
+    let inventory = include_str!("fixtures/p4-58-query-inventory.md");
     let (queries, unresolved) = production_queries();
 
     assert!(
@@ -976,8 +974,7 @@ fn production_readers_are_registered_in_the_p4_query_inventory() {
 
 #[test]
 fn every_discovered_reader_owner_has_a_proof_reference_or_reasoned_exclusion() {
-    let inventory =
-        include_str!("../../docs/restructurization/development/_verify/P4-58-QUERY-INVENTORY.md");
+    let inventory = include_str!("fixtures/p4-58-query-inventory.md");
     let owner_section = inventory
         .split("## AST-discovered source owners")
         .nth(1)

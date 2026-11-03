@@ -2662,8 +2662,9 @@ let x = 1;
     /// legitimate ("this is what TG3-27 will assert"), citing a fiction is not.
     #[test]
     fn tg_p3_f8_every_cited_gate_id_exists_in_the_register() {
-        let register =
-            read_source(&repo_root().join("docs/restructurization/development/TESTING_GATES.md"));
+        let register = read_source(
+            &repo_root().join("docs/restructurization/archive/development/TESTING_GATES.md"),
+        );
 
         let mut cited: std::collections::BTreeSet<String> = Default::default();
         let mut scanned = 0usize;

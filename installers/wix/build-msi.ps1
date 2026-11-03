@@ -14,7 +14,7 @@
     installer (.exe) from the Tauri bundler, not an .msi. The description
     previously claimed .msi, which is what the updater's asset matcher was
     written against — so it matched nothing and Windows was never offered an
-    update. See docs/restructurization/development/_verify/P0-CORRECTIONS.md
+    update. See docs/restructurization/archive/development/_verify/P0-CORRECTIONS.md
     (P0-29).
 
 .PARAMETER Version

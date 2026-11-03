@@ -1,3 +1,5 @@
+> **Reference only.** Last refreshed 2026-10-14 and not re-verified against the code on 2026-11-03; its P4 status wording is out of date. The live plan is [`../SHIP_PLAN.md`](../SHIP_PLAN.md).
+
 # Arcana codebase map (refreshed 2026-10-14; P4 implementation in progress)
 
 Current phase boundary: P4 proves the Windows PA → Fleet coding path,

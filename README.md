@@ -2,7 +2,7 @@
 
 Arcana is a personal desktop workspace for a multi-agent software development team. It combines a React/TypeScript interface with a Tauri/Rust host and a shared native agent engine. The intended workflow is to plan coding tasks, assign them to workers, review their work, and keep the task board, memory, and code graph available to later turns.
 
-This repository is under active restructuring. The Python orchestrator and memory sidecars were removed in P8, and the former PD0 design reference sidecar has been retired. P4–P7 coding work and several earlier proof gates remain open. The current scope and evidence are tracked in [Arcana coding scope](docs/restructurization/development/ARCANA_CODING_SCOPE.md), [goal](docs/restructurization/development/GOAL.md), and the [master development plan](docs/restructurization/development/MASTER_DEVELOPMENT_PLAN.md). P9 packaging and further features come later.
+This repository is under active restructuring. The Python orchestrator and memory sidecars were removed in P8, and the former PD0 design reference sidecar has been retired. P4 is nearly closed and the graph, UI and experience phases (P5–P7) and packaging (P9) are still to do. The target is a Windows-only v1; the plan, roadmap and status are in the [ship plan](docs/restructurization/SHIP_PLAN.md), and deferred work is in the [hardening backlog](docs/restructurization/HARDENING_BACKLOG.md).
 
 ## Codebase
 
@@ -12,7 +12,7 @@ This repository is under active restructuring. The Python orchestrator and memor
 - `src-cli/`: `arcanactl`, sharing the Rust core.
 - `src-shared/`: shared Rust types and data access.
 
-The original product description is preserved in [development](docs/development/). The restructuring records are in [restructurization](docs/restructurization/); their older AutoDev and AutoDesign passages are historical unless superseded by the current Arcana scope.
+The original product description is preserved in [development](docs/development/). The restructuring documents are indexed in [restructurization](docs/restructurization/README.md); the retired programme documents, with their older AutoDev and AutoDesign passages, are in its `archive/` folder as history.
 
 ## Local development
 
@@ -34,4 +34,4 @@ For Gemini in the desktop app, enter the key in **Settings → Providers**. The 
 
 ## Planning state
 
-The current preparation verifies the Arcana rename and P8 cleanup before work proceeds through P4 (fleet), P5 (graph/context), P6 (desktop experience), and P7 (stabilization). The [readiness matrix](docs/restructurization/development/READINESS_MATRIX.md) and [test gates](docs/restructurization/development/TESTING_GATES.md) contain historical checkpoints and open evidence; a recorded phase closure is not, by itself, proof that every current workflow passes.
+Work proceeds P4 (fleet, Windows), P5 (graph/context), P6 (desktop experience), P7 (stabilization), then a Windows installer, as laid out in the [ship plan](docs/restructurization/SHIP_PLAN.md). Its status section records which checks were actually re-run; a recorded phase closure in the [archived](docs/restructurization/archive/README.md) trackers is not, by itself, proof that every current workflow passes.

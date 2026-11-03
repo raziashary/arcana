@@ -1,0 +1,59 @@
+# Post-ship hardening backlog
+
+Work that was open in the old programme and is **not required for Arcana v1** (Windows-only; see
+[`SHIP_PLAN.md`](SHIP_PLAN.md) §2). Nothing here is cancelled; it is ordered after the ship.
+IDs and receipts point into [`archive/development/`](archive/development/).
+
+## A. Platform parity (old `P9-16` / `TG9-06`, ADR-LOG-RESTRUCT-0391)
+
+Linux and macOS must stay **fail-closed**: unsupported execution is refused until its gate is green.
+
+- Linux and macOS installers and launch smoke (`P9-06`, `P9-07`), macOS notarisation (`P9-08`), Apple Developer ID (`P9-01`).
+- Prove the P4 Fleet boundary on Linux/macOS: real build/test/lint/run intents, dependency staging,
+  descendant read/write and network denial, timestamp corpus (`P9-16`).
+- **Parked, uncommitted work in the working tree** (as of 2026-11-03): `arcana-core/src/platform/process_sandbox/linux_smoke.rs`
+  and `linux_smoke/` (about 4,400 lines), `native/macos-sandbox/` (macOS XPC helper, 126 lines of C),
+  `scripts/build-macos-sandbox.sh`, `e2e/specs/workspace-consent.spec.ts` and an `e2e/wdio.conf.ts` edit.
+  Razi ruled they be parked on a side branch. That has **not been done yet**; the files are still untracked.
+
+## B. Reliability and observability depth (old `P4_EXPANDED_GOAL.md`, `P4-50/51/53/54/56`)
+
+Already built and kept: the Logs tab, telemetry labels and retention, startup retry count, dispatch lineage.
+Still open:
+
+- `P4-50` / `TG4-24`: full PA/fleet observability breadth (all four views, graph/MCP coverage, live-provider Fleet).
+- `P4-51` / `TG4-25`: a versioned JSON error envelope for every built-in tool, through the production executor.
+- `P4-53` / `TG4-27`: whole-app restart handoff and restore.
+- `P4-54` / `TG4-28`: worker health with a production writer and reader, bounded temporary-worker creation,
+  token usage end to end, two-worker interruption without duplicate effects.
+- `P4-56` / `TG4-30`: independent attack testing of the failure paths (task theft, path escape, secret leakage).
+- `P7-19` / `TG7-06`: automatic replay or reassignment after process loss.
+- `P4-49` live-provider paid Fleet completion beyond the Calendar acceptance run.
+
+## C. Codebase audit workstreams (2026-10-18)
+
+[`archive/development/AUDIT_2026-10-18_CODEBASE_REFACTOR_PLAN.md`](archive/development/AUDIT_2026-10-18_CODEBASE_REFACTOR_PLAN.md):
+wave 0 and about 1.5 of 9 workstreams are done (W8 hook consent, part of W4/W6). Not started: W1 guards for
+hand-kept tables, W2 dead-code deletion, W3 duplicate collapse, W5 test-harness integrity, W7 frontend
+cleanup; W9 one vetted command surface (mechanism chosen in ADR-0401, not built). Take items from here
+when they block a ship task, not as a programme.
+
+Approved but not done: generate the telemetry label set instead of hand-maintaining it; port the graph store
+onto the shared migration ladder with a backup guard (this overlaps `P5-03`); decide the fate of `guard_and_validate`.
+
+## D. Earlier-phase proof debt
+
+The archived register shows open gates in P0 (4 of 5), P2 (10 of 17), P3 (34 of 41) even though those phases
+are recorded closed ([`archive/development/TESTING_GATES.md`](archive/development/TESTING_GATES.md)).
+Re-derive which still matter from the code before opening any. Notable: `P0-21` e2e harness scaffold and `S0-01`.
+
+## E. Items deferred from the v1 roadmap
+
+Everything marked ◇ in `SHIP_PLAN.md`, if Razi confirms the cut: incremental graph updates (`P5-08..13`), dark mode,
+UI drift gate, reconnect replay, command type checking, Graph City performance bench, frontend reachability gate,
+interaction-grammar gate, production updater key and signed updates (`P9-03/04/11..14`).
+
+## F. Withdrawn, not deferred
+
+The AutoDesign programme (`PD0`–`PD6`, design-only parts of `P4-G` and `P6`) was withdrawn on 2026-09-23.
+History: [`archive/development/HISTORICAL_DESIGN_PROGRAMME.md`](archive/development/HISTORICAL_DESIGN_PROGRAMME.md).
