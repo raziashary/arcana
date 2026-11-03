@@ -585,6 +585,7 @@ fn fleet_failure_diagnostics(stderr: &[u8]) -> String {
         .filter(|line| {
             line.contains("offline Fleet script did not match turn")
                 || line.contains("fleet_cli_run_timeout")
+                || line.contains("project_command")
         })
         .collect::<Vec<_>>()
         .join("\n")
