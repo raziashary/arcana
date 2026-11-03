@@ -66,3 +66,11 @@ four hid a hole. **Open:** one `fleet_offline` flake (a missing completion event
 unreproduced in 40 runs and no production change was made for it; the test is not run by CI. Dependency installs
 under the sandbox remain refused (`SHIP_PLAN.md` R1, ruling needed).
 
+
+## D-008 · Dependency installs are staged from the lockfile — 2026-11-03, Razi
+
+Razi ruled "Stage from lockfile" on the question raised in `SHIP_PLAN.md` R1: `project_command` refuses every
+install except pinned Ruff, so a fresh project cannot build. The host will stage dependencies from the project's
+lockfile, outside the sandbox and with the network open only for that step, then the build runs inside the
+sandbox with the network denied. Design, the consent model and the first proof (a fresh npm and a fresh Cargo
+project build under the sandbox) are the next R1 work; the refusal test stays until staging replaces it.
