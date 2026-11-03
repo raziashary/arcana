@@ -172,5 +172,6 @@ Last code commit: `8356aea` (2026-10-28), worker dispatch lineage.
 | Decisions made from now on | [`DECISIONS.md`](DECISIONS.md) |
 | Code map (verify against the code; last refreshed 2026-10-14) | [`reference/PROJECT_MAP.md`](reference/PROJECT_MAP.md) |
 | UI and memory design anchors | [`reference/ui-anchor.md`](reference/ui-anchor.md), [`reference/memory-anchor.md`](reference/memory-anchor.md) |
+| What P4 already delivered, grouped by area | [`reference/P4_DELIVERED.md`](reference/P4_DELIVERED.md) |
 | Lessons learned in P4 | [`reference/ARCANA_ENGINEERING_LEARNINGS.md`](reference/ARCANA_ENGINEERING_LEARNINGS.md) |
 | Old plan, gate register, 412 ADRs, 230 receipts | [`archive/`](archive/README.md) |
