@@ -3,9 +3,16 @@
 A map of the 51 checked P4 tasks plus related commits, grouped by what they give the product, so the clean-slate
 reset in [`../SHIP_PLAN.md`](../SHIP_PLAN.md) does not hide them. Source: the archived plan
 ([`../archive/development/MASTER_DEVELOPMENT_PLAN.md`](../archive/development/MASTER_DEVELOPMENT_PLAN.md) §10), the ADR log and
-`git log`. **Evidence class:** read from those records; the terminal-control code files were confirmed present on
-2026-11-03, the rest were not individually re-checked and their tests were not re-run. Nothing here was deleted, archived
-as code, or parked. Open P4 items are in the plan and backlog, not here.
+`git log`. **Evidence class:** the list is read from those records. On 2026-11-03 the terminal-control code files were
+confirmed present, and the whole workspace suite was run (results in [`../SHIP_PLAN.md`](../SHIP_PLAN.md) §5): the
+`arcana-core` library tests, the CLI and integration targets that cover these areas pass once two environment
+effects and one real defect (unregistered telemetry labels for the dispatch-lineage and startup-retry reads) are
+accounted for. That shows the code each item names is present and its tests are green. It does **not** map every
+`P4-` task to its own test, so treat a line as "present and not contradicted", not "individually proven".
+Two corrections from that run: the `fleet_offline` test that exercises dispatch lineage and log export is behind a
+feature CI does not enable, and `project_command` refuses dependency installs (no locked staging), so the
+terminal controls in area 1 contain an agent but a fresh Node or Python project cannot yet be built under them.
+Nothing here was deleted, archived as code, or parked. Open P4 items are in the plan and backlog, not here.
 
 ## 1. Terminal and command control (an agent cannot run loose)
 - `P4-11` Rust-owned command construction: ecosystem detection and argv through `project_command`; a closed intent set, not model-written shell.

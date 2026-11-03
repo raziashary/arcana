@@ -88,11 +88,11 @@ re-checked and their tests were not re-run (R0 does that). Nothing here was dele
 
 | Item | Proof |
 |---|---|
-| Fix `cargo fmt` drift in `arcana-core/src/recipes/{runner,scheduler}.rs` | `cargo fmt --all -- --check` clean |
-| Fix four red `ci_gate` tests that also fail on a clean checkout of `8356aea`: `tg_p1_05_every_core_connection_is_opened_tuned`, `tg_p3_03_no_lock_propagates_poison`, `tg_p3_14_every_path_taking_tool_calls_the_jail` (names `reconcile_worker_operation`), `tg_p3_21_68_e2e_probe_keeps_evidence_and_stays_on_this_machine`. Both containment gates look like stale static scans, not holes: `reconcile_worker_operation` resolves the workspace from the host context, and the gate appears to match path strings in its test code; `e2e_probe` now validates loopback syntactically with no DNS (commit `ef7c0eb`) while the gate still demands `to_socket_addrs`. Read each, then fix the gate or the code | `cargo test -p arcana --lib ci_gate` all green |
-| Fix the intermittent `src-cli/tests/fleet_offline.rs` failure (fails when its 7 tests run in parallel, passes serially; ADR-0412) | Parallel run passes repeatedly |
-| Re-run `cargo clippy --workspace --all-targets`, `cargo test --workspace --all-targets --locked`, `npm test` and record the true failure set (Windows AppContainer `OS error 5` cases are recorded platform limits) | Results written into §5 |
-| Confirm the old closure prerequisites `TG3-26` and `TG4-16` (persisted egress-consent path); their state was not re-verified when this plan was written | Test or smoke |
+| Fix `cargo fmt` drift in `arcana-core/src/recipes/{runner,scheduler}.rs` — **done 2026-11-03** | `cargo fmt --all -- --check` clean |
+| Fix four red `ci_gate` tests — **done 2026-11-03.** All four were stale static scans, not holes. `tg_p1_05`, `tg_p3_03` and `tg_p3_14` cut each file at the first `#[cfg(test)]`, which misses test-only modules declared `#[cfg(test)] mod x;` in their parent and `#[cfg(all(test, …))]` modules; they now use one structural `production_source` helper (no file excluded by name; each test-gated item, field or variant is blanked rather than the file cut, which also brings shipped code after a mid-file test item, in 25 of 351 files, under the scan for the first time) with both-direction self-tests. The `e2e_probe` gate demanded DNS resolution and a runner that no longer exist; it now pins the denial contract (loopback checked without DNS before the denial, no success path, none of a list of spawn and fetch markers in shipped code, `ToolEffect::Execute`). The marker list is a text check, not a proof that nothing can launch a process; it is weaker than the old runner-specific assertions, which no longer apply and switches the original rules back on automatically if a runner appears, with a self-test that catches ten regressions | `cargo test -p arcana --lib ci_gate` all green |
+| Fix the intermittent `src-cli/tests/fleet_offline.rs` failure — **partly done.** It was two flakes. The dispatcher assertion read the newest supervisor tick, but a later tick can exist; it now reads the dispatcher through the worker's recorded parent. The second, a missing `fleet_cli_run_completed` event in the export, is **unreproduced in 40 runs**. A plausible cause is that `tracing-appender`'s guard waits at most one second for the writer on drop, but that is unproven, so no production change was made. Also: the test is not in CI | Parallel run passes repeatedly (51/52 so far); enable the feature in CI or record why not |
+| Re-run `cargo clippy --workspace --all-targets`, `cargo test --workspace --all-targets --locked`, `npm test` and record the true failure set — **done**, results in §5. Fixes made: the missing telemetry labels `database_run_children_read` and `database_worker_startup_retry_update` (unregistered labels are treated as untrusted); the clippy compile error in `psec.rs`; a missing home guard in the hook-retention test, which could write a migration backup into the real `~/.arcana/backups` and raced other tests | Results written into §5 |
+| Confirm the old closure prerequisites `TG3-26` and `TG4-16` — **done**: the named tests pass; the register's own open clauses are listed in §5 and stay open | Test or smoke |
 
 ### R1 · Close P4 (Windows)
 
@@ -101,7 +101,8 @@ re-checked and their tests were not re-run (R0 does that). Nothing here was dele
 | `P4-18`, `P4-61` v1 | Agent writes stay in the selected workspace; untrusted build/test children run under the OS sandbox with no network and no reads outside the workspace; the Windows command corpus (`.cmd` shims, Node/Python/Cargo) works under it | `TG4-09`, `TG4-18`, `TG4-31` |
 | `S4-01` v1 | One task runs end to end on Windows and produces a build-verified artifact in the chosen workspace | Smoke |
 | `P4-49` v1 | Razi's acceptance: build the Calendar app from the PA chat in `C:\Playground\arcana-calendar` | Razi runs it through `npm run tauri dev` |
-| W9 v1 (added 2026-11-03, Razi to confirm) | The unfinished half of "an agent must not run loose in the terminal": per ADR-LOG-RESTRUCT-0401 the freeform shell (`bash.rs`) stays reachable only through a consent that names the capability the command exercises. Needs a capability object in `ProcessSpec`, consent keyed by capability instead of tool name, `run_ide_project` passing the same claim and build-evidence check as `project_command`, and the intent suite re-run through the production `execute` path rather than the internal launcher | New test per clause; intent suite via `execute` |
+| W9 v1 (added 2026-11-03, Razi to confirm) | **Judged in scope, but smaller than the first draft.** `bash` is already always asked per call (even in Autonomous), cannot be standing-allowed, runs through the OS sandbox and is denied headlessly, so what is left is that the consent names the tool, not what the command does. Do first: (1) stop the shipped worker recipe from using `bash` for git bookkeeping (`rev-parse`, `switch -c`, `status`, `recipes/defaults.rs`) by giving it typed git tools, and hide `bash` from default Fleet workers; (2) re-run the intent suite through the production `execute` path rather than the internal launcher. Lower priority and probably post-v1: a capability object in `ProcessSpec` with consent keyed by capability, and `run_ide_project` passing the claim and build-evidence check (it is user-initiated only) | New test per clause; intent suite via `execute` |
+| Locked dependency staging (found 2026-11-03, **Razi to rule**) | `project_command` refuses every dependency install except the pinned Ruff one (`locked_dependency_staging_unavailable`, test `dependency_install_fails_closed_until_locked_staging_exists`). So an agent cannot run `npm install` or `cargo fetch`, and a fresh Node or Python project cannot build under the sandbox. This is the main reason a Calendar-style task (`P4-49`) and the v1 headline (a build-verified artifact from a new project) may not complete. Options: stage dependencies from a lockfile on the host, outside the sandbox and with the network allowed only for that step, then build inside the sandbox; or state that v1 builds only projects whose dependencies are already present | A fresh npm or Cargo project builds end to end under the sandbox |
 | `P4-56` / `TG4-30`, command path only (added 2026-11-03, Razi to confirm) | Independent attack tests of the command and sandbox path: task theft, path escape, secret leakage through command output and environment. The rest of the failure-containment review stays in the backlog | `TG4-30` narrowed to commands |
 | `P4-50/51/53/54` | Deferred to the backlog (what is already built stays) | — |
 | `TG4-24/25/27/28` | Deferred with their tasks | — |
@@ -161,23 +162,33 @@ Goal: a new user reaches a working agent turn, errors are visible, nothing is lo
 
 ## 5. Status snapshot
 
-Verified on 2026-11-03 in a working tree with uncommitted Linux/macOS work in it:
+Verified on 2026-11-03 (R0 run; provider keys unset, `USERPROFILE`/`HOME` redirected to a scratch profile, `NoDefaultCurrentDirectoryInExePath` unset where noted):
 
 | Check | Result |
 |---|---|
 | `npm run typecheck` | passes |
 | `npm run lint` | 0 errors, 40 warnings |
-| `cargo fmt --all -- --check` | drift in `recipes/runner.rs` (two hunks), `recipes/scheduler.rs` (two hunks) and the untracked `linux_smoke/staging.rs` |
-| `cargo test -p arcana --lib ci_gate` (no provider credentials) | 73 pass, **4 fail**, identical on a clean `8356aea` checkout (see R0) |
-| `cargo test -p arcana-core --test p4_query_registry` | 9 pass |
-| `cargo clippy`, the rest of `cargo test`, `npm test`, `npm run build` | **not re-run** when this was written; R0 does that |
+| `npm test` | 63 pass in 14 files |
+| `cargo fmt --all -- --check` | clean |
+| `cargo clippy --workspace --all-targets --locked` (CI mode, no `-D warnings`) | passes with about 400 warnings. It failed to compile `arcana-core` before R0: the deny-by-default `clippy::absurd_extreme_comparisons` at `process_sandbox/psec.rs`, so CI's clippy step was red. The `needless_borrow` set in `src-shared/src/db/analytics.rs` is still present (a `-D warnings` run would fail) |
+| `cargo test -p arcana --lib` | 179 pass (178 on three consecutive runs before the last self-test was added) |
+| `cargo test -p arcana-core --lib` | 1187 pass, 6 fail, 3 ignored in the full run (35 minutes; the slow ones are the leap-year/DST round-trip tests). Every failure is explained: telemetry labels (fixed), four environment effects (below) |
+| `cargo test --workspace` other targets | `concurrent_writers`, `p4_query_registry`, `redaction_boundaries`, `s1`..`s8` targets, `arcanactl` unit tests, `consent_cli`, `core_runtime`, `project_command_stage_logs`, `startup_retry_logs` all pass |
+| `fleet_offline` (`--features offline-fleet-test`) | **Not in CI and runs 0 tests in a default `cargo test`.** 7 pass; 51 of 52 parallel runs since the dispatcher fix pass; before it, 1 of 6 failed on the dispatcher assertion. The one failure since was a missing `fleet_cli_run_completed` event in the log export (**not reproduced in 40 further runs, root cause unproven**; the failure message now prints the log files on disk) |
+| `TG3-26` / `TG4-16` named tests | pass (`qc_diff_without_matching_consent…`, `analyze_diff_tool_executes_repository_diff…`, `consent_commands_persist_and_revoke…`, `concurrent_revocation_blocks_the_next_request…`, `consent_cli_persists_grant_status_and_revoke_across_processes`). The register's own open clauses are **still open**: the full allowed request/log/revoke path through every consumer and the Tauri PR-diff invocation, and the actual desktop IPC smoke |
+
+Environment effects, not product defects (each passes once the condition is removed):
+
+- Four tests (`sandbox_allows_workspace_writes_and_blocks_sibling_writes_from_child_tree`, `dropping_a_sandbox_command_terminates_its_descendant_processes`, `confirmed_tree_stop_counts_and_terminates_real_bridge_descendants`, `production_command_timeout_stops_nested_process_writes…`) fail with "`parent.cmd` is not recognized" when the invoking shell sets `NoDefaultCurrentDirectoryInExePath=1`. This session's shell does. They are fragile to the caller's environment and should clear that variable for their child; not done in R0.
+- `checked_in_ecosystem_corpora_run_real_intents_through_the_production_launcher` needs the signed Python runtime staged under the real `~/.arcana/python-runtimes`; it fails under a redirected home.
+- No `OS error 5` AppContainer failure appeared in this run.
 
 Claimed progress from the archived plan, **not re-verified**: P0–P3 and P8 closed; P4 at 51/59 tasks and
 25/33 gates (the old trackers disagreed, giving 46 to 51); P5, P6, P7, P9 untouched. The archived gate
 checkboxes are unreliable: 34 of 41 TG3 gates are unchecked although P3 is recorded closed. Treat the
 code and a fresh test run as the truth, not those boxes.
 
-Last product-code commit: `8356aea` (2026-10-28), worker dispatch lineage. Since then: the docs reset, the e2e consent spec (`121b28e`, unrun) and nothing else.
+Last feature commit: `8356aea` (2026-10-28), worker dispatch lineage. Since then: the docs reset, the e2e consent spec (`121b28e`, unrun) and the R0 baseline fixes (`3d039ab`: gates, telemetry labels, clippy error, test fixes; no feature change).
 
 ## 6. Where things are
 

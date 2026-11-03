@@ -51,7 +51,7 @@ locally before claiming a gate.
 ## Status claims
 
 - **A recorded phase closure is not proof the current workflows pass.** Checkboxes are history; re-run the owning gate before relying on any claim.
-- Verified 2026-11-03 (current status lives in `SHIP_PLAN.md` §5): `npm run typecheck` passes; `npm run lint` has 0 errors and 40 warnings; `cargo fmt --check` shows drift in `arcana-core/src/recipes/{runner,scheduler}.rs` and the untracked `linux_smoke/staging.rs`. `cargo clippy`, `cargo test` and `npm test` were not re-run; the `-D warnings` `needless_borrow` in `src-shared/src/db/analytics.rs` reported on 2026-10-17 is unconfirmed.
+- Verified 2026-11-03 after R0 (current status lives in `SHIP_PLAN.md` §5): typecheck, `npm test` (63), `cargo fmt --check`, `cargo clippy` (CI mode; about 400 warnings, a `-D warnings` run still fails on `needless_borrow` in `src-shared/src/db/analytics.rs`) and the `ci_gate` family (80 tests) pass. A full `cargo test --workspace` takes about 35 minutes, mostly the leap-year/DST round-trip tests. Four sandbox/`project_command` tests fail if the shell sets `NoDefaultCurrentDirectoryInExePath=1` (unset it); `ecosystem_corpora` needs the real home's staged Python runtime. The `fleet_offline` tests run only with `--features offline-fleet-test`, which CI does not enable.
 - Known, documented suite failures on Windows: AppContainer/PSEC canonicalization (`OS error 5`) in a small number of sandbox tests. They are recorded platform limits, not regressions — confirm the failure *set* matches the docs before treating anything as new.
 
 ## Provider layer conventions

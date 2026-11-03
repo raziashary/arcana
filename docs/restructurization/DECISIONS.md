@@ -52,3 +52,17 @@ none of it was lost (no code file deleted since `8356aea`; only a test path and 
 however thin on the unfinished half: W9 (capability-scoped consent for the freeform shell, ADR-LOG-RESTRUCT-0401)
 and attack testing of the command path sat in the backlog. They are added to `SHIP_PLAN.md` R1 as v1 items,
 pending Razi's confirmation. This refines D-002 (the middle path), which named only `P4-18` and `P4-61`.
+
+## D-007 · R0 done except one unreproduced flake: stale gates fixed, not weakened — 2026-11-03, Claude (to confirm)
+
+The four red `ci_gate` tests were stale static scans. `tg_p1_05`, `tg_p3_03` and `tg_p3_14` read test code as
+shipped code because they cut files at the first `#[cfg(test)]`; they now share `production_source`, which skips
+modules declared under a `test` cfg and blanks each `#[cfg(test)]`/`#[cfg(all(test, …))]` item (brace-matched) instead
+of cutting the file, so shipped code after a test-only helper, field or variant is now scanned too (25 of 351 files have such an item). No file is
+excluded by name; self-tests run in both directions. The `e2e_probe` gate required DNS resolution and a runner that were removed on
+purpose (commit `ef7c0eb`); it now pins the denial contract and re-activates the original rules if a runner
+returns. **Retraction:** the earlier working note that these might be containment holes was wrong; none of the
+four hid a hole. **Open:** one `fleet_offline` flake (a missing completion event in the log export) is
+unreproduced in 40 runs and no production change was made for it; the test is not run by CI. Dependency installs
+under the sandbox remain refused (`SHIP_PLAN.md` R1, ruling needed).
+
