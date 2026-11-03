@@ -478,7 +478,8 @@ impl RecipeRunner {
     /// Execute a recipe for the given worker slug.
     /// Updates worker status in DB: idle → working → idle/error.
     pub async fn run_recipe(&self, recipe: &Recipe, worker_slug: &str) -> Result<()> {
-        self.run_recipe_dispatched_by(recipe, worker_slug, None).await
+        self.run_recipe_dispatched_by(recipe, worker_slug, None)
+            .await
     }
 
     /// As `run_recipe`, storing which run dispatched this tick.
@@ -4889,7 +4890,8 @@ mod dispatch_lineage_tests {
             Some(workspace.path().to_string_lossy().into_owned()),
         );
         let recipes = home.path().join(".arcana").join("recipes");
-        crate::recipes::defaults::ensure_default_recipes(&recipes).expect("persist shipped recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes)
+            .expect("persist shipped recipes");
         let recipe: Recipe = serde_yaml::from_str(
             &std::fs::read_to_string(recipes.join("worker-backend-poll.yaml"))
                 .expect("read the shipped backend recipe"),

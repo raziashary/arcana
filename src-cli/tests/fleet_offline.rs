@@ -554,6 +554,31 @@ fn changed_workspace_inputs(
         .collect()
 }
 
+/// What the structured log files hold on disk, for a failure message: each
+/// file's size and how many of its lines are Fleet CLI lifecycle events. When
+/// an export misses an event this separates "never written" from "written and
+/// not read".
+fn log_directory_summary(dir: &Path) -> String {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return format!("log directory {} is unreadable", dir.display());
+    };
+    let mut files: Vec<String> = entries
+        .flatten()
+        .map(|entry| {
+            let text = std::fs::read_to_string(entry.path()).unwrap_or_default();
+            format!(
+                "{} ({} bytes, {} fleet_cli lines, completed={})",
+                entry.file_name().to_string_lossy(),
+                text.len(),
+                text.lines().filter(|l| l.contains("fleet_cli_")).count(),
+                text.contains("fleet_cli_run_completed")
+            )
+        })
+        .collect();
+    files.sort();
+    format!("log files on disk: [{}]", files.join(", "))
+}
+
 fn fleet_failure_diagnostics(stderr: &[u8]) -> String {
     String::from_utf8_lossy(stderr)
         .lines()
@@ -653,7 +678,10 @@ fn offline_fleet_cli_completes_board_child_and_exports_observability() {
     let (logs, analytics) = profile.export();
     assert!(
         logs.contains("fleet_cli_run_completed"),
-        "CLI log export must read the Fleet completion event"
+        "CLI log export must read the Fleet completion event; {}; run stdout: {}; run stderr: {}",
+        log_directory_summary(&profile.root.join(".arcana").join("logs")),
+        String::from_utf8_lossy(&output.stdout),
+        fleet_failure_diagnostics(&output.stderr)
     );
     assert!(
         logs.contains(&epic.id.to_string()),
@@ -697,15 +725,21 @@ fn offline_fleet_cli_completes_board_child_and_exports_observability() {
 
     // Supervisor/worker lifecycle readback from the durable run ledger, not just
     // the task board.
+    //
+    // A Fleet run can hold more than one supervisor tick: the launch kick, then
+    // ticks woken by the worker's own messages. The newest supervisor tick is
+    // therefore not necessarily the one that dispatched the worker, and it may
+    // still be open when the CLI returns. The launch tick and the dispatcher are
+    // each read through what the ledger recorded, never through "latest".
     let runs = RunsDb::open_at(&profile.root.join(".arcana").join("runs.db"))
         .expect("open CLI run ledger");
-    let supervisor = runs
-        .latest_worker_tick("supervisor")
-        .expect("read supervisor lifecycle row")
-        .expect("a supervisor tick must be recorded");
-    assert!(
-        supervisor.outcome.is_some(),
-        "a finished supervisor tick must record an outcome, not only a heartbeat"
+    let ledger = runs.recent(100).expect("read the run ledger");
+    let lineage = format!(
+        "{:?}",
+        ledger
+            .iter()
+            .map(|run| (&run.id, &run.actor, &run.parent_run_id, &run.outcome))
+            .collect::<Vec<_>>()
     );
     let worker = runs
         .latest_worker_tick("worker-backend")
@@ -721,29 +755,47 @@ fn offline_fleet_cli_completes_board_child_and_exports_observability() {
         "a finished worker tick must record an outcome"
     );
 
-    // Dispatch lineage across processes: the CLI launch kick was not dispatched
-    // by anything, and the worker tick it woke names the supervisor tick that
-    // asked for it — read back through the forwarding direction too.
-    assert_eq!(
-        supervisor.parent_run_id, None,
-        "a launch-time kick has no dispatcher and must not claim one"
+    // The launch kick is the oldest supervisor tick (`recent` is newest first).
+    let launch = ledger
+        .iter()
+        .rev()
+        .find(|run| run.actor.as_deref() == Some("supervisor"))
+        .unwrap_or_else(|| panic!("a supervisor tick must be recorded: {lineage}"));
+    assert!(
+        launch.outcome.is_some(),
+        "a finished supervisor tick must record an outcome, not only a heartbeat: {lineage}"
     );
     assert_eq!(
-        worker.parent_run_id.as_deref(),
-        Some(supervisor.run_id.as_str()),
-        "the worker tick must record the supervisor tick that dispatched it"
+        launch.parent_run_id, None,
+        "a launch-time kick has no dispatcher and must not claim one: {lineage}"
+    );
+
+    // Dispatch lineage across processes: the worker tick names the supervisor
+    // tick that asked for it, read back through the forwarding direction too.
+    let dispatcher_id = worker
+        .parent_run_id
+        .as_deref()
+        .unwrap_or_else(|| panic!("the worker tick must record its dispatcher: {lineage}"));
+    let dispatcher = runs
+        .get(dispatcher_id)
+        .expect("read the dispatching run")
+        .unwrap_or_else(|| panic!("the dispatching run must exist: {lineage}"));
+    assert_eq!(
+        dispatcher.actor.as_deref(),
+        Some("supervisor"),
+        "the worker tick must be dispatched by a supervisor tick: {lineage}"
     );
     let dispatched = runs
-        .children_of(&supervisor.run_id, 10)
+        .children_of(&dispatcher.id, 10)
         .expect("read the ticks this supervisor run dispatched");
     assert!(
         dispatched.iter().any(|child| child.run_id == worker.run_id),
-        "the supervisor tick must read back the worker tick it woke: {dispatched:?}"
+        "the supervisor tick must read back the worker tick it woke: {dispatched:?} {lineage}"
     );
     assert!(
         dispatched
             .iter()
-            .all(|child| child.parent_run_id.as_deref() == Some(supervisor.run_id.as_str())),
+            .all(|child| child.parent_run_id.as_deref() == Some(dispatcher.id.as_str())),
         "every dispatch-index row must carry the dispatcher it was read through"
     );
 }

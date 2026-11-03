@@ -755,8 +755,8 @@ let x = 1;
                 continue;
             }
             // Production code only: test modules open fixtures directly.
-            let production = text.split("#[cfg(test)]").next().unwrap_or("");
-            for line in untuned_open_sites(production) {
+            let production = production_source(file, &text.replace("\r\n", "\n"));
+            for line in untuned_open_sites(&production) {
                 offenders.push(format!("{rel}: {line}"));
             }
         }
@@ -1181,6 +1181,478 @@ let x = 1;
             .replace("\r\n", "\n")
     }
 
+    /// The text of `path` that ships in the product.
+    ///
+    /// Cutting a file at its first `#[cfg(test)]` is wrong in three ways. It
+    /// misses test code that never says so inside the file: a module declared
+    /// as `#[cfg(test)] mod x;` in its parent has no marker of its own. It
+    /// misses `#[cfg(all(test, …))]`. And it throws away shipped code that
+    /// follows a single test-only helper in the middle of a file — 25 files in
+    /// this tree have one, so a violation after it was never scanned.
+    ///
+    /// So a file is empty here when the module declaring it is gated on `test`
+    /// (directly or through a gated ancestor), and otherwise each item under
+    /// `#[cfg(test)]` or `#[cfg(all(test, …))]` is blanked out, brace-matched,
+    /// with its newlines kept so reported line numbers still point at the file.
+    /// No file is excluded by name, so a violation added to shipped code is
+    /// still seen.
+    fn production_source(path: &std::path::Path, text: &str) -> String {
+        if is_test_only_module(path) {
+            return String::new();
+        }
+        blank_test_gated_items(text)
+    }
+
+    /// Index just past the comment, string or char literal starting at `i`, or
+    /// `None` when `bytes[i]` starts none of them.
+    fn skip_literal_or_comment(bytes: &[u8], i: usize) -> Option<usize> {
+        let at = |n: usize| bytes.get(n).copied();
+        match bytes[i] {
+            b'/' if at(i + 1) == Some(b'/') => Some(
+                bytes[i..]
+                    .iter()
+                    .position(|b| *b == b'\n')
+                    .map_or(bytes.len(), |p| i + p),
+            ),
+            b'/' if at(i + 1) == Some(b'*') => {
+                let (mut depth, mut n) = (1usize, i + 2);
+                while n < bytes.len() && depth > 0 {
+                    match (bytes[n], at(n + 1)) {
+                        (b'/', Some(b'*')) => {
+                            depth += 1;
+                            n += 2;
+                        }
+                        (b'*', Some(b'/')) => {
+                            depth -= 1;
+                            n += 2;
+                        }
+                        _ => n += 1,
+                    }
+                }
+                Some(n)
+            }
+            b'"' => {
+                let mut n = i + 1;
+                while n < bytes.len() {
+                    match bytes[n] {
+                        b'\\' => n += 2,
+                        b'"' => return Some(n + 1),
+                        _ => n += 1,
+                    }
+                }
+                Some(bytes.len())
+            }
+            // r"…", r#"…"#, br#"…"# (but not an identifier ending in `r`).
+            b'r' | b'b'
+                if i == 0 || !(bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_') =>
+            {
+                let mut n = i + 1;
+                if bytes[i] == b'b' && at(n) == Some(b'r') {
+                    n += 1;
+                } else if bytes[i] == b'b' {
+                    return if at(n) == Some(b'"') {
+                        skip_literal_or_comment(bytes, n)
+                    } else {
+                        None
+                    };
+                }
+                let hashes = bytes[n..].iter().take_while(|b| **b == b'#').count();
+                if at(n + hashes) != Some(b'"') {
+                    return None;
+                }
+                let close: Vec<u8> = std::iter::once(b'"')
+                    .chain(std::iter::repeat(b'#').take(hashes))
+                    .collect();
+                let body = n + hashes + 1;
+                Some(
+                    bytes[body..]
+                        .windows(close.len())
+                        .position(|w| w == close.as_slice())
+                        .map_or(bytes.len(), |p| body + p + close.len()),
+                )
+            }
+            b'\'' => {
+                // A char literal closes within a few bytes; a lifetime does not.
+                if at(i + 1) == Some(b'\\') {
+                    // Skip the escaped byte so `'\''` closes on the last quote.
+                    let close = bytes.get(i + 3..)?.iter().position(|b| *b == b'\'')?;
+                    Some(i + 3 + close + 1)
+                } else {
+                    let width = (1..=4)
+                        .find_map(|n| std::str::from_utf8(bytes.get(i + 1..i + 1 + n)?).ok())
+                        .and_then(|s| s.chars().next())
+                        .map_or(1, char::len_utf8);
+                    (at(i + 1 + width) == Some(b'\'')).then_some(i + 2 + width)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Index just past any `#[…]` attributes and whitespace starting at `i`.
+    fn skip_attributes(bytes: &[u8], mut i: usize) -> usize {
+        loop {
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if bytes.get(i) == Some(&b'#') && bytes.get(i + 1) == Some(&b'[') {
+                let mut depth = 0usize;
+                while i < bytes.len() {
+                    if let Some(next) = skip_literal_or_comment(bytes, i) {
+                        i = next;
+                        continue;
+                    }
+                    match bytes[i] {
+                        b'[' => depth += 1,
+                        b']' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                i += 1;
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                    i += 1;
+                }
+            } else {
+                return i;
+            }
+        }
+    }
+
+    /// Whether the text at `i` starts an item (`fn`, `impl`, `mod`, `use`, …)
+    /// rather than a struct field, enum variant or match arm, which end at a
+    /// comma.
+    fn starts_an_item(bytes: &[u8], mut i: usize) -> bool {
+        const KEYWORDS: [&str; 16] = [
+            "fn",
+            "impl",
+            "mod",
+            "use",
+            "struct",
+            "enum",
+            "trait",
+            "type",
+            "const",
+            "static",
+            "extern",
+            "unsafe",
+            "async",
+            "macro_rules",
+            "union",
+            "let",
+        ];
+        let word = |at: usize| -> &[u8] {
+            let len = bytes[at..]
+                .iter()
+                .take_while(|b| b.is_ascii_alphanumeric() || **b == b'_')
+                .count();
+            &bytes[at..at + len]
+        };
+        // `pub`, `pub(crate)` and `pub(super)` lead into a field or an item.
+        if word(i) == b"pub" {
+            i += 3;
+            if bytes.get(i) == Some(&b'(') {
+                i = bytes[i..]
+                    .iter()
+                    .position(|b| *b == b')')
+                    .map_or(bytes.len(), |p| i + p + 1);
+            }
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+        }
+        let first = word(i);
+        KEYWORDS.iter().any(|k| k.as_bytes() == first)
+    }
+
+    /// Index just past the item that starts at `i`: up to a `;`, or through the
+    /// matching `}` of its first `{`, ignoring both inside parentheses and
+    /// brackets (so `[u8; 3]` in a signature does not end the item). A struct
+    /// field, enum variant or match arm also ends at a top-level `,` (angle
+    /// brackets count as nesting there, so `Map<K, V>` stays whole).
+    fn item_end(bytes: &[u8], mut i: usize) -> usize {
+        let is_item = starts_an_item(bytes, i);
+        let mut nesting = 0usize;
+        let mut angle = 0usize;
+        while i < bytes.len() {
+            if let Some(next) = skip_literal_or_comment(bytes, i) {
+                i = next;
+                continue;
+            }
+            match bytes[i] {
+                b'(' | b'[' => nesting += 1,
+                b')' | b']' => nesting = nesting.saturating_sub(1),
+                b'<' if !is_item => angle += 1,
+                b'>' if !is_item && i > 0 && bytes[i - 1] != b'-' && bytes[i - 1] != b'=' => {
+                    angle = angle.saturating_sub(1)
+                }
+                b',' if !is_item && nesting == 0 && angle == 0 => return i + 1,
+                b';' if nesting == 0 => return i + 1,
+                b'{' if nesting == 0 => {
+                    let mut depth = 0usize;
+                    while i < bytes.len() {
+                        if let Some(next) = skip_literal_or_comment(bytes, i) {
+                            i = next;
+                            continue;
+                        }
+                        match bytes[i] {
+                            b'{' => depth += 1,
+                            b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    return i + 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                        i += 1;
+                    }
+                    return bytes.len();
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        bytes.len()
+    }
+
+    /// `text` with every item under `#[cfg(test)]` or `#[cfg(all(test, …))]`
+    /// replaced by spaces (newlines kept).
+    fn blank_test_gated_items(text: &str) -> String {
+        let bytes = text.as_bytes();
+        let mut out = bytes.to_vec();
+        let mut line_start = 0usize;
+        while line_start < bytes.len() {
+            let line_end = bytes[line_start..]
+                .iter()
+                .position(|b| *b == b'\n')
+                .map_or(bytes.len(), |p| line_start + p);
+            let line = &text[line_start..line_end];
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("#[cfg(test)]") || trimmed.starts_with("#[cfg(all(test") {
+                let start = line_start + (line.len() - trimmed.len());
+                let end = item_end(bytes, skip_attributes(bytes, start));
+                for byte in &mut out[start..end] {
+                    if *byte != b'\n' {
+                        *byte = b' ';
+                    }
+                }
+                line_start = bytes[end..]
+                    .iter()
+                    .position(|b| *b == b'\n')
+                    .map_or(bytes.len(), |p| end + p + 1);
+            } else {
+                line_start = line_end + 1;
+            }
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    /// Whether the module defined by `path` is declared under a `test` cfg.
+    fn is_test_only_module(path: &std::path::Path) -> bool {
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            return false;
+        };
+        let Some(dir) = path.parent() else {
+            return false;
+        };
+        // `foo/mod.rs` is module `foo`, declared in the directory above;
+        // `foo.rs` is module `foo`, declared in its own directory.
+        let (module, declaring_dir) = if stem == "mod" {
+            let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+                return false;
+            };
+            let Some(up) = dir.parent() else {
+                return false;
+            };
+            (name, up)
+        } else {
+            (stem, dir)
+        };
+        let mut candidates = vec![
+            declaring_dir.join("mod.rs"),
+            declaring_dir.join("lib.rs"),
+            declaring_dir.join("main.rs"),
+        ];
+        if let (Some(name), Some(up)) = (
+            declaring_dir.file_name().and_then(|n| n.to_str()),
+            declaring_dir.parent(),
+        ) {
+            candidates.push(up.join(format!("{name}.rs")));
+        }
+        for candidate in candidates {
+            if candidate == path {
+                continue;
+            }
+            let text = read_source(&candidate);
+            if let Some(gated) = module_declaration_is_test_gated(&text, module) {
+                return gated || is_test_only_module(&candidate);
+            }
+        }
+        false
+    }
+
+    /// `Some(true)` when `source` declares `mod <module>;` under a `test` cfg,
+    /// `Some(false)` when it declares it without one, `None` when it does not
+    /// declare it at all.
+    fn module_declaration_is_test_gated(source: &str, module: &str) -> Option<bool> {
+        let lines: Vec<&str> = source.lines().collect();
+        for (index, raw) in lines.iter().enumerate() {
+            let mut line = raw.trim();
+            if let Some(rest) = line.strip_prefix("pub(") {
+                line = rest.split_once(')').map_or("", |(_, tail)| tail).trim();
+            } else if let Some(rest) = line.strip_prefix("pub ") {
+                line = rest.trim();
+            }
+            let declares = line
+                .strip_prefix("mod ")
+                .and_then(|rest| rest.strip_suffix(';'))
+                .is_some_and(|name| name.trim() == module);
+            if !declares {
+                continue;
+            }
+            let mut gated = false;
+            for above in lines[..index].iter().rev() {
+                let above = above.trim();
+                if above.starts_with("#[") {
+                    gated |= above.contains("cfg(test)") || above.contains("cfg(all(test");
+                } else if !above.starts_with("//") {
+                    break;
+                }
+            }
+            return Some(gated);
+        }
+        None
+    }
+
+    /// The scan must see shipped code and must not see test code, in every
+    /// shape this tree uses. Both directions are asserted, so a helper that
+    /// excludes everything cannot leave the gates permanently green.
+    #[test]
+    fn production_source_sees_shipped_code_and_hides_test_code() {
+        let dir = tempfile::tempdir().expect("temp tree");
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(src.join("only_test")).unwrap();
+        std::fs::write(
+            src.join("lib.rs"),
+            "#[cfg(test)]\nmod only_test;\npub(crate) mod shipped;\n#[cfg(all(test, not(feature = \"f\")))]\nmod gated_all;\n",
+        )
+        .unwrap();
+        std::fs::write(src.join("only_test.rs"), "mod nested;\nSHIPPED_MARK_A\n").unwrap();
+        std::fs::write(src.join("only_test/nested.rs"), "SHIPPED_MARK_B\n").unwrap();
+        std::fs::write(src.join("gated_all.rs"), "SHIPPED_MARK_C\n").unwrap();
+        let shipped = "SHIPPED_MARK_D\n#[cfg(test)]\nmod tests {\n    TEST_MARK\n}\n";
+        std::fs::write(src.join("shipped.rs"), shipped).unwrap();
+        let inline_all =
+            "SHIPPED_MARK_E\n#[cfg(all(test, not(feature = \"f\")))]\nmod t {\n    TEST_MARK\n}\n";
+        std::fs::write(src.join("inline_all.rs"), inline_all).unwrap();
+
+        for hidden in ["only_test.rs", "only_test/nested.rs", "gated_all.rs"] {
+            let path = src.join(hidden);
+            assert_eq!(
+                production_source(&path, &read_source(&path)),
+                "",
+                "{hidden} is declared under cfg(test), so it is not shipped code"
+            );
+        }
+        let path = src.join("shipped.rs");
+        let production = production_source(&path, &read_source(&path));
+        assert!(
+            production.contains("SHIPPED_MARK_D"),
+            "shipped code is scanned"
+        );
+        assert!(
+            !production.contains("TEST_MARK"),
+            "its inline test module is not"
+        );
+        let path = src.join("inline_all.rs");
+        let production = production_source(&path, &read_source(&path));
+        assert!(production.contains("SHIPPED_MARK_E"));
+        assert!(
+            !production.contains("TEST_MARK"),
+            "cfg(all(test, ..)) starts a test module just as cfg(test) does"
+        );
+    }
+
+    /// Test-gated items are removed one by one, so shipped code that follows a
+    /// test-only helper in the middle of a file is still scanned. Each shape
+    /// below has bitten a hand-written scanner: array lengths and braces in a
+    /// signature, braces inside strings, raw strings and chars, lifetimes,
+    /// comments, a `use` item and a stacked attribute.
+    #[test]
+    fn blank_test_gated_items_keeps_shipped_code_after_a_mid_file_helper() {
+        let source = r##"SHIPPED_BEFORE
+#[cfg(test)]
+fn helper(buf: [u8; 3], c: char) -> &'static str {
+    let _ = ('{', "}{", r#"}"#, '\'', b'}');
+    // } unbalanced in a comment
+    TEST_MARK_FN
+}
+SHIPPED_AFTER_FN
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize /* TEST_MARK_USE */};
+SHIPPED_AFTER_USE
+#[cfg(all(test, target_os = "windows"))]
+#[allow(dead_code)]
+mod gated {
+    /* } */ TEST_MARK_MOD
+}
+SHIPPED_AFTER_MOD
+fn lifetimes<'a>(x: &'a str) -> &'a str { x } // SHIPPED_LIFETIME
+struct Runner {
+    shipped_field: u32,
+    #[cfg(test)]
+    test_field: /* TEST_MARK_FIELD */ std::collections::HashMap<String, Vec<u8>>,
+    after_field: u32,
+}
+SHIPPED_AFTER_STRUCT
+impl Runner { fn shipped_method(&self) {} } // SHIPPED_IMPL
+enum Kind {
+    #[cfg(test)]
+    TestOnly(u8, /* TEST_MARK_VARIANT */ u8),
+    Shipped,
+}
+SHIPPED_AFTER_ENUM
+"##;
+        let stripped = blank_test_gated_items(source);
+        for shipped in [
+            "SHIPPED_BEFORE",
+            "SHIPPED_AFTER_FN",
+            "SHIPPED_AFTER_USE",
+            "SHIPPED_AFTER_MOD",
+            "SHIPPED_LIFETIME",
+            "shipped_field",
+            "after_field",
+            "SHIPPED_AFTER_STRUCT",
+            "SHIPPED_IMPL",
+            "Shipped,",
+            "SHIPPED_AFTER_ENUM",
+        ] {
+            assert!(stripped.contains(shipped), "{shipped} must stay visible");
+        }
+        for test_only in [
+            "TEST_MARK_FN",
+            "TEST_MARK_USE",
+            "TEST_MARK_MOD",
+            "TEST_MARK_FIELD",
+            "TEST_MARK_VARIANT",
+        ] {
+            assert!(!stripped.contains(test_only), "{test_only} must be hidden");
+        }
+        assert_eq!(
+            stripped.lines().count(),
+            source.lines().count(),
+            "blanking keeps every line so reported line numbers match the file"
+        );
+        assert_eq!(
+            blank_test_gated_items("fn shipped() {}\n"),
+            "fn shipped() {}\n",
+            "a file with no test items is returned unchanged"
+        );
+    }
+
     // ── TG-P3-03 · one panic cannot poison the application ────────────────────
 
     /// No shipped code may take a `std::sync` lock with `.lock().unwrap()`.
@@ -1242,10 +1714,7 @@ let x = 1;
                         .to_string()
                         .replace('\\', "/");
 
-                    let production = match text.find("#[cfg(test)]") {
-                        Some(i) => &text[..i],
-                        None => &text[..],
-                    };
+                    let production = production_source(&path, &text);
 
                     for (n, line) in production.lines().enumerate() {
                         let code = line.split("//").next().unwrap_or("");
@@ -1554,7 +2023,9 @@ let x = 1;
                 continue;
             }
 
-            let text = read_source(&path);
+            // Shipped code only: a test module's `json!({"path": ..})` fixtures
+            // and `std::fs` setup are not a tool's input schema or disk access.
+            let text = production_source(&path, &read_source(&path));
             if !text.contains("impl Tool for") {
                 continue;
             }
@@ -1875,8 +2346,8 @@ let x = 1;
 
     // ── TG-P3-21/68 · e2e_probe captures evidence and cannot leave the box ──
 
-    /// `e2e_probe` must keep its children's output and must not fetch
-    /// off-machine URLs.
+    /// `e2e_probe` must keep its children's output and must not reach off-machine
+    /// URLs.
     ///
     /// 🔴 `P3-68`: `probe_url` was fetched with **no restriction** and up to
     /// 400 characters of the response body were returned to the model — an
@@ -1884,83 +2355,287 @@ let x = 1;
     /// returns IAM credentials on any EC2 host.
     ///
     /// 🔴 `P3-21`: both child streams were `Stdio::null()`, so a failed probe
-    /// reported FAIL and could not say why — while the file's own header
-    /// claims it catches "dev server crashed on boot".
+    /// reported FAIL and could not say why.
     ///
-    /// ⚠ The URL check must run **before** anything is spawned. Validating
-    /// after the children start would still boot the model's shell commands on
-    /// the way to rejecting the URL.
+    /// ⚠ The tool no longer has a runner: a valid call is refused with
+    /// `sandbox_violation("loopback_smoke", ..)` before any process launch or
+    /// HTTP access (ADR0339/0344/0349/0350 forbid an unrestricted fallback).
+    /// So the contract pinned here has two layers. While there is no runner,
+    /// the URL is validated as loopback without a resolver, before the denial,
+    /// and nothing in shipped code can spawn or fetch. The moment a runner or
+    /// fetch appears, the original P3-21/68 rules become mandatory with no
+    /// edit to this gate: the host is resolved, validation precedes the first
+    /// spawn, the children's streams are piped and their output reaches the
+    /// report.
     #[test]
     fn tg_p3_21_68_e2e_probe_keeps_evidence_and_stays_on_this_machine() {
         let path = repo_root().join("arcana-core/src/agent/builtin_tools/e2e_probe.rs");
-        let text = read_source(&path);
+        let text = production_source(&path, &read_source(&path));
+        assert!(
+            !text.is_empty(),
+            "e2e_probe.rs must be shipped code — an empty scan proves nothing"
+        );
+        let violations = e2e_probe_contract_violations(&text);
+        assert!(
+            violations.is_empty(),
+            "e2e_probe breaks its contract:\n  {}",
+            violations.join("\n  ")
+        );
+    }
 
-        // ── P3-68 · the URL is confined, by resolution rather than spelling ─
-        let validator = text
-            .split("fn validate_probe_url")
-            .nth(1)
-            .expect("e2e_probe must validate probe_url before fetching it");
-        let validator_body = validator.split("\n}\n").next().unwrap_or(validator);
+    /// Every way `e2e_probe` could leave the box or lose evidence, as text.
+    /// `text` is the shipped part of `e2e_probe.rs`.
+    fn e2e_probe_contract_violations(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
 
-        assert!(
-            validator_body.contains("is_loopback"),
-            "probe_url must be confined to loopback — the response body is \
-             returned to the model, so any other host is an exfiltration read"
-        );
-        assert!(
-            validator_body.contains("to_socket_addrs"),
-            "the host must be RESOLVED, not string-matched: `127.0.0.1.nip.io` \
-             and any attacker-controlled DNS name read as ordinary hostnames"
-        );
+        // ── P3-68 · the URL is confined to this machine ────────────────
+        let validator_body = match text.split("fn validate_probe_url").nth(1) {
+            Some(rest) => rest.split("\n}\n").next().unwrap_or(rest),
+            None => {
+                out.push("e2e_probe must validate probe_url before using it".into());
+                return out;
+            }
+        };
+        if !validator_body.contains("is_loopback") {
+            out.push(
+                "probe_url must be confined to loopback — a response body returned to \
+                 the model from any other host is an exfiltration read"
+                    .into(),
+            );
+        }
 
-        // ── ordering: validated before any child is spawned ──────────────
-        let call_site = text
-            .find("validate_probe_url(&probe_url)")
-            .expect("validate_probe_url must actually be CALLED, not merely defined");
-        let spawn_site = text.find("run_probe(").expect("run_probe must exist");
-        assert!(
-            call_site < spawn_site,
-            "probe_url is validated at byte {call_site} but children are spawned \
-             at {spawn_site} — rejecting the URL after booting the model's shell \
-             commands is not a check, it is a postscript"
-        );
+        // A capability to run or fetch. Any of these makes the original
+        // rules (resolution, ordering, evidence) mandatory.
+        let spawn_markers = [
+            "Command::new",
+            ".spawn(",
+            "async fn run_probe",
+            "run_probe(",
+            "std::process",
+            "tokio::process",
+            "process_sandbox",
+        ];
+        let fetch_markers = [
+            "reqwest::Client",
+            "reqwest::get",
+            "reqwest::blocking",
+            "hyper::",
+            "ureq::",
+            "TcpStream",
+            "UdpSocket",
+            ".send()",
+        ];
+        let has_runner = spawn_markers.iter().any(|m| text.contains(m));
+        let has_fetch = fetch_markers.iter().any(|m| text.contains(m));
 
-        // ── P3-21 · the children's output is kept ────────────────────
-        let runner = text
-            .split("async fn run_probe")
-            .nth(1)
-            .expect("run_probe must exist");
-        let spawn_block = runner
-            .split("let started_processes")
-            .next()
-            .unwrap_or(runner);
+        let call_site = text.find("validate_probe_url(&probe_url)");
+        if call_site.is_none() {
+            out.push("validate_probe_url must actually be CALLED, not merely defined".into());
+        }
 
-        assert!(
-            !spawn_block.contains("stdout(Stdio::null())"),
-            "the children's stdout is discarded — a failing probe then reports \
-             FAIL with no evidence, which is the one thing a smoke test exists \
-             to provide"
-        );
-        assert!(
-            !spawn_block.contains("stderr(Stdio::null())"),
-            "the children's stderr is discarded — that is where the boot error is"
-        );
-        assert!(
-            spawn_block.contains("Stdio::piped()"),
-            "the children's streams must be piped so they can be captured"
-        );
-        assert!(
-            text.contains("start_cmd_output"),
-            "the captured output must reach the report — capturing it and \
-             dropping it on the floor is the same as not capturing it"
-        );
+        if !has_runner && !has_fetch {
+            // Denial-only: the validator must not itself reach the network,
+            // and the call must come before the denial result.
+            for resolver in ["to_socket_addrs", "lookup_host", "getaddrinfo"] {
+                if validator_body.contains(resolver) {
+                    out.push(format!(
+                        "validate_probe_url calls {resolver}: refusing a launch would \
+                         contact an unrelated host"
+                    ));
+                }
+            }
+            if text.contains("ToolResult::success") {
+                out.push(
+                    "with no runner, no path may return a success result — a valid call \
+                     must end in the denial"
+                        .into(),
+                );
+            }
+            match (call_site, text.find("sandbox_violation(")) {
+                (_, None) => out.push(
+                    "with no runner, execute must end in the sandbox_violation denial".into(),
+                ),
+                (Some(call), Some(denial)) if call > denial => {
+                    out.push("probe_url is validated after the denial result is built".into())
+                }
+                _ => {}
+            }
+        } else {
+            if !validator_body.contains("to_socket_addrs") {
+                out.push(
+                    "the host must be RESOLVED, not string-matched: `127.0.0.1.nip.io` and \
+                     any attacker-controlled DNS name read as ordinary hostnames"
+                        .into(),
+                );
+            }
+            // Ordering is about where a launch or request is *invoked*, not
+            // where `run_probe` is defined, so its definition is blanked first
+            // (offsets are kept).
+            let mut invoked = text.as_bytes().to_vec();
+            if let Some(start) = text.find("fn run_probe") {
+                let end = item_end(&invoked, start);
+                for byte in &mut invoked[start..end] {
+                    if *byte != b'\n' {
+                        *byte = b' ';
+                    }
+                }
+            }
+            let invoked = String::from_utf8_lossy(&invoked).into_owned();
+            let first_use = spawn_markers
+                .iter()
+                .chain(fetch_markers.iter())
+                .filter_map(|m| invoked.find(m))
+                .min();
+            if let (Some(call), Some(first)) = (call_site, first_use) {
+                if call > first {
+                    out.push(format!(
+                        "probe_url is validated at byte {call} but a process or request \
+                         starts at {first} — a check after the launch is a postscript"
+                    ));
+                }
+            }
+            let runner = text.split("async fn run_probe").nth(1).unwrap_or(text);
+            let spawn_block = runner
+                .split("let started_processes")
+                .next()
+                .unwrap_or(runner);
+            for stream in ["stdout(Stdio::null())", "stderr(Stdio::null())"] {
+                if spawn_block.contains(stream) {
+                    out.push(format!(
+                        "the children's {stream} discards the boot error a failing probe \
+                         exists to report"
+                    ));
+                }
+            }
+            if !spawn_block.contains("Stdio::piped()") {
+                out.push("the children's streams must be piped so they can be captured".into());
+            }
+            if !text.contains("start_cmd_output") {
+                out.push("captured output must reach the report (start_cmd_output)".into());
+            }
+        }
 
         // ── the consent sentence matches the act ────────────────────
+        if !text.contains("ToolEffect::Execute") {
+            out.push(
+                "e2e_probe runs arbitrary shell once enabled, so the user must be asked \
+                 about running a command, not about a network call"
+                    .into(),
+            );
+        }
+        out
+    }
+
+    /// The instrument is tested in both directions: the shape that ships passes
+    /// and each regression it exists to catch is reported.
+    #[test]
+    fn tg_p3_21_68_contract_accepts_the_denial_and_catches_regressions() {
+        const DENIAL: &str = r#"
+fn validate_probe_url(raw: &str) -> Result<(), String> {
+    let loopback = host.parse::<IpAddr>().is_ok_and(|a| a.is_loopback());
+    Ok(())
+}
+impl Tool for E2eProbeTool {
+    fn effect(&self) -> ToolEffect { crate::agent::tool_effect::ToolEffect::Execute }
+    async fn execute(&self) -> ToolResult {
+        if let Err(msg) = validate_probe_url(&probe_url) { return ToolResult::error(msg); }
+        ToolResult::sandbox_violation("loopback_smoke", "e2e_probe", false, "no runner")
+    }
+}
+"#;
+        assert_eq!(
+            e2e_probe_contract_violations(DENIAL),
+            Vec::<String>::new(),
+            "the shipped denial shape must pass"
+        );
+
+        let validated_then_denied = "if let Err(msg) = validate_probe_url(&probe_url) { return ToolResult::error(msg); }\n        ToolResult::sandbox_violation(\"loopback_smoke\", \"e2e_probe\", false, \"no runner\")";
+        let denied_then_validated = "ToolResult::sandbox_violation(\"loopback_smoke\", \"e2e_probe\", false, \"no runner\"); validate_probe_url(&probe_url);";
         assert!(
-            text.contains("ToolEffect::Execute"),
-            "e2e_probe runs arbitrary shell, so the user must be asked about \
-             running a command — it declared `Network` (\"send data to an \
-             external service\"), which is consent for a different act"
+            DENIAL.contains(validated_then_denied),
+            "the self-test fixture and its mutation must stay in step"
+        );
+        let cases: [(&str, String); 10] = [
+            (
+                "a resolver in the validator",
+                DENIAL.replace("is_loopback());", "is_loopback()); host.to_socket_addrs();"),
+            ),
+            (
+                "validation after the denial",
+                DENIAL.replace(validated_then_denied, denied_then_validated),
+            ),
+            (
+                "the validator never called",
+                DENIAL.replace("validate_probe_url(&probe_url)", "skip(&probe_url)"),
+            ),
+            (
+                "the wrong consent effect",
+                DENIAL.replace("ToolEffect::Execute", "ToolEffect::Network"),
+            ),
+            (
+                "the loopback check removed",
+                DENIAL.replace("is_loopback", "is_private"),
+            ),
+            (
+                "a spawn with null streams and no resolution",
+                format!(
+                    "{DENIAL}\nasync fn run_probe() {{ Command::new(\"sh\").stdout(Stdio::null()); }}"
+                ),
+            ),
+            (
+                "a fetch added to the denial",
+                format!("{DENIAL}\nfn fetch() {{ reqwest::get(url); }}"),
+            ),
+            (
+                "a launch through the sandbox helper",
+                format!("{DENIAL}\nfn go() {{ process_sandbox::spawn(spec); }}"),
+            ),
+            (
+                "an aliased process import",
+                format!("{DENIAL}\nuse std::process::Command as C;"),
+            ),
+            (
+                "a success result on the denial-only path",
+                DENIAL.replace(
+                    "ToolResult::sandbox_violation(\"loopback_smoke\", \"e2e_probe\", false, \"no runner\")",
+                    "ToolResult::success(\"ok\")",
+                ),
+            ),
+        ];
+        for (what, source) in cases {
+            assert!(
+                !e2e_probe_contract_violations(&source).is_empty(),
+                "the contract missed: {what}"
+            );
+        }
+
+        // The original rules stay satisfiable: a runner that resolves,
+        // validates first and captures output is accepted, with the helper
+        // defined above or below `execute`.
+        let run_probe_def = r#"async fn run_probe() { Command::new("sh").stdout(Stdio::piped()).stderr(Stdio::piped()); report(start_cmd_output); let started_processes = 1; }"#;
+        let validator = r#"fn validate_probe_url(raw: &str) -> Result<(), String> {
+    host.to_socket_addrs(); a.is_loopback();
+    Ok(())
+}
+fn effect() { ToolEffect::Execute }"#;
+        let execute =
+            "async fn execute() {\n    validate_probe_url(&probe_url);\n    run_probe();\n}";
+        for layout in [
+            format!("{validator}\n{execute}\n{run_probe_def}\n"),
+            format!("{validator}\n{run_probe_def}\n{execute}\n"),
+        ] {
+            assert_eq!(
+                e2e_probe_contract_violations(&layout),
+                Vec::<String>::new(),
+                "a runner that meets the original P3-21/68 rules is allowed"
+            );
+        }
+        let launched_first = format!(
+            "{validator}\nasync fn execute() {{\n    run_probe();\n    validate_probe_url(&probe_url);\n}}\n{run_probe_def}\n"
+        );
+        assert!(
+            !e2e_probe_contract_violations(&launched_first).is_empty(),
+            "a launch before validation must be reported"
         );
     }
 

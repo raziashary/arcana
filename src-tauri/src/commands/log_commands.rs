@@ -1670,6 +1670,12 @@ mod tests {
         use tracing_subscriber::{filter::filter_fn, layer::SubscriberExt, Layer, Registry};
 
         let directory = tempfile::tempdir().expect("isolated hook retention log fixture");
+        // Opening the hook database applies the `config.db` migrations, and the
+        // destructive v6 step takes a backup under the process home (it failed
+        // here with "no backup could be taken" when a concurrent test dropped
+        // its own redirected home). Without this guard that backup can also land
+        // in the real `~/.arcana/backups`.
+        let _home = crate::test_support::isolate_home(directory.path());
         let config_path = directory.path().join("config.db");
         let mut hooks = arcana_core::hooks::db::HooksDb::open_at(&config_path)
             .expect("open production hook database");

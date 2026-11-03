@@ -315,7 +315,7 @@ mod tests {
                 }
                 (UsageStreamScenario::SplitAndComplete, 2) => Some(StreamChunk::Done),
                 (UsageStreamScenario::SplitAndComplete | UsageStreamScenario::SplitAndEof, _) => {
-                    return Poll::Ready(None)
+                    return Poll::Ready(None);
                 }
             };
             self.step += 1;

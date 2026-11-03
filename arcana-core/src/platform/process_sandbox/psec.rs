@@ -100,6 +100,10 @@ pub(super) const fn process_security_environment_attribute() -> usize {
     PSEC_ATTRIBUTE
 }
 
+// Schema v1.0 is the floor, so `minor < PSEC_V1_REQUIRED_MINOR` is vacuous
+// while the constant is 0. The comparison stays so that raising the constant
+// is the only edit a stricter minor needs.
+#[allow(clippy::absurd_extreme_comparisons)]
 fn load_api() -> Result<Api, String> {
     let module = processmodel_module().map_err(|error| error.to_string())?;
     let create = unsafe { resolve::<CreatePsec>(module, b"CreateProcessSecurityEnvironment\0") }

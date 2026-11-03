@@ -4059,7 +4059,8 @@ mod dispatch_origin_tests {
             .expect("assign the task so the worker has real work");
 
         let recipes = home.path().join(".arcana").join("recipes");
-        crate::recipes::defaults::ensure_default_recipes(&recipes).expect("persist shipped recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes)
+            .expect("persist shipped recipes");
         let workers = crate::db::workers::WorkersDb::open().expect("open worker roster");
         let backend = workers
             .get_by_slug("worker-backend")
@@ -4136,7 +4137,8 @@ mod dispatch_origin_tests {
             .expect("assign the task so the worker has real work");
 
         let recipes = home.path().join(".arcana").join("recipes");
-        crate::recipes::defaults::ensure_default_recipes(&recipes).expect("persist shipped recipes");
+        crate::recipes::defaults::ensure_default_recipes(&recipes)
+            .expect("persist shipped recipes");
         let workers = crate::db::workers::WorkersDb::open().expect("open worker roster");
         let backend = workers
             .get_by_slug("worker-backend")
