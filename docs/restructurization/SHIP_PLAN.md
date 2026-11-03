@@ -62,6 +62,28 @@ R0 baseline green → R1 close P4 (Windows) → R2 graph (P5) → R3 UI + experi
 A proof column names the check that closes each row. IDs are the old task IDs so existing code comments
 and archived receipts stay traceable. `v1` means required. Rows without it were cut or deferred on 2026-11-03.
 
+### Already built in P4 (kept; the roadmap below does not redo it)
+
+P4 delivered far more than the open tasks suggest. This table is the short form; the task-by-task map is
+[`reference/P4_DELIVERED.md`](reference/P4_DELIVERED.md). **Evidence class:** read from the archived plan, ADR log and
+commits. The terminal-control files were confirmed present on 2026-11-03; the other rows were not individually
+re-checked and their tests were not re-run (R0 does that). Nothing here was deleted, archived as code or parked.
+
+| Area | What is kept | Tasks |
+|---|---|---|
+| Terminal and command control | Commands built by Arcana from a closed intent set (`project_command`), not model-written shell; `bash` routed through the same fail-closed Windows sandbox, prompting in Autonomous mode where a stored `AllowAlways` cannot bypass it; Windows AppContainer containment (write containment, sibling-read denial, nested children, `.cmd` shims, junction escapes); one workspace resolver that fails loudly; checkpoint-before-write blocking agent writes; persisted, revocable egress consent for diff, provider and hook traffic; POSIX-only shell purged from recipes, skills and hooks; env scrubbing and redaction; host-enforced commit safety; bounded long verification | `P4-11`, `P4-16`..`P4-20`, `P4-60`, `P4-62`, `P8-74`; `P4-18` and `P4-61` partial |
+| Task ownership and concurrency | Atomic claim that includes the assigned worker (no task theft, one winner); one task per worker enforced in the claim and each batch entry; epics never claimable as work; unblocking dependents is one transaction; claim PID and host set and cleared with compare-and-set force release | `P4-07`..`P4-10`, `P4-34`, `P4-38`, `P4-40` |
+| Dispatch reliability | Event-driven dispatch with a five-minute reconciler; a database error cannot kill the schedule; the in-flight slot is released on panic, cancel and timeout; escalation cannot starve dispatch; dependents auto-resume, budget holds wait; idle ticks make no provider calls | `P4-04`..`P4-06`, `P4-24`, `P4-28`, `P4-35`, `P4-37`, `P4-39`, `P4-43` |
+| Build evidence and QC gate | Evidence is a table that survives restart, recorded from the actual spawn and exit code; no transition into `qc_review` without fresh task-scoped evidence, even by direct SQL; three failed builds stop the worker until a single-use Supervisor grant | `P4-12`..`P4-15` |
+| Routing and learning | Deterministic scorer is authoritative (unreachable threshold fixed); system agents never suggested for implementation; outcomes recorded from the tool; startup no longer overwrites user recipe edits; procedural memory wired, off by default | `P4-25`, `P4-26`, `P4-30`, `P4-32`, `P4-33`, `P4-44` |
+| Data integrity | Typed `WorkerStatus` end to end with a constrained column and a legacy-safe migration; one canonical UTC timestamp contract; every production query in a registered inventory (`p4_query_registry`, 9 of 9 pass) | `P4-01`..`P4-03`, `P4-57`, `P4-58` |
+| Messaging and Supervisor | Durable at-least-once worker messages, replay-safe by message ID; the QC agent reads its inbox; a real Supervisor turn creates and decomposes an epic | `P4-22`, `P4-23`, `P4-27`, `P4-41`, `P4-42` |
+| Recovery and resilience | An interrupted run is recovered without replaying uncertain effects; startup retries with capped backoff and full jitter; persisted retry count, host-verified recovery retries and worker dispatch lineage for the Supervisor | `P4-36`, `P4-52`; commits `bdced1c`, `3a2a26c`, `8356aea` |
+| Cost safety | The saved per-task budget breaker is enforced beside the worker-run cap | `P4-29` |
+| Observability and retention | Log rotation (five files per stream, seven days); bounded retention for the append-only tables; Logs tab with trace aggregation, producer cost and dropped-telemetry visibility | `P4-55`, `P4-59`; `P4-50` partial |
+| IDE handoff | A worker-made file opens in the IDE tab through the real event consumer and runs | `P4-21` |
+| Providers and hooks | Groq provider; every provider built through one factory (fixed Groq failing in the Fleet); retry class carried as data; HTTP hooks consent-gated; hook refusals say whether policy or the store decided | commits `7c497fc`, `894bbe0`, `ad56120`, `3a4cbb1`, `bc95c1b` |
+
 ### R0 · Baseline green
 
 | Item | Proof |
@@ -84,15 +106,8 @@ and archived receipts stay traceable. `v1` means required. Rows without it were 
 | `P4-50/51/53/54` | Deferred to the backlog (what is already built stays) | — |
 | `TG4-24/25/27/28` | Deferred with their tasks | — |
 
-**Terminal control already built on `main` (kept; nothing here was archived or parked).** Claimed by the archived
-receipts and the ADR log; the code was confirmed present on 2026-11-03, but its behaviour was not re-run:
-`project_command` (closed intent set, argv from `platform::command::resolve`, workspace, toolchain and task-claim
-checks, `install` upgraded to host approval, launched only through the process sandbox); `bash` routed through the
-same fail-closed sandbox, prompting in Autonomous mode where a stored `AllowAlways` cannot bypass it; the Windows
-AppContainer sandbox (write containment, sibling-read denial, nested children, `.cmd` shims, junction escapes);
-the workspace jail and write lease; checkpoint-before-write blocking agent writes (`P4-19`, `P4-20`); persisted,
-revocable egress consent for diff, provider and hook traffic (`P4-60`, ADR-0400); env scrubbing and redaction in
-`security/`; host-enforced commit safety (`P8-74`); bounded long-running verification (`P4-62`).
+The terminal-control pieces already built are the first row of "Already built in P4" above; W9 and the narrowed
+`TG4-30` finish that area.
 
 ### R2 · Graph (P5)
 
@@ -162,7 +177,7 @@ Claimed progress from the archived plan, **not re-verified**: P0–P3 and P8 clo
 checkboxes are unreliable: 34 of 41 TG3 gates are unchecked although P3 is recorded closed. Treat the
 code and a fresh test run as the truth, not those boxes.
 
-Last code commit: `8356aea` (2026-10-28), worker dispatch lineage.
+Last product-code commit: `8356aea` (2026-10-28), worker dispatch lineage. Since then: the docs reset, the e2e consent spec (`121b28e`, unrun) and nothing else.
 
 ## 6. Where things are
 
