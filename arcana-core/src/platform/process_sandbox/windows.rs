@@ -2868,7 +2868,7 @@ mod tests {
             "@echo off\r\necho nested-ran\r\necho nested-allowed>nested-inside.txt\r\necho denied>..\\nested-outside.txt\r\n",
         )
         .expect("write nested child probe");
-        let nested_script = "cmd.exe /d /c nested-child.cmd";
+        let nested_script = "cmd.exe /d /c .\\nested-child.cmd";
         let child = sandbox
             .spawn(
                 OsStr::new("cmd.exe"),
@@ -3075,7 +3075,7 @@ mod tests {
         .expect("write descendant command");
         std::fs::write(
             &parent_script,
-            "@echo off\r\ncmd.exe /d /c descendant.cmd\r\n",
+            "@echo off\r\ncmd.exe /d /c .\\descendant.cmd\r\n",
         )
         .expect("write parent command");
         let sandbox =
@@ -3086,7 +3086,7 @@ mod tests {
                 &[
                     OsString::from("/d"),
                     OsString::from("/c"),
-                    OsString::from("parent.cmd"),
+                    OsString::from(".\\parent.cmd"),
                 ],
                 None,
                 &workspace,
@@ -3141,12 +3141,12 @@ mod tests {
             "@echo off\r\necho ready>ready.txt\r\nfor /l %%i in (1,1,100000000) do @echo alive>>heartbeat.txt\r\necho late>late.txt\r\n").unwrap();
         std::fs::write(
             workspace.join("parent.cmd"),
-            "@echo off\r\ncmd.exe /d /c descendant.cmd\r\n",
+            "@echo off\r\ncmd.exe /d /c .\\descendant.cmd\r\n",
         )
         .unwrap();
         let spec = super::super::ProcessSpec {
             program: OsString::from("cmd.exe"),
-            args: vec!["/d".into(), "/c".into(), "parent.cmd".into()],
+            args: vec!["/d".into(), "/c".into(), ".\\parent.cmd".into()],
             raw_arg: None,
             cwd: workspace.to_path_buf(),
             env_remove: credentials_to_remove(),

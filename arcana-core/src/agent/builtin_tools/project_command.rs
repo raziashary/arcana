@@ -2494,12 +2494,12 @@ fn main() {
                     .expect("write descendant command");
                     std::fs::write(
                         workspace.join("parent.cmd"),
-                        "@echo off\r\ncmd.exe /d /c descendant.cmd\r\n",
+                        "@echo off\r\ncmd.exe /d /c .\\descendant.cmd\r\n",
                     )
                     .expect("write parent command");
                     command::ResolvedCommand {
                         program: "cmd.exe".into(),
-                        args: ["/d", "/c", "parent.cmd"]
+                        args: ["/d", "/c", ".\\parent.cmd"]
                             .into_iter()
                             .map(str::to_owned)
                             .collect(),

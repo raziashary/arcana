@@ -63,6 +63,14 @@ jobs:
         with:
           workspaces: . -> target
 
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python command corpus tools
+        run: python -m pip install pytest ruff
+
       # --all / --workspace, not a single manifest. The workspace has THREE
       # members and this job used to check one: `src-shared` was never
       # formatted or linted by any job, so `cargo fmt --all` failed while the
@@ -172,6 +180,17 @@ jobs:
         with:
           workspaces: src-cli -> target
 
+      # The CLI tests build real Python projects through project_command, which
+      # runs pytest. Without it `claimed_python_build_stages_survive_jsonl_...`
+      # fails with a missing-module error, not a product defect.
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python command corpus tools
+        run: python -m pip install pytest ruff
+
       - name: Format check
         run: cargo fmt --manifest-path src-cli/Cargo.toml -- --check
 
@@ -186,6 +205,17 @@ jobs:
           cargo test \
             --manifest-path src-cli/Cargo.toml \
             --all-targets \
+            -- --test-threads=4
+
+      # The offline Fleet suite only compiles with its feature, so the plain
+      # step above never ran it. It passed 7 of 7 times on Linux (WSL) after a
+      # single cold-start deadline in the first run.
+      - name: Offline Fleet CLI suite
+        run: |
+          cargo test \
+            --manifest-path src-cli/Cargo.toml \
+            --features offline-fleet-test \
+            --test fleet_offline \
             -- --test-threads=4
 
   # ── Build smoke: all three platforms, on pull requests ────────────────────
