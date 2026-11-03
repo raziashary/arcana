@@ -30,7 +30,7 @@ Still open:
 - `P4-53` / `TG4-27`: whole-app restart handoff and restore.
 - `P4-54` / `TG4-28`: worker health with a production writer and reader, bounded temporary-worker creation,
   token usage end to end, two-worker interruption without duplicate effects.
-- `P4-56` / `TG4-30`: independent attack testing of the failure paths (task theft, path escape, secret leakage).
+- `P4-56` / `TG4-30`: independent attack testing of the non-command failure paths (retry loops, checkpoints and resume, supervisor reassignment, telemetry retention). The command and sandbox path was moved into `SHIP_PLAN.md` R1 on 2026-11-03.
 - `P7-19` / `TG7-06`: automatic replay or reassignment after process loss.
 - `P4-49` live-provider paid Fleet completion beyond the Calendar acceptance run.
 
@@ -39,7 +39,7 @@ Still open:
 [`archive/development/AUDIT_2026-10-18_CODEBASE_REFACTOR_PLAN.md`](archive/development/AUDIT_2026-10-18_CODEBASE_REFACTOR_PLAN.md):
 wave 0 and about 1.5 of 9 workstreams are done (W8 hook consent, part of W4/W6). Not started: W1 guards for
 hand-kept tables, W2 dead-code deletion, W3 duplicate collapse, W5 test-harness integrity, W7 frontend
-cleanup; W9 one vetted command surface (mechanism chosen in ADR-0401, not built). Take items from here
+cleanup; W9 one vetted command surface (mechanism chosen in ADR-0401; moved into `SHIP_PLAN.md` R1 on 2026-11-03). Take items from here
 when they block a ship task, not as a programme.
 
 Approved but not done: generate the telemetry label set instead of hand-maintaining it; port the graph store

@@ -44,3 +44,11 @@ interaction-grammar gate, the production updater; kept: the daily spend ceiling 
 (Windows code signing) is still an open ruling. The Linux smoke harness and macOS helper are committed on the
 local branch `park/linux-macos-sandbox` (`bc54874`, unpushed). **Why Windows-only:** Razi's whole company runs
 Windows, so the Windows harness is the product; nothing on `main` was removed to park the other platforms.
+
+## D-006 · Terminal-control work stays in v1 scope — 2026-11-03, Razi (clarification) / Claude (edit, to confirm)
+
+Razi clarified that most of the P4 effort was about not letting an agent run loose in the terminal. Code check:
+none of it was lost (no code file deleted since `8356aea`; only a test path and e2e files changed). The plan was
+however thin on the unfinished half: W9 (capability-scoped consent for the freeform shell, ADR-LOG-RESTRUCT-0401)
+and attack testing of the command path sat in the backlog. They are added to `SHIP_PLAN.md` R1 as v1 items,
+pending Razi's confirmation. This refines D-002 (the middle path), which named only `P4-18` and `P4-61`.

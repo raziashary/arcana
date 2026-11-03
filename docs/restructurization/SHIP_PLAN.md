@@ -60,14 +60,14 @@ R0 baseline green → R1 close P4 (Windows) → R2 graph (P5) → R3 UI + experi
 ```
 
 A proof column names the check that closes each row. IDs are the old task IDs so existing code comments
-and archived receipts stay traceable. `v1` means required; means proposed cut or add.
+and archived receipts stay traceable. `v1` means required. Rows without it were cut or deferred on 2026-11-03.
 
 ### R0 · Baseline green
 
 | Item | Proof |
 |---|---|
 | Fix `cargo fmt` drift in `arcana-core/src/recipes/{runner,scheduler}.rs` | `cargo fmt --all -- --check` clean |
-| Fix four red `ci_gate` tests that also fail on a clean checkout of `8356aea`: `tg_p1_05_every_core_connection_is_opened_tuned`, `tg_p3_03_no_lock_propagates_poison`, `tg_p3_14_every_path_taking_tool_calls_the_jail` (names `reconcile_worker_operation`), `tg_p3_21_68_e2e_probe_keeps_evidence_and_stays_on_this_machine` | `cargo test -p arcana --lib ci_gate` all green |
+| Fix four red `ci_gate` tests that also fail on a clean checkout of `8356aea`: `tg_p1_05_every_core_connection_is_opened_tuned`, `tg_p3_03_no_lock_propagates_poison`, `tg_p3_14_every_path_taking_tool_calls_the_jail` (names `reconcile_worker_operation`), `tg_p3_21_68_e2e_probe_keeps_evidence_and_stays_on_this_machine`. Both containment gates look like stale static scans, not holes: `reconcile_worker_operation` resolves the workspace from the host context, and the gate appears to match path strings in its test code; `e2e_probe` now validates loopback syntactically with no DNS (commit `ef7c0eb`) while the gate still demands `to_socket_addrs`. Read each, then fix the gate or the code | `cargo test -p arcana --lib ci_gate` all green |
 | Fix the intermittent `src-cli/tests/fleet_offline.rs` failure (fails when its 7 tests run in parallel, passes serially; ADR-0412) | Parallel run passes repeatedly |
 | Re-run `cargo clippy --workspace --all-targets`, `cargo test --workspace --all-targets --locked`, `npm test` and record the true failure set (Windows AppContainer `OS error 5` cases are recorded platform limits) | Results written into §5 |
 | Confirm the old closure prerequisites `TG3-26` and `TG4-16` (persisted egress-consent path); their state was not re-verified when this plan was written | Test or smoke |
@@ -79,8 +79,20 @@ and archived receipts stay traceable. `v1` means required; means proposed cut or
 | `P4-18`, `P4-61` v1 | Agent writes stay in the selected workspace; untrusted build/test children run under the OS sandbox with no network and no reads outside the workspace; the Windows command corpus (`.cmd` shims, Node/Python/Cargo) works under it | `TG4-09`, `TG4-18`, `TG4-31` |
 | `S4-01` v1 | One task runs end to end on Windows and produces a build-verified artifact in the chosen workspace | Smoke |
 | `P4-49` v1 | Razi's acceptance: build the Calendar app from the PA chat in `C:\Playground\arcana-calendar` | Razi runs it through `npm run tauri dev` |
-| `P4-50/51/53/54/56` | Deferred to the backlog (what is already built stays) | — |
-| `TG4-24/25/27/28/30` | Deferred with their tasks | — |
+| W9 v1 (added 2026-11-03, Razi to confirm) | The unfinished half of "an agent must not run loose in the terminal": per ADR-LOG-RESTRUCT-0401 the freeform shell (`bash.rs`) stays reachable only through a consent that names the capability the command exercises. Needs a capability object in `ProcessSpec`, consent keyed by capability instead of tool name, `run_ide_project` passing the same claim and build-evidence check as `project_command`, and the intent suite re-run through the production `execute` path rather than the internal launcher | New test per clause; intent suite via `execute` |
+| `P4-56` / `TG4-30`, command path only (added 2026-11-03, Razi to confirm) | Independent attack tests of the command and sandbox path: task theft, path escape, secret leakage through command output and environment. The rest of the failure-containment review stays in the backlog | `TG4-30` narrowed to commands |
+| `P4-50/51/53/54` | Deferred to the backlog (what is already built stays) | — |
+| `TG4-24/25/27/28` | Deferred with their tasks | — |
+
+**Terminal control already built on `main` (kept; nothing here was archived or parked).** Claimed by the archived
+receipts and the ADR log; the code was confirmed present on 2026-11-03, but its behaviour was not re-run:
+`project_command` (closed intent set, argv from `platform::command::resolve`, workspace, toolchain and task-claim
+checks, `install` upgraded to host approval, launched only through the process sandbox); `bash` routed through the
+same fail-closed sandbox, prompting in Autonomous mode where a stored `AllowAlways` cannot bypass it; the Windows
+AppContainer sandbox (write containment, sibling-read denial, nested children, `.cmd` shims, junction escapes);
+the workspace jail and write lease; checkpoint-before-write blocking agent writes (`P4-19`, `P4-20`); persisted,
+revocable egress consent for diff, provider and hook traffic (`P4-60`, ADR-0400); env scrubbing and redaction in
+`security/`; host-enforced commit safety (`P8-74`); bounded long-running verification (`P4-62`).
 
 ### R2 · Graph (P5)
 
