@@ -46,6 +46,36 @@ fn context(
     }
 }
 
+/// The tool result carries only source-free codes. When the build cannot
+/// start, the full spawn error is in the profile's own logs; show it so a
+/// failure on a machine the developer cannot reach explains itself.
+fn spawn_errors_in_logs(profile: &std::path::Path) -> String {
+    let mut found = Vec::new();
+    let mut pending = vec![profile.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&directory) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if let Ok(text) = std::fs::read_to_string(&path) {
+                found.extend(
+                    text.lines()
+                        .filter(|line| line.contains("failed to spawn"))
+                        .map(|line| line.chars().take(1500).collect::<String>()),
+                );
+            }
+        }
+    }
+    found.truncate(3);
+    found.join(
+        "
+",
+    )
+}
+
 // This integration target contains one test because logging initialization and
 // HOME/USERPROFILE are process-global. It proves the production command's
 // records survive the JSONL writer and are read back by the shipped CLI.
@@ -178,7 +208,14 @@ async fn claimed_python_build_stages_survive_jsonl_writer_and_cli_export() {
     assert_eq!(results.len(), 1);
     let (returned_call_id, result) = results.pop().expect("one build result");
     assert_eq!(returned_call_id, provider_call_id);
-    assert!(!result.is_error, "Python build failed: {}", result.output);
+    assert!(
+        !result.is_error,
+        "Python build failed: {}
+spawn errors in the profile's logs:
+{}",
+        result.output,
+        spawn_errors_in_logs(&home.0)
+    );
     drop(executor);
 
     let batch = tasks
