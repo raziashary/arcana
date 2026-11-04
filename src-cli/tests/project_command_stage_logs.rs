@@ -50,6 +50,19 @@ fn context(
 /// start, the full spawn error is in the profile's own logs; show it so a
 /// failure on a machine the developer cannot reach explains itself.
 fn spawn_errors_in_logs(profile: &std::path::Path) -> String {
+    // The writer queue drains on its own thread, so the line may not be on disk
+    // the instant the build returns.
+    for _ in 0..25 {
+        let found = read_spawn_errors(profile);
+        if !found.is_empty() {
+            return found;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    "(none found after 5 s)".into()
+}
+
+fn read_spawn_errors(profile: &std::path::Path) -> String {
     let mut found = Vec::new();
     let mut pending = vec![profile.to_path_buf()];
     while let Some(directory) = pending.pop() {
