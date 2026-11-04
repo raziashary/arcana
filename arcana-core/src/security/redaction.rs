@@ -177,6 +177,39 @@ struct Pattern {
     with: &'static str,
 }
 
+const CARD_PLACEHOLDER: &str = "[CARD]";
+
+/// A canonical UUID. Arcana's own session, run and call identifiers are UUIDs.
+static UUID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
+        .expect("uuid")
+});
+
+/// Replace card-shaped numbers, except inside a UUID. A random UUID whose first
+/// three groups happen to be all decimal digits (`36189949-5822-4212-…`) has the
+/// same shape as a spaced card number, and redacting it destroyed the
+/// correlation identifier the text was carrying.
+fn redact_cards(pattern: &Pattern, text: &str) -> String {
+    let uuids = UUID
+        .find_iter(text)
+        .map(|found| found.range())
+        .collect::<Vec<_>>();
+    pattern
+        .re
+        .replace_all(text, |captures: &regex::Captures<'_>| {
+            let found = captures.get(0).expect("whole match");
+            if uuids
+                .iter()
+                .any(|uuid| uuid.start <= found.start() && found.end() <= uuid.end)
+            {
+                found.as_str().to_string()
+            } else {
+                CARD_PLACEHOLDER.to_string()
+            }
+        })
+        .into_owned()
+}
+
 /// Patterns applied to free text.
 ///
 /// **Order matters, and getting it wrong leaks.** The narrow, unambiguous rules
@@ -239,7 +272,7 @@ static TEXT_PATTERNS: LazyLock<Vec<Pattern>> = LazyLock::new(|| {
         // Card: separators optional, restoring the source's breadth.
         Pattern {
             re: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b").expect("card"),
-            with: "[CARD]",
+            with: CARD_PLACEHOLDER,
         },
         // Phone: a separator is REQUIRED — see the module header. Runs last
         // because its shape overlaps the card pattern's.
@@ -309,7 +342,11 @@ static LONG_TOKEN: LazyLock<Regex> =
 pub fn redact_text(text: &str) -> String {
     let mut out = text.to_string();
     for p in TEXT_PATTERNS.iter() {
-        out = p.re.replace_all(&out, p.with).into_owned();
+        out = if p.with == CARD_PLACEHOLDER {
+            redact_cards(p, &out)
+        } else {
+            p.re.replace_all(&out, p.with).into_owned()
+        };
     }
     // Last: the narrow, unambiguous rules above have already consumed the
     // shapes they own, so what reaches here is a genuine `key = value`.
@@ -592,6 +629,26 @@ mod tests {
     fn a_bare_card_number_is_redacted() {
         let out = redact_text("card 4111111111111111 on file");
         assert!(!out.contains("4111111111111111"), "{out}");
+    }
+
+    /// A UUID whose first three groups are all decimal digits has a card's
+    /// shape. Arcana's identifiers must survive; a card beside one must not.
+    #[test]
+    fn a_uuid_is_not_mistaken_for_a_card_but_a_card_next_to_one_still_is() {
+        let id = "36189949-5822-4212-a892-c9690629d7d0";
+        assert_eq!(redact_text(id), id);
+        assert_eq!(
+            redact_text(&format!("call {id} failed")),
+            format!("call {id} failed")
+        );
+        assert_eq!(redact_text(&format!("{id}-{id}")), format!("{id}-{id}"));
+
+        let out = redact_text(&format!("{id} paid with 4111 1111 1111 1111"));
+        assert!(out.starts_with(id), "{out}");
+        assert!(!out.contains("4111 1111 1111 1111"), "{out}");
+        // Digits that merely abut a UUID are not part of it.
+        let out = redact_text(&format!("4111111111111111 {id}"));
+        assert!(out.starts_with("[CARD]"), "{out}");
     }
 
     /// The documented narrowing. A bare ten-digit run is a Unix timestamp far

@@ -4494,6 +4494,10 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..5 {
             ids.push(db.begin(kind::CLI, None).expect("begin"));
+            // `started_at` has millisecond resolution and the tie-break is the
+            // random run id, so runs begun inside one millisecond have no
+            // defined order.
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
 
         let recent = db.recent(3).expect("recent");
