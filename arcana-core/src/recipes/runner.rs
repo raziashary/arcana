@@ -93,6 +93,24 @@ fn worker_run_budget(
 const FLEET_WORKER_HIDDEN_TOOLS: &[&str] = &["bash"];
 
 /// The shipped `worker-*` recipes; the supervisor and QC agents keep their tools.
+/// Tools a spawn tool withholds from the children of `parent_role` (`W9`).
+///
+/// A default Fleet worker never gets `bash`, so neither may a subagent it
+/// spawns. The child's own role is `subagent`, so its children are covered by
+/// the same rule: the restriction follows the chain instead of lasting one
+/// generation. (This also withholds `bash` from grandchildren of an
+/// interactive parent, which is the safe side of the trade.)
+pub(crate) fn tools_withheld_from_children_of(parent_role: &str) -> Vec<String> {
+    if is_default_fleet_worker(parent_role) || parent_role == "subagent" {
+        FLEET_WORKER_HIDDEN_TOOLS
+            .iter()
+            .map(|tool| (*tool).to_string())
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
 fn is_default_fleet_worker(worker_slug: &str) -> bool {
     worker_slug.starts_with("worker-")
 }
@@ -4957,5 +4975,27 @@ mod dispatch_lineage_tests {
             vec![(worker.run_id.clone(), "worker-backend".to_string())],
             "the dispatching run must read back the tick it woke"
         );
+    }
+}
+
+#[cfg(test)]
+mod withheld_tools_tests {
+    use super::tools_withheld_from_children_of;
+
+    #[test]
+    fn a_default_workers_children_and_grandchildren_never_get_bash() {
+        for parent in ["worker-backend", "worker-frontend", "worker-x", "subagent"] {
+            assert_eq!(
+                tools_withheld_from_children_of(parent),
+                ["bash"],
+                "{parent}"
+            );
+        }
+        for parent in ["supervisor", "pa", "qc-agent", "qc-dispatcher", ""] {
+            assert!(
+                tools_withheld_from_children_of(parent).is_empty(),
+                "{parent}"
+            );
+        }
     }
 }

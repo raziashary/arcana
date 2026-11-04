@@ -62,6 +62,8 @@ impl SpawnSubagentRequest {
             max_turns: self.max_turns.unwrap_or(0),
             timeout_secs: self.timeout_secs.unwrap_or(0),
             depth: self.depth,
+            // A user-driven spawn under `ManualApproval`; nothing to withhold.
+            denied_tools: Vec::new(),
         };
         (cfg, self.task_description)
     }

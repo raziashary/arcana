@@ -67,6 +67,13 @@ pub struct SubagentConfig {
     /// Nesting depth (0 = spawned by a top-level agent, 1 = subagent of a
     /// subagent, etc.). Enforced by `SubagentPool` against `MAX_NESTING_DEPTH`.
     pub depth: u32,
+
+    /// Tools removed from the child's registry after `tools` is applied
+    /// (`W9`). Set by the spawn tools from the parent's role, never by the
+    /// model: an empty `tools` list means "everything", so an allow-list
+    /// cannot be what keeps `bash` away from a default Fleet worker's child.
+    #[serde(default)]
+    pub denied_tools: Vec<String>,
 }
 
 impl SubagentConfig {

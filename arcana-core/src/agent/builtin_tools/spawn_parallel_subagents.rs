@@ -187,6 +187,9 @@ impl Tool for SpawnParallelSubagentsTool {
                     .map(|n| n as u32)
                     .unwrap_or(0),
                 depth: ctx.depth + 1, // K.11 — increment nesting depth
+                denied_tools: crate::recipes::runner::tools_withheld_from_children_of(
+                    &ctx.agent_role,
+                ),
                 // G-5: a child never outranks its parent.
                 permission_mode: ctx.permission_mode.clone(),
             };

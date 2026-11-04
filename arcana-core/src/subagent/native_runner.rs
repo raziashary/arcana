@@ -332,6 +332,12 @@ async fn run_inner(
     // Narrowing happens after `register_for_mode`, so a subset can only REMOVE
     // tools the PA mode already granted; it can never widen access.
     .with_tool_subset(&config.tools);
+    let denied_tools = config
+        .denied_tools
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let engine = engine.without_tools(&denied_tools);
 
     let working_dir = config.working_dir.clone();
     let system_prompt =
@@ -466,6 +472,7 @@ mod tests {
             max_turns: 0,
             timeout_secs: 0,
             depth,
+            denied_tools: Vec::new(),
         }
     }
 

@@ -201,6 +201,7 @@ impl Tool for SpawnQcReviewTool {
             max_turns: 30,
             timeout_secs,
             depth: ctx.depth + 1,
+            denied_tools: crate::recipes::runner::tools_withheld_from_children_of(&ctx.agent_role),
         };
 
         // Use a placeholder trigger; the reviewer reads task details via

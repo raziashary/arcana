@@ -3245,6 +3245,10 @@ fn effect() { ToolEffect::Execute }"#;
             if !text.contains("permission_mode: ctx.permission_mode") {
                 offenders.push(name.to_string());
             }
+            // `W9`: a child must not regain a tool its parent was denied.
+            if !text.contains("tools_withheld_from_children_of(") {
+                offenders.push(format!("{name} (denied_tools)"));
+            }
         }
 
         assert!(

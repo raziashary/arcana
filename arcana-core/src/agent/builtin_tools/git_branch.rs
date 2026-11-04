@@ -185,12 +185,23 @@ impl Tool for GitUseFleetBranchTool {
 }
 
 async fn use_fleet_branch(working_dir: &str) -> Result<String, String> {
-    let (discovered, _) = open_repository(working_dir)?;
+    let (discovered, workspace) = open_repository(working_dir)?;
     let workdir = discovered
         .workdir()
         .ok_or_else(|| "Cannot switch branches in a bare Git repository".to_string())?
         .canonicalize()
         .map_err(|error| format!("Cannot resolve repository root: {error}"))?;
+    // `discover` walks upward. A checkout rewrites the repository's whole
+    // tree, so it may only run on a repository that is the workspace itself.
+    let workspace = workspace
+        .canonicalize()
+        .map_err(|error| format!("Cannot resolve the workspace: {error}"))?;
+    if workdir != workspace {
+        return Err(
+            "The Git repository that contains this workspace is larger than the workspace, so switching its branch would rewrite files outside it. Switch branches yourself."
+                .into(),
+        );
+    }
     // Every fleet worker shares one checkout. Take the lock `git_commit` takes,
     // so two workers cannot move HEAD at once, and read HEAD only after it is
     // held: the peer that got there first leaves this call nothing to do.
@@ -482,5 +493,23 @@ Fixture.",
             "{}",
             unclaimed.output
         );
+    }
+
+    #[tokio::test]
+    async fn the_branch_move_refuses_a_repository_larger_than_the_workspace() {
+        let (dir, repo) = repo();
+        let inner = dir.path().join("packages").join("app");
+        fs::create_dir_all(&inner).unwrap();
+
+        let error = use_fleet_branch(&inner.to_string_lossy())
+            .await
+            .unwrap_err();
+        assert!(error.contains("larger than the workspace"), "{error}");
+        assert_eq!(
+            repo.head().unwrap().shorthand(),
+            Some("main"),
+            "the enclosing repository must not move"
+        );
+        assert!(repo.find_branch(FLEET_BRANCH, BranchType::Local).is_err());
     }
 }

@@ -77,7 +77,55 @@ pub fn ensure_default_recipes(recipes_dir: &Path) -> Result<()> {
     migrate_persistent_inbox_protocols(recipes_dir)?;
     migrate_supervisor_budget_resolution(recipes_dir)?;
     migrate_legacy_shell_smoke_examples(recipes_dir)?;
+    migrate_worker_git_to_typed_tools(recipes_dir)?;
 
+    Ok(())
+}
+
+/// The shipped worker text that told workers to run git through `bash`
+/// (`W9`), as `(old, new)` pairs. A default Fleet worker no longer has `bash`,
+/// so a recipe installed before this change would fail its commit protocol on
+/// an unknown tool. Only these known shipped blocks are rewritten; a recipe the
+/// user edited keeps its text, and the runner still withholds `bash` either way.
+const W9_TYPED_GIT_REWRITES: &[(&str, &str)] = &[
+    (
+        "Check where you are, and move to the fleet branch if you are on a trunk:\n\n```\nbash('git rev-parse --abbrev-ref HEAD')\n```\n\nIf that prints `main`, `master`, or `trunk`, run:\n\n```\nbash('git switch -c arcana/fleet || git switch arcana/fleet')\n```\n\nThis is safe to run concurrently with the other workers: the first form creates\nthe branch, and if a peer created it a moment earlier the second form joins it.\n",
+        "Call `git_status()` to see the current branch. If it reports `protected: yes`\n(`main`, `master`, or `trunk`), call:\n\n```\ngit_use_fleet_branch()\n```\n\nThis is safe to call concurrently with the other workers: it creates the branch,\nor joins it if a peer created it a moment earlier, and it refuses rather than\noverwrite your local changes. On any other branch it changes nothing.\n",
+    ),
+    (
+        "bash('git status --porcelain')\ngit_commit(",
+        "git_status()\ngit_commit(",
+    ),
+    (
+        "            bash \u{b7} grep \u{b7} glob \u{b7} list_directory\n            project_command \u{b7} git_commit\n",
+        "            grep \u{b7} glob \u{b7} list_directory\n            project_command \u{b7} git_status \u{b7} git_use_fleet_branch \u{b7} git_commit\n",
+    ),
+    (
+        "            bash \u{b7} grep \u{b7} glob \u{b7} list_directory\nTask board:",
+        "            grep \u{b7} glob \u{b7} list_directory\n            project_command \u{b7} git_status \u{b7} git_use_fleet_branch \u{b7} git_commit\nTask board:",
+    ),
+    (
+        "check_file \u{b7} bash \u{b7} grep \u{b7} glob \u{b7} list_directory\nTask board:",
+        "check_file \u{b7} grep \u{b7} glob \u{b7} list_directory\n            project_command \u{b7} git_status \u{b7} git_use_fleet_branch \u{b7} git_commit\nTask board:",
+    ),
+    (
+        "1. Confirm you actually committed something. Your commit from Step 3f must be\n   the tip:\n   bash('git log --oneline -1')\n",
+        "1. Confirm you actually committed something: the `git_commit` call in Step 3f\n   must have returned \"Committed task changes as <id>\". If it did not, STOP and\n   report that nothing was committed.\n",
+    ),
+];
+
+fn migrate_worker_git_to_typed_tools(recipes_dir: &Path) -> Result<()> {
+    for recipe_id in [
+        WORKER_BACKEND_RECIPE_ID,
+        WORKER_FRONTEND_RECIPE_ID,
+        WORKER_PLATFORM_RECIPE_ID,
+        WORKER_MCP_RECIPE_ID,
+        WORKER_CLEANUP_RECIPE_ID,
+    ] {
+        for (old, new) in W9_TYPED_GIT_REWRITES {
+            migrate_recipe_text(recipes_dir, recipe_id, old, new)?;
+        }
+    }
     Ok(())
 }
 
@@ -2889,6 +2937,60 @@ QC customization survives.\n",
             backend_after,
             std::fs::read_to_string(sandbox.path().join("worker-backend-poll.yaml")).unwrap()
         );
+    }
+
+    #[test]
+    fn installed_worker_recipes_migrate_bash_git_to_typed_tools_without_losing_custom_text() {
+        let sandbox = tempfile::tempdir().expect("create recipe sandbox");
+        let current = [
+            (WORKER_BACKEND_RECIPE_ID, worker_backend_recipe()),
+            (WORKER_FRONTEND_RECIPE_ID, worker_frontend_recipe()),
+            (WORKER_PLATFORM_RECIPE_ID, worker_platform_recipe()),
+            (WORKER_MCP_RECIPE_ID, worker_mcp_recipe()),
+            (WORKER_CLEANUP_RECIPE_ID, worker_cleanup_recipe()),
+        ];
+
+        // Rebuild what a pre-W9 install holds by reversing every rewrite, then
+        // add text the user wrote themselves.
+        let mut reversed_somewhere = 0;
+        for (recipe_id, recipe) in &current {
+            let mut installed = recipe.clone();
+            for (old, new) in W9_TYPED_GIT_REWRITES {
+                if installed.instructions.contains(new) {
+                    installed.instructions = installed.instructions.replace(new, old);
+                    reversed_somewhere += 1;
+                }
+            }
+            assert!(
+                installed.instructions.contains("bash("),
+                "{recipe_id}: nothing to migrate, the test would prove nothing"
+            );
+            installed
+                .instructions
+                .push_str("\nMy own rule: keep commits small.\n");
+            std::fs::write(
+                sandbox.path().join(format!("{recipe_id}.yaml")),
+                serde_yaml::to_string(&installed).unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(reversed_somewhere >= W9_TYPED_GIT_REWRITES.len());
+
+        ensure_default_recipes(sandbox.path()).expect("migrate bash git examples");
+        for (recipe_id, recipe) in &current {
+            let yaml =
+                std::fs::read_to_string(sandbox.path().join(format!("{recipe_id}.yaml"))).unwrap();
+            let migrated: Recipe = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(
+                migrated.instructions,
+                format!(
+                    "{}\nMy own rule: keep commits small.\n",
+                    recipe.instructions
+                ),
+                "{recipe_id} must end up as the shipped text plus the user's own line"
+            );
+            assert!(!migrated.instructions.contains("bash('git"));
+        }
     }
 
     #[test]
