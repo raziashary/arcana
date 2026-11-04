@@ -1958,7 +1958,12 @@ fn clippy_config_environment(
         return Ok(Vec::new());
     }
 
-    let mut directory = project_dir;
+    // The two paths can arrive in different spellings (a plain drive path and
+    // its verbatim `\\?\` form), and the walk below stops on equality, so
+    // compare the resolved forms.
+    let workspace_root = &workspace_root.canonicalize()?;
+    let project_dir = &project_dir.canonicalize()?;
+    let mut directory = project_dir.as_path();
     loop {
         for name in [".clippy.toml", "clippy.toml"] {
             let config = directory.join(name);
@@ -3576,6 +3581,116 @@ fn main() {
         }
     }
 
+    /// `W9`: the corpus tests above call the internal launcher. This one sends
+    /// the same intents through the registered tool and `ToolExecutor` as a
+    /// claimed worker with a persisted run, the path a model's tool call takes,
+    /// so the claim, build-failure state, workspace resolution and result shaping
+    /// are in the proof too.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_corpus_intents_run_through_the_production_execute_path() {
+        let profile = tempfile::tempdir().expect("isolated Arcana profile");
+        let _profile_guard = crate::db::test_support::with_home(profile.path());
+        crate::platform::python_runtime::stage()
+            .expect("pre-stage the signed Python runtime outside the command timeouts");
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let fixture_parent = manifest_dir.join("target").join("p4-acl-tests");
+        std::fs::create_dir_all(&fixture_parent).expect("create repository-local ACL parent");
+        let mut registry = crate::agent::tool_registry::ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+
+        for (fixture_name, toolchain, intents) in [
+            (
+                "fx-repo-rust",
+                "cargo",
+                &["build", "test", "lint", "run"][..],
+            ),
+            ("fx-repo-node", "npm", &["build", "test", "lint", "run"][..]),
+            ("fx-repo-python", "python", &["build"][..]),
+        ] {
+            let sandbox = tempfile::Builder::new()
+                .prefix("project-command-execute-")
+                .tempdir_in(&fixture_parent)
+                .expect("create isolated checked-in project");
+            let project = sandbox.path().join(fixture_name);
+            copy_fixture_tree(
+                &manifest_dir.join("tests/fixtures").join(fixture_name),
+                &project,
+            );
+            let _workspace_lease = process_sandbox::retain_workspace(&project);
+
+            let tasks = crate::db::tasks::TasksDb::open().expect("open isolated TasksDb");
+            let task = tasks
+                .create(crate::db::tasks::CreateTaskInput {
+                    title: format!("run the {fixture_name} corpus through execute"),
+                    description: None,
+                    priority: "p2".into(),
+                    task_type: "feature".into(),
+                    acceptance_criteria: "every supported intent succeeds".into(),
+                    created_by: Some("w9-execute-path-test".into()),
+                })
+                .expect("create worker task");
+            tasks
+                .update_status(task.id, "assigned", Some("worker-backend"))
+                .expect("assign worker");
+            tasks
+                .claim_task_with_pid(task.id, "worker-backend", std::process::id())
+                .expect("claim worker task");
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let run_id = crate::db::runs::RunsDb::open()
+                .expect("open isolated RunsDb")
+                .begin_worker_tick("worker-backend", &session_id)
+                .expect("persist a real worker run");
+            let workspace_path = crate::platform::workspace::resolve_workspace_dir(Some(
+                project.to_str().expect("fixture path"),
+            ))
+            .expect("use the production selected-workspace path representation")
+            .to_string_lossy()
+            .into_owned();
+            let mut executor = crate::agent::tool_executor::ToolExecutor::new(
+                crate::agent::permission::PermissionMode::Autonomous,
+                crate::agent::permission::new_pending_permissions(),
+                session_id,
+                workspace_path,
+                crate::agent::tool_trait::AgentIdentity::worker("worker-backend"),
+            )
+            .with_run_id(Some(run_id.clone()));
+            executor.set_task_id(Some(task.id));
+
+            for intent in intents {
+                let call_id = format!("w9-{fixture_name}-{intent}");
+                let mut results = executor
+                    .execute_batch(vec![(
+                        registry
+                            .get("project_command")
+                            .expect("FastDevelopment project_command registration"),
+                        json!({"intent": intent, "toolchain": toolchain}),
+                        call_id.clone(),
+                    )])
+                    .await
+                    .unwrap_or_else(|error| panic!("{fixture_name} {intent}: {error:?}"));
+                let (returned, result) = results.pop().expect("one registered result");
+                assert_eq!(returned, call_id);
+                assert!(
+                    !result.is_error,
+                    "{fixture_name} {intent} through the executor failed: {}",
+                    result.output
+                );
+            }
+            crate::db::runs::RunsDb::open()
+                .expect("reopen isolated RunsDb")
+                .finish_worker_tick(&run_id, "completed", crate::db::runs::outcome::OK, None)
+                .expect("finish the worker run");
+            // One in-progress task per worker: free it for the next fixture.
+            tasks
+                .update_status(task.id, "done", None)
+                .expect("finish the worker task");
+        }
+    }
+
     #[cfg(windows)]
     #[tokio::test]
     async fn production_python_build_and_tests_use_the_staged_runtime() {
@@ -4354,6 +4469,26 @@ fn main() {
             PathBuf::from(&environment[0].1).canonicalize().unwrap(),
             workspace.canonicalize().unwrap()
         );
+    }
+
+    /// The registered tool hands the launcher a plain workspace root and a
+    /// verbatim (`\\?\`) project directory for the same folder. The config walk
+    /// used to stop only on string equality, so every Cargo lint failed with
+    /// "project is outside the selected workspace".
+    #[cfg(windows)]
+    #[test]
+    fn clippy_config_accepts_a_verbatim_project_under_a_plain_workspace_root() {
+        let sandbox = tempfile::tempdir().expect("workspace fixture");
+        let workspace = sandbox.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let verbatim = workspace.canonicalize().unwrap();
+        assert!(verbatim.to_string_lossy().starts_with(r"\\?\"));
+        assert_ne!(verbatim, workspace);
+        let command = command::resolve(Toolchain::Cargo, CommandIntent::Lint).unwrap();
+
+        let environment = clippy_config_environment(&command, &verbatim, &workspace)
+            .expect("the same folder in two spellings is inside the workspace");
+        assert_eq!(PathBuf::from(&environment[0].1), verbatim);
     }
 
     #[cfg(windows)]
