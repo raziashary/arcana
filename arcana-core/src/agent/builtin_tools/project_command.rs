@@ -652,6 +652,11 @@ impl Tool for ProjectCommandTool {
                     }
                     failure_count += 1;
                     failure_codes.push("command_spawn_failed");
+                    safe_diagnostics.push(json!({
+                        "code": "command_spawn_failed",
+                        "severity": "error",
+                        "reason": spawn_error_summary(&error),
+                    }));
                     result.push(format!(
                         "Could not start the {:?} command for project {} ({}).",
                         project.toolchain,
