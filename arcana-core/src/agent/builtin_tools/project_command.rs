@@ -5775,4 +5775,423 @@ fn main() {
             "a refused process must not persist a build batch"
         );
     }
+
+    // ── Attack tests for the command path (P4-56 narrowed, TG4-30) ──────────
+    //
+    // Each test plays the model or the project: it supplies hostile input, or
+    // plants hostile content in the workspace, and asserts what the registered
+    // tool and the OS sandbox do with it.
+
+    #[cfg(windows)]
+    struct ClaimedWorker {
+        executor: crate::agent::tool_executor::ToolExecutor,
+        registry: crate::agent::tool_registry::ToolRegistry,
+        run_id: String,
+        task_id: i64,
+    }
+
+    /// A worker with a claimed, in-progress task and a persisted run, wired
+    /// through the real `ToolExecutor` for `workspace`.
+    #[cfg(windows)]
+    fn claimed_worker(workspace: &Path, worker: &str) -> ClaimedWorker {
+        let tasks = crate::db::tasks::TasksDb::open().expect("open isolated TasksDb");
+        let task = tasks
+            .create(crate::db::tasks::CreateTaskInput {
+                title: format!("attack test task for {worker}"),
+                description: None,
+                priority: "p2".into(),
+                task_type: "feature".into(),
+                acceptance_criteria: "the command path holds".into(),
+                created_by: Some("p4-56-attack-test".into()),
+            })
+            .expect("create task");
+        tasks
+            .update_status(task.id, "assigned", Some(worker))
+            .expect("assign task");
+        tasks
+            .claim_task_with_pid(task.id, worker, std::process::id())
+            .expect("claim task");
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let run_id = crate::db::runs::RunsDb::open()
+            .expect("open isolated RunsDb")
+            .begin_worker_tick(worker, &session_id)
+            .expect("persist a worker run");
+        let workspace_path = crate::platform::workspace::resolve_workspace_dir(Some(
+            workspace.to_str().expect("workspace path"),
+        ))
+        .expect("selected-workspace path")
+        .to_string_lossy()
+        .into_owned();
+        let mut executor = crate::agent::tool_executor::ToolExecutor::new(
+            crate::agent::permission::PermissionMode::Autonomous,
+            crate::agent::permission::new_pending_permissions(),
+            session_id,
+            workspace_path,
+            crate::agent::tool_trait::AgentIdentity::worker(worker),
+        )
+        .with_run_id(Some(run_id.clone()));
+        executor.set_task_id(Some(task.id));
+        let mut registry = crate::agent::tool_registry::ToolRegistry::new();
+        crate::agent::builtin_tools::register_for_mode(
+            &mut registry,
+            crate::agent::PAMode::FastDevelopment,
+        );
+        ClaimedWorker {
+            executor,
+            registry,
+            run_id,
+            task_id: task.id,
+        }
+    }
+
+    #[cfg(windows)]
+    impl ClaimedWorker {
+        async fn project_command(&mut self, call: &str, input: Value) -> ToolResult {
+            let mut results = self
+                .executor
+                .execute_batch(vec![(
+                    self.registry.get("project_command").expect("registered"),
+                    input,
+                    call.to_string(),
+                )])
+                .await
+                .expect("the executor returns the tool result");
+            results.pop().expect("one result").1
+        }
+    }
+
+    /// Run `probe.js` from a one-file npm project inside a claimed worker and
+    /// return the tool result plus what the probe reported from inside the
+    /// sandbox (`probe.json`).
+    #[cfg(windows)]
+    async fn run_sandbox_probe(probe_source: &str) -> (ToolResult, serde_json::Map<String, Value>) {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let parent = manifest_dir.join("target").join("p4-acl-tests");
+        std::fs::create_dir_all(&parent).expect("create repository-local ACL parent");
+        let sandbox = tempfile::Builder::new()
+            .prefix("p4-56-attack-")
+            .tempdir_in(&parent)
+            .expect("create attack workspace");
+        let project = sandbox.path().join("victim");
+        std::fs::create_dir_all(&project).expect("create project");
+        std::fs::write(
+            project.join("package.json"),
+            r#"{"name":"attack-probe","version":"1.0.0","private":true,"scripts":{"test":"node probe.js"}}"#,
+        )
+        .expect("write manifest");
+        std::fs::write(project.join("probe.js"), probe_source).expect("write probe");
+        let _lease = process_sandbox::retain_workspace(&project);
+        let mut worker = claimed_worker(&project, "worker-backend");
+        let result = worker
+            .project_command(
+                "attack-probe",
+                json!({"intent": "test", "toolchain": "npm"}),
+            )
+            .await;
+        let reported = std::fs::read_to_string(project.join("probe.json"))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        (result, reported)
+    }
+
+    /// A build is a process, so the process must be refused when the claim is
+    /// not the caller's: including when the model names someone else's task or
+    /// role in the arguments, and after the claim is lost.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn attack_task_theft_arguments_and_lost_claims_cannot_redirect_a_build() {
+        let profile = tempfile::tempdir().expect("isolated Arcana profile");
+        let _profile_guard = crate::db::test_support::with_home(profile.path());
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let parent = manifest_dir.join("target").join("p4-acl-tests");
+        std::fs::create_dir_all(&parent).expect("create repository-local ACL parent");
+        let sandbox = tempfile::Builder::new()
+            .prefix("p4-56-theft-")
+            .tempdir_in(&parent)
+            .expect("create theft workspace");
+        let project = sandbox.path().join("fx-repo-rust");
+        copy_fixture_tree(&manifest_dir.join("tests/fixtures/fx-repo-rust"), &project);
+        let _lease = process_sandbox::retain_workspace(&project);
+
+        // The victim: another worker's in-progress task.
+        let mut victim = claimed_worker(&project, "worker-frontend");
+        let mut attacker = claimed_worker(&project, "worker-backend");
+
+        // The attacker names the victim's task and claims to be the supervisor.
+        // None of that is an input of the tool: the batch must land on the
+        // attacker's own task or not at all.
+        let result = attacker
+            .project_command(
+                "theft-1",
+                json!({
+                    "intent": "build",
+                    "toolchain": "cargo",
+                    "task_id": victim.task_id,
+                    "agent_role": "supervisor",
+                    "agent_id": "worker-frontend",
+                    "run_id": victim.run_id,
+                }),
+            )
+            .await;
+        assert!(!result.is_error, "{}", result.output);
+        let tasks = crate::db::tasks::TasksDb::open().expect("open TasksDb");
+        assert_eq!(
+            tasks
+                .latest_project_build_batch_status(victim.task_id)
+                .expect("read the victim's batches"),
+            None,
+            "a build the attacker ran must not be recorded against the victim's task"
+        );
+        assert!(
+            tasks
+                .latest_project_build_batch_status(attacker.task_id)
+                .expect("read the attacker's batches")
+                .is_some(),
+            "the attacker's own build is recorded against the attacker's task"
+        );
+
+        // The claim is lost (the supervisor cancels the task): the next call is
+        // refused before a process starts and records nothing new.
+        let before = tasks
+            .latest_project_build_batch_status(attacker.task_id)
+            .expect("read batches before");
+        tasks
+            .update_status(attacker.task_id, "cancelled", None)
+            .expect("cancel the attacker's task");
+        let refused = attacker
+            .project_command("theft-2", json!({"intent": "build", "toolchain": "cargo"}))
+            .await;
+        assert!(refused.is_error);
+        assert!(
+            refused.output.contains("no longer owns"),
+            "a worker that lost its claim may not run commands: {}",
+            refused.output
+        );
+        assert_eq!(
+            tasks
+                .latest_project_build_batch_status(attacker.task_id)
+                .expect("read batches after"),
+            before,
+            "a refused call must not add a build batch"
+        );
+        // The victim's own claim is untouched by any of this.
+        let victim_result = victim
+            .project_command("theft-3", json!({"intent": "build", "toolchain": "cargo"}))
+            .await;
+        assert!(!victim_result.is_error, "{}", victim_result.output);
+    }
+
+    /// `project_path` is the only path the model supplies. Every spelling that
+    /// leaves the workspace must be refused before a process starts.
+    #[tokio::test]
+    async fn attack_project_path_cannot_leave_the_workspace() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let outer = tempfile::tempdir().expect("outer directory");
+        let workspace = outer.path().join("workspace");
+        let outside = outer.path().join("outside");
+        for directory in [&workspace, &outside] {
+            std::fs::create_dir_all(directory).expect("create directory");
+            std::fs::write(
+                directory.join("package.json"),
+                r#"{"name":"p","version":"1.0.0","scripts":{"test":"node sentinel.js"}}"#,
+            )
+            .expect("write manifest");
+            std::fs::write(
+                directory.join("sentinel.js"),
+                "require('fs').writeFileSync('ran.txt', 'ran');",
+            )
+            .expect("write sentinel");
+        }
+        let mut spellings = vec![
+            "..".to_string(),
+            "../outside".to_string(),
+            "..\\outside".to_string(),
+            "./../outside".to_string(),
+            "missing".to_string(),
+            outside.to_string_lossy().into_owned(),
+            format!("{}/", outside.display()),
+        ];
+        #[cfg(windows)]
+        {
+            let link = workspace.join("escape");
+            let made = std::process::Command::new("cmd")
+                .args(["/d", "/c", "mklink", "/J"])
+                .arg(&link)
+                .arg(&outside)
+                .output()
+                .expect("run mklink");
+            assert!(made.status.success(), "junction fixture was not created");
+            spellings.push("escape".into());
+            spellings.push("escape/".into());
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, workspace.join("escape")).expect("symlink");
+            spellings.push("escape".into());
+        }
+
+        let mut supervisor = claim_boundary_context(&workspace, None);
+        supervisor.agent_role = "supervisor".into();
+        for spelling in spellings {
+            let result = ProjectCommandTool
+                .execute(
+                    json!({"intent": "test", "toolchain": "npm", "project_path": spelling}),
+                    &supervisor,
+                )
+                .await;
+            assert!(
+                result.is_error,
+                "project_path {spelling:?} must be refused: {}",
+                result.output
+            );
+            assert!(
+                !outside.join("ran.txt").exists() && !workspace.join("ran.txt").exists(),
+                "project_path {spelling:?} started a process"
+            );
+        }
+    }
+
+    /// A project the model can edit is hostile code once it runs. Inside the
+    /// sandbox it must not read or write outside its workspace, must not reach
+    /// the network, and must not see the host's secrets in its environment.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn attack_sandboxed_command_cannot_escape_read_write_network_or_env() {
+        let profile = tempfile::tempdir().expect("isolated Arcana profile");
+        let _profile_guard = crate::db::test_support::with_home(profile.path());
+        let outside = tempfile::tempdir().expect("directory outside the workspace");
+        let canary = outside.path().join("canary.txt");
+        std::fs::write(&canary, "HOST_FILE_CANARY").expect("write canary");
+        let planted = outside.path().join("planted.txt");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind listener");
+        listener
+            .set_nonblocking(true)
+            .expect("non-blocking listener");
+        let port = listener.local_addr().expect("listener address").port();
+        // Host secrets that must never reach a build child.
+        let secrets = [
+            ("ARCANA_ATTACK_SECRET_CANARY", "SECRET_ENV_CANARY"),
+            ("GOOGLE_API_KEY", "AIza-attack-canary"),
+            ("ANTHROPIC_API_KEY", "sk-ant-attack-canary"),
+            ("OPENAI_API_KEY", "sk-attack-canary"),
+        ];
+        let previous = secrets
+            .iter()
+            .map(|(name, _)| (*name, std::env::var_os(name)))
+            .collect::<Vec<_>>();
+        for (name, value) in secrets {
+            std::env::set_var(name, value);
+        }
+        let probe = format!(
+            r#"
+const fs = require('fs');
+const net = require('net');
+const out = {{}};
+let finished = false;
+function attempt(name, fn) {{
+  try {{ out[name] = 'ALLOWED:' + String(fn()).slice(0, 40); }}
+  catch (error) {{ out[name] = 'DENIED:' + (error.code || error.message); }}
+}}
+attempt('read_outside', () => fs.readFileSync({canary:?}, 'utf8'));
+attempt('write_outside', () => fs.writeFileSync({planted:?}, 'planted'));
+attempt('list_outside', () => fs.readdirSync({outside:?}).length);
+attempt('list_parent', () => fs.readdirSync('..').length);
+out.env = Object.keys(process.env).filter((key) => /CANARY|API_KEY|SECRET|TOKEN/i.test(key));
+out.env_values = Object.values(process.env).filter((value) => /CANARY|attack-canary/i.test(value));
+function finish() {{
+  if (finished) return;
+  finished = true;
+  fs.writeFileSync('probe.json', JSON.stringify(out));
+  process.exit(0);
+}}
+const socket = net.connect({{ host: '127.0.0.1', port: {port} }});
+socket.on('connect', () => {{ out.network = 'CONNECTED'; finish(); }});
+socket.on('error', (error) => {{ out.network = 'DENIED:' + (error.code || error.message); finish(); }});
+setTimeout(() => {{ out.network = out.network || 'TIMEOUT'; finish(); }}, 8000);
+"#,
+            canary = canary.to_string_lossy(),
+            planted = planted.to_string_lossy(),
+            outside = outside.path().to_string_lossy(),
+            port = port,
+        );
+        let (result, reported) = run_sandbox_probe(&probe).await;
+        for (name, value) in previous {
+            match value {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+
+        assert!(
+            !reported.is_empty(),
+            "the probe did not report from inside the sandbox: {}",
+            result.output
+        );
+        let said = |key: &str| reported[key].as_str().unwrap_or("<missing>").to_string();
+        assert!(said("read_outside").starts_with("DENIED"), "{reported:?}");
+        assert!(said("write_outside").starts_with("DENIED"), "{reported:?}");
+        assert!(!planted.exists(), "the child wrote outside its workspace");
+        assert!(said("list_outside").starts_with("DENIED"), "{reported:?}");
+        assert!(said("list_parent").starts_with("DENIED"), "{reported:?}");
+        assert!(said("network").starts_with("DENIED"), "{reported:?}");
+        assert!(
+            listener.accept().is_err(),
+            "the child connected to a host loopback listener"
+        );
+        assert_eq!(reported["env"], json!([]), "secret-named variables leaked");
+        assert_eq!(reported["env_values"], json!([]), "secret values leaked");
+        for needle in ["HOST_FILE_CANARY", "SECRET_ENV_CANARY", "attack-canary"] {
+            assert!(
+                !result.output.contains(needle),
+                "{needle} reached the tool result: {}",
+                result.output
+            );
+        }
+    }
+
+    /// What a command prints comes back to the model. Secrets in it must not,
+    /// and a failing command returns a bounded envelope.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn attack_command_output_does_not_return_secrets_to_the_model() {
+        let profile = tempfile::tempdir().expect("isolated Arcana profile");
+        let _profile_guard = crate::db::test_support::with_home(profile.path());
+        let fake_key = format!("sk-{}", "Ab1".repeat(14));
+        let fake_bearer = format!("Bearer {}", "xyZ9".repeat(8));
+        let fake_card = "4111 1111 1111 1111";
+        let probe = format!(
+            r#"
+require('fs').writeFileSync('probe.json', JSON.stringify({{ ran: true }}));
+for (const line of [{fake_key:?}, {fake_bearer:?}, {fake_card:?}, 'api_key=hunter2hunter2hunter2']) {{
+  console.log('OUT ' + line);
+  console.error('ERR ' + line);
+}}
+process.exit(1);
+"#
+        );
+        let (result, reported) = run_sandbox_probe(&probe).await;
+        assert_eq!(
+            reported.get("ran"),
+            Some(&json!(true)),
+            "the probe must have run and printed its secrets: {}",
+            result.output
+        );
+        assert!(result.is_error, "the probe exits 1: {}", result.output);
+        assert!(result.output.len() <= 8_192, "the envelope is bounded");
+        for secret in [
+            fake_key.as_str(),
+            "xyZ9xyZ9xyZ9xyZ9xyZ9xyZ9xyZ9xyZ9",
+            fake_card,
+            "hunter2hunter2hunter2",
+        ] {
+            assert!(
+                !result.output.contains(secret),
+                "a secret printed by the command reached the model: {}",
+                result.output
+            );
+        }
+    }
 }
