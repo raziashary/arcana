@@ -799,17 +799,33 @@ fn verify_authenticode(path: &Path) -> io::Result<()> {
 }
 
 fn resolve_stdlib_root(source_root: &Path, major: u8, minor: u8) -> io::Result<PathBuf> {
+    resolve_stdlib_root_with(source_root, || {
+        let local_app_data = std::env::var_os("LOCALAPPDATA")
+            .ok_or_else(|| permission_error("selected Python Lib resolves outside its prefix"))?;
+        PathBuf::from(local_app_data)
+            .join("Programs")
+            .join("Python")
+            .join(format!("Python{major}{minor}"))
+            .join("Lib")
+            .canonicalize()
+    })
+}
+
+/// `user_owned_lib` is asked for only when `Lib` resolves outside the prefix.
+/// A machine without a per-user Python install (a CI runner's tool cache, a
+/// system-wide install) has no such directory, and a `Lib` inside its own
+/// prefix must not depend on it.
+fn resolve_stdlib_root_with(
+    source_root: &Path,
+    user_owned_lib: impl FnOnce() -> io::Result<PathBuf>,
+) -> io::Result<PathBuf> {
     let expected = source_root.join("Lib").canonicalize()?;
+    if expected.starts_with(source_root) {
+        return Ok(expected);
+    }
     // Some Windows Python distributions expose Lib through a junction into
     // the per-user install tree. Accept that exact versioned target only.
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
-        .ok_or_else(|| permission_error("selected Python Lib resolves outside its prefix"))?;
-    let user_owned_lib = PathBuf::from(local_app_data)
-        .join("Programs")
-        .join("Python")
-        .join(format!("Python{major}{minor}"))
-        .join("Lib")
-        .canonicalize()?;
+    let user_owned_lib = user_owned_lib()?;
     validate_stdlib_target(source_root, &expected, &user_owned_lib)?;
     Ok(expected)
 }
@@ -1238,6 +1254,20 @@ with zipfile.ZipFile(sys.argv[1], 'w') as archive:
         );
         assert!(validate_stdlib_target(&source_root, &approved_lib, &approved_lib).is_ok());
         assert!(validate_stdlib_target(&source_root, &unrelated, &approved_lib).is_err());
+    }
+
+    #[test]
+    fn a_lib_inside_the_prefix_needs_no_per_user_python_install() {
+        let fixture = tempfile::tempdir().expect("runtime paths fixture");
+        let source_root = fixture.path().join("toolcache-python");
+        std::fs::create_dir_all(source_root.join("Lib")).expect("prefix Lib");
+        let source_root = source_root.canonicalize().expect("canonical prefix");
+
+        let resolved = resolve_stdlib_root_with(&source_root, || {
+            panic!("the per-user install must not be consulted for a Lib inside the prefix")
+        })
+        .expect("Lib inside the prefix resolves");
+        assert_eq!(resolved, source_root.join("Lib"));
     }
 
     #[test]
