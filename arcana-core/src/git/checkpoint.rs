@@ -696,6 +696,11 @@ mod task_association_tests {
         // before the existing per-file/per-owner retention cap can evict it.
         let mut duplicate_occurrences = BTreeMap::<i64, i64>::new();
         let mut expected_retained = BTreeMap::<i64, Vec<(i64, String)>>::new();
+        // The writer stores the path the workspace jail resolved, which can be
+        // spelled differently from the temp directory's (macOS `/var` is
+        // `/private/var`; a hosted Windows runner's profile has an 8.3 short
+        // name), and `list` matches that stored text exactly.
+        let mut stored_path = String::new();
         for instant in instants {
             let _clock = crate::db::test_clock::at(instant);
             let created_ms = instant.timestamp_millis();
@@ -713,6 +718,15 @@ mod task_association_tests {
             .expect("existing workspace file is snapshotted");
             assert_eq!(checkpoint.created_ms, created_ms);
             assert_eq!(checkpoint.task_id, Some(scope));
+            if stored_path.is_empty() {
+                stored_path = checkpoint.file_path.clone();
+                assert_eq!(
+                    Path::new(&stored_path).canonicalize().expect("stored path"),
+                    file.canonicalize().expect("seeded file"),
+                    "the stored path must name the seeded file"
+                );
+            }
+            assert_eq!(checkpoint.file_path, stored_path);
 
             let scope_retained = expected_retained.entry(scope).or_default();
             assert!(
@@ -728,7 +742,7 @@ mod task_association_tests {
 
             // list() opens config.db independently and must expose exactly the
             // production-retained rows in created_ms order after each write.
-            let listed = list(Some(&file_path), Some(session_id), Some(scope))
+            let listed = list(Some(&stored_path), Some(session_id), Some(scope))
                 .expect("read through production checkpoint list");
             assert!(
                 listed.iter().any(|entry| entry.id == checkpoint.id),
@@ -747,7 +761,7 @@ mod task_association_tests {
                     .collect::<Vec<_>>(),
                 "production list mismatch after writing {created_ms}"
             );
-            assert!(listed.iter().all(|entry| entry.file_path == file_path));
+            assert!(listed.iter().all(|entry| entry.file_path == stored_path));
             assert!(listed.iter().all(|entry| entry.task_id == Some(scope)));
         }
 
@@ -755,7 +769,7 @@ mod task_association_tests {
         // writer clocks have been dropped. Each ownership scope retains at
         // most 50 rows; this does not claim all 4,400 remain retained.
         for (scope, expected) in expected_retained {
-            let reopened = list(Some(&file_path), Some(session_id), Some(scope))
+            let reopened = list(Some(&stored_path), Some(session_id), Some(scope))
                 .expect("read retained checkpoints after writer connections closed");
             assert_eq!(reopened.len(), expected.len());
             assert_eq!(
