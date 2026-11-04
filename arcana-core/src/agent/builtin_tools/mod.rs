@@ -33,6 +33,7 @@ pub mod write_interface_spec;
 // curls an endpoint, looks for fingerprint text in the rendered page.
 pub mod append_file;
 pub mod check_file;
+pub mod dependency_staging;
 pub mod e2e_probe;
 pub mod external_mcp;
 pub mod get_memory;

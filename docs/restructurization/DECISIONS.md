@@ -79,3 +79,21 @@ Razi confirmed (2026-11-03) that staged dependencies live in a **host-owned cach
 reads through a read-only grant (a sandbox contract change). An independent audit of the first design (Haiku 5.5 High) found that a
 cache inside the workspace would let the sandboxed build plant a config file that the next host staging run reads. Still open:
 whether the approval shows and binds the package list and lockfile digest, and which toolchain comes first.
+
+Razi also ruled the approval **binds to the lockfile digest** and that **Cargo comes first, then npm**. Cargo is built
+(`arcana-core/src/agent/builtin_tools/dependency_staging.rs`). A first `project_command install cargo` call reads the project
+and returns the plan and a digest; the second call pins that digest (`plan_sha256`), shows the package list in the approval
+(new `Tool::approval_details` hook) and is refused if anything it covers changed. The digest covers the `Cargo.lock` cargo
+actually uses (the enclosing workspace's, not the nearest) and every `Cargo.toml` reachable through workspace members and path
+dependencies. Staging refuses: non-crates.io sources or missing checksums; a `.cargo/config*` or `rust-toolchain*` file on the
+path; links and junctions (including `..` after one); paths outside the workspace; a project excluded from, or not listed in,
+its workspace; workspace patterns it cannot expand; and odd package names. The host `cargo fetch --locked` runs with a rebuilt
+environment into a scratch directory that is renamed to `~/.arcana/dependency-cache/cargo/<digest>/` only after the files are
+re-checked; sandboxed builds get `.../home` read-only with `CARGO_NET_OFFLINE=true`, and the sandbox accepts a read-only grant
+only at exactly that shape. Proof: an ignored live test (`staged_cargo_dependencies_build_offline_inside_the_sandbox`) shows a
+fresh project with a crates.io dependency fails to build in the sandbox until staged and then builds offline, and a hostile
+`build.rs` cannot write into the cache. Two independent security reviews (Haiku 5.5 High) found a lockfile-binding bypass and
+unbound manifests; both are fixed. **Accepted residuals:** a file swapped and restored during one fetch is not caught (the
+second digest check only sees the end state; it needs a concurrent writer, and tool writes are serialised); the approval shows a
+`Cargo.toml` count, not their paths; only `cargo` itself is killed on timeout; build evidence does not fingerprint the cache.
+npm is next.

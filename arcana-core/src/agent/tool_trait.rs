@@ -973,6 +973,15 @@ pub trait Tool: Send + Sync {
         self.effect()
     }
 
+    /// Facts the approval dialog must show so the user consents to the exact
+    /// content the call will act on, not just to its name. `working_dir` is the
+    /// session workspace. A tool that returns details must verify at execution
+    /// that the content still matches what the input pinned (for example a
+    /// digest), because other calls in the same batch run after approval.
+    fn approval_details(&self, _input: &serde_json::Value, _working_dir: &str) -> Option<String> {
+        None
+    }
+
     /// Whether this tool may run **concurrently** with others.
     ///
     /// ⚠ This is a **concurrency hint for the path lock and nothing else**. It

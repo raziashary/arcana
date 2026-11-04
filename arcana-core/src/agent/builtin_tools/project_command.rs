@@ -11,6 +11,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::build_evidence::BuildEvidenceKind;
+use super::dependency_staging;
 use super::path_jail::validate_workspace_path;
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::platform::command::{self, CommandIntent, Toolchain};
@@ -197,10 +198,43 @@ impl Tool for ProjectCommandTool {
 
     fn effect_for_input(&self, input: &Value) -> crate::agent::tool_effect::ToolEffect {
         if input["intent"].as_str() == Some("install") {
-            crate::agent::tool_effect::ToolEffect::HostApproval
+            // The first Cargo staging call only reads Cargo.lock and returns the
+            // plan and digest. The call that pins that digest is what fetches.
+            if is_cargo_staging_plan_request(input) {
+                self.effect()
+            } else {
+                crate::agent::tool_effect::ToolEffect::HostApproval
+            }
         } else {
             self.effect()
         }
+    }
+
+    fn approval_details(&self, input: &Value, working_dir: &str) -> Option<String> {
+        if input["intent"].as_str() != Some("install")
+            || input["toolchain"].as_str() != Some("cargo")
+        {
+            return None;
+        }
+        let planned = (|| {
+            let workspace_root = validate_workspace_path(Path::new(working_dir), working_dir)?;
+            let project_dir =
+                resolve_project_directory(&workspace_root, input["project_path"].as_str())?;
+            dependency_staging::plan_cargo(&workspace_root, &project_dir)
+        })();
+        Some(match planned {
+            Ok(plan) => {
+                match input["plan_sha256"].as_str() {
+                    Some(pinned) if pinned.eq_ignore_ascii_case(&plan.digest) => plan.summary(),
+                    Some(_) => format!(
+                        "The call pins a plan digest that no longer matches the project files (now {}); it will be refused.",
+                        plan.digest
+                    ),
+                    None => plan.summary(),
+                }
+            }
+            Err(reason) => format!("This staging will be refused: {reason}"),
+        })
     }
 
     fn name(&self) -> &str {
@@ -208,7 +242,7 @@ impl Tool for ProjectCommandTool {
     }
 
     fn description(&self) -> &str {
-        "Run an explicit install, build, test, lint, or run intent. Rust discovers supported projects under the selected workspace, detects package managers, and constructs fixed argv. An optional toolchain selector runs every detected project for that ecosystem; without it, each detected project runs separately. Project dependency installs remain fail-closed until locked staging is available. The only current host-tool install is `intent=install`, `toolchain=python`, `package=ruff`, which requires per-call approval and stages a pinned Ruff binary in Arcana's runtime cache."
+        "Run an explicit install, build, test, lint, or run intent. Rust discovers supported projects under the selected workspace, detects package managers, and constructs fixed argv. An optional toolchain selector runs every detected project for that ecosystem; without it, each detected project runs separately. Dependency installs are fail-closed except Cargo: `intent=install`, `toolchain=cargo` first returns the plan and the Cargo.lock digest, then fetches only that exact lockfile's crates.io packages after the user approves the digest-pinned call; build scripts do not run and later builds read the packages offline. Other ecosystems stay refused. The only host-tool install is `intent=install`, `toolchain=python`, `package=ruff`, which requires per-call approval and stages a pinned Ruff binary in Arcana's runtime cache."
     }
 
     fn input_schema(&self) -> Value {
@@ -224,6 +258,10 @@ impl Tool for ProjectCommandTool {
                     "type": "string",
                     "enum": ["cargo", "go", "npm", "pnpm", "yarn", "bun", "python", "make"],
                     "description": "Optional validated selector for an ecosystem. Every detected project for that ecosystem runs; without it, each detected project runs separately."
+                },
+                "plan_sha256": {
+                    "type": "string",
+                    "description": "Only used with install + cargo. Call install + cargo first without it to read the plan and its digest, then repeat the call with that digest; the user approves the exact packages and the call is refused if Cargo.lock or any Cargo.toml it covers has changed."
                 },
                 "package": {
                     "type": "string",
@@ -275,6 +313,9 @@ impl Tool for ProjectCommandTool {
                 return ToolResult::error(message);
             }
             return install_pinned_ruff_for_host().await;
+        }
+        if intent == CommandIntent::Install && input["toolchain"].as_str() == Some("cargo") {
+            return stage_cargo_dependencies(&input, ctx).await;
         }
         if intent == CommandIntent::Install {
             tracing::warn!(
@@ -857,6 +898,137 @@ impl Tool for ProjectCommandTool {
     }
 }
 
+fn is_cargo_staging_plan_request(input: &Value) -> bool {
+    input["toolchain"].as_str() == Some("cargo") && input["plan_sha256"].as_str().is_none()
+}
+
+/// Stage a Cargo project's locked dependencies into Arcana's host cache.
+///
+/// Two calls: the first (no digest) reads `Cargo.lock` and reports the plan;
+/// the second pins that digest, is approved by the user, and is refused if the
+/// lockfile has changed since.
+async fn stage_cargo_dependencies(input: &Value, ctx: &ToolContext) -> ToolResult {
+    let refuse = |reason: &str| {
+        tracing::warn!(
+            target: "arcana::telemetry",
+            event_type = "dependency_staging_result",
+            toolchain = "cargo",
+            tool_call_id = %ctx.call_id,
+            task_id = %crate::observability::timing::correlation_task_id(ctx.task_id),
+            outcome = "refused",
+            "dependency staging refused"
+        );
+        ToolResult::categorized_error(
+            "dependency_staging_refused",
+            "dependency",
+            reason.to_string(),
+            "Do not retry with Bash or give build children network access. Fix the named cause, or ask the user to stage the dependencies.",
+        )
+    };
+    let workspace_root =
+        match validate_workspace_path(Path::new(&ctx.working_dir), &ctx.working_dir) {
+            Ok(path) => path,
+            Err(error) => return ToolResult::error(error),
+        };
+    let project_dir =
+        match resolve_project_directory(&workspace_root, input["project_path"].as_str()) {
+            Ok(path) => path,
+            Err(error) => return ToolResult::error(error),
+        };
+    let plan = match dependency_staging::plan_cargo(&workspace_root, &project_dir) {
+        Ok(plan) => plan,
+        Err(reason) => return refuse(&reason),
+    };
+    let Some(pinned) = input["plan_sha256"].as_str() else {
+        return ToolResult::success(format!(
+            "{} To stage them, call project_command again with intent=install, toolchain=cargo and plan_sha256=\"{}\"; the user is asked to approve that call.",
+            plan.summary(),
+            plan.digest
+        ));
+    };
+    if !pinned.eq_ignore_ascii_case(&plan.digest) {
+        return refuse(&format!(
+            "The project files now hash to plan sha256 {}, not the {pinned} the call pinned. Read the plan again and have the user approve the current files.",
+            plan.digest
+        ));
+    }
+    if let Err(message) = ctx.require_current_task_claim() {
+        return ToolResult::error(message);
+    }
+    #[cfg(windows)]
+    {
+        let resolved = command::resolve(Toolchain::Cargo, CommandIntent::Install)
+            .expect("cargo install intent resolves");
+        let tools =
+            match resolve_rustup_cargo_tools(&resolved, &project_dir) {
+                Ok(Some(tools)) => tools,
+                Ok(None) => return refuse(
+                    "Cargo staging needs a rustup-managed toolchain; rustup was not found on PATH.",
+                ),
+                Err(error) => return refuse(&error.to_string()),
+            };
+        let started = std::time::Instant::now();
+        let outcome = dependency_staging::stage_cargo(
+            &plan,
+            &workspace_root,
+            &tools.cargo,
+            &tools.toolchain_dir,
+            Duration::from_secs(bounded_timeout_secs(input["timeout_secs"].as_u64())),
+        )
+        .await;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        return match outcome {
+            Ok(report) => {
+                tracing::info!(
+                    target: "arcana::telemetry",
+                    event_type = "dependency_staging_result",
+                    toolchain = "cargo",
+                    tool_call_id = %ctx.call_id,
+                    task_id = %crate::observability::timing::correlation_task_id(ctx.task_id),
+                    package_count = report.package_count as u64,
+                    already_staged = report.already_staged,
+                    elapsed_ms,
+                    outcome = "staged",
+                    "dependency staging finished"
+                );
+                ToolResult::success(format!(
+                    "Staged {} crates.io package(s) for plan sha256 {}{}. Build, test and lint now read them offline; build scripts were not run during staging.",
+                    report.package_count,
+                    plan.digest,
+                    if report.already_staged {
+                        " (already staged)"
+                    } else {
+                        ""
+                    }
+                ))
+            }
+            Err(reason) => {
+                tracing::warn!(
+                    target: "arcana::telemetry",
+                    event_type = "dependency_staging_result",
+                    toolchain = "cargo",
+                    tool_call_id = %ctx.call_id,
+                    task_id = %crate::observability::timing::correlation_task_id(ctx.task_id),
+                    elapsed_ms,
+                    outcome = "failed",
+                    "dependency staging failed"
+                );
+                ToolResult::categorized_error(
+                    "dependency_staging_failed",
+                    "dependency",
+                    reason,
+                    "Check host network access, then retry the same pinned call once. Do not run cargo through Bash.",
+                )
+            }
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = plan;
+        refuse("Dependency staging is available on Windows only in v1.")
+    }
+}
+
 async fn install_pinned_ruff_for_host() -> ToolResult {
     #[cfg(windows)]
     {
@@ -1362,6 +1534,18 @@ async fn run_resolved_command_inner(
     #[cfg(windows)]
     if let Some(root) = shim_runtime {
         read_only_paths.push(root);
+    }
+    // A Cargo project whose lockfile was staged builds from the host cache,
+    // read-only and offline. Without a matching stage nothing changes.
+    #[cfg(windows)]
+    if resolved.program.eq_ignore_ascii_case("cargo") {
+        if let Some(home) =
+            super::dependency_staging::staged_cargo_home(workspace_root, project_dir)
+        {
+            env_set.push((OsString::from("CARGO_HOME"), home.clone().into_os_string()));
+            env_set.push((OsString::from("CARGO_NET_OFFLINE"), OsString::from("true")));
+            read_only_paths.push(home);
+        }
     }
     env_set.extend(additional_env.iter().cloned());
     let process = ProcessSpec {
@@ -4688,6 +4872,259 @@ fn main() {
     // detection but before any batch row, sandbox admission or child spawn —
     // so a worker that does not own an in-progress task can neither build nor
     // leave build evidence behind.
+
+    // ── Cargo dependency staging (D-008) ─────────────────────────────────────
+
+    const STAGING_CHECKSUM: &str =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn write_registry_lock_fixture(workspace: &std::path::Path) -> String {
+        std::fs::create_dir_all(workspace.join("src")).expect("create source tree");
+        std::fs::write(
+            workspace.join("Cargo.toml"),
+            "[package]\nname = \"staging-demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nitoa = \"=1.0.11\"\n\n[workspace]\n",
+        )
+        .expect("write manifest");
+        std::fs::write(workspace.join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n")
+            .expect("write source");
+        let lock = format!(
+            "version = 4\n\n[[package]]\nname = \"itoa\"\nversion = \"1.0.11\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{STAGING_CHECKSUM}\"\n\n[[package]]\nname = \"staging-demo\"\nversion = \"0.1.0\"\ndependencies = [\"itoa\"]\n"
+        );
+        std::fs::write(workspace.join("Cargo.lock"), &lock).expect("write lockfile");
+        super::dependency_staging::plan_cargo(workspace, workspace)
+            .expect("fixture plan")
+            .digest
+    }
+
+    fn staging_input(digest: Option<&str>) -> Value {
+        match digest {
+            Some(digest) => {
+                json!({"intent": "install", "toolchain": "cargo", "plan_sha256": digest})
+            }
+            None => json!({"intent": "install", "toolchain": "cargo"}),
+        }
+    }
+
+    #[test]
+    fn cargo_staging_plan_needs_no_approval_but_the_pinned_call_does() {
+        assert_eq!(
+            ProjectCommandTool.effect_for_input(&staging_input(None)),
+            crate::agent::tool_effect::ToolEffect::Execute,
+            "reading the plan starts no process and fetches nothing"
+        );
+        assert_eq!(
+            ProjectCommandTool.effect_for_input(&staging_input(Some("ab"))),
+            crate::agent::tool_effect::ToolEffect::HostApproval
+        );
+        for toolchain in ["npm", "pnpm", "yarn", "bun", "go"] {
+            assert_eq!(
+                ProjectCommandTool
+                    .effect_for_input(&json!({"intent": "install", "toolchain": toolchain})),
+                crate::agent::tool_effect::ToolEffect::HostApproval,
+                "{toolchain} install stays an approval call"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cargo_staging_plan_reports_the_digest_and_fetches_nothing() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("workspace");
+        let digest = write_registry_lock_fixture(workspace.path());
+
+        let result = ProjectCommandTool
+            .execute(
+                staging_input(None),
+                &claim_boundary_context(workspace.path(), None),
+            )
+            .await;
+        assert!(!result.is_error, "{}", result.output);
+        assert!(result.output.contains(&digest), "{}", result.output);
+        assert!(result.output.contains("itoa 1.0.11"), "{}", result.output);
+        assert!(
+            !crate::db::arcana_dir()
+                .unwrap()
+                .join(super::dependency_staging::DEPENDENCY_CACHE_DIR)
+                .exists(),
+            "planning must not create the cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn cargo_staging_refuses_a_digest_that_no_longer_matches_before_any_effect() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("workspace");
+        let approved = write_registry_lock_fixture(workspace.path());
+        // The agent edits the lockfile after the user approved its digest.
+        let mut lock = std::fs::read_to_string(workspace.path().join("Cargo.lock")).unwrap();
+        lock.push_str("# edited after approval\n");
+        std::fs::write(workspace.path().join("Cargo.lock"), lock).unwrap();
+
+        let result = ProjectCommandTool
+            .execute(
+                staging_input(Some(&approved)),
+                &claim_boundary_context(workspace.path(), None),
+            )
+            .await;
+        let envelope: Value = serde_json::from_str(&result.output).expect("structured refusal");
+        assert!(result.is_error);
+        assert_eq!(envelope["error"]["code"], "dependency_staging_refused");
+        assert!(
+            !crate::db::arcana_dir()
+                .unwrap()
+                .join(super::dependency_staging::DEPENDENCY_CACHE_DIR)
+                .exists(),
+            "a refused call must not create the cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn cargo_staging_refuses_non_registry_sources_and_redirecting_config() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+
+        let git = tempfile::tempdir().expect("workspace");
+        write_registry_lock_fixture(git.path());
+        std::fs::write(
+            git.path().join("Cargo.lock"),
+            "version = 4\n\n[[package]]\nname = \"evil\"\nversion = \"1.0.0\"\nsource = \"git+https://example.com/evil#abc\"\n",
+        )
+        .unwrap();
+        let redirected = tempfile::tempdir().expect("workspace");
+        write_registry_lock_fixture(redirected.path());
+        std::fs::create_dir_all(redirected.path().join(".cargo")).unwrap();
+        std::fs::write(
+            redirected.path().join(".cargo/config.toml"),
+            "[build]\nrustc-wrapper = \"x\"\n",
+        )
+        .unwrap();
+
+        for (workspace, expected) in [
+            (git.path(), "not crates.io"),
+            (redirected.path(), "can redirect the host cargo"),
+        ] {
+            let result = ProjectCommandTool
+                .execute(
+                    staging_input(None),
+                    &claim_boundary_context(workspace, None),
+                )
+                .await;
+            let envelope: Value = serde_json::from_str(&result.output).expect("structured refusal");
+            assert!(result.is_error, "{}", result.output);
+            assert_eq!(envelope["error"]["code"], "dependency_staging_refused");
+            assert!(result.output.contains(expected), "{}", result.output);
+        }
+    }
+
+    #[test]
+    fn cargo_approval_names_the_packages_and_flags_a_stale_digest() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("workspace");
+        let digest = write_registry_lock_fixture(workspace.path());
+        let dir = workspace.path().to_string_lossy().into_owned();
+
+        let shown = ProjectCommandTool
+            .approval_details(&staging_input(Some(&digest)), &dir)
+            .expect("details for a cargo install");
+        assert!(
+            shown.contains(&digest) && shown.contains("itoa 1.0.11"),
+            "{shown}"
+        );
+
+        let stale = ProjectCommandTool
+            .approval_details(&staging_input(Some("deadbeef")), &dir)
+            .expect("details for a stale digest");
+        assert!(stale.contains("will be refused"), "{stale}");
+
+        assert!(ProjectCommandTool
+            .approval_details(&json!({"intent": "build"}), &dir)
+            .is_none());
+    }
+
+    /// The real thing, on a machine with network: a fresh Cargo project with a
+    /// crates.io dependency cannot build in the sandbox until it is staged, and
+    /// builds offline afterwards. Run with `-- --ignored`.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "needs network and rustup: fetches itoa from crates.io"]
+    async fn staged_cargo_dependencies_build_offline_inside_the_sandbox() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("workspace");
+        let root = workspace.path().canonicalize().unwrap();
+        write_registry_lock_fixture(&root);
+        std::fs::remove_file(root.join("Cargo.lock")).unwrap();
+        // A hostile build script: it passes only if the sandbox keeps the
+        // staged cache read-only, so it cannot plant a config the host reads.
+        std::fs::write(
+            root.join("build.rs"),
+            "fn main() {
+    let Ok(home) = std::env::var(\"CARGO_HOME\") else { return };
+    let planted = std::path::Path::new(&home).join(\"config.toml\");
+    if std::fs::write(&planted, \"[build]\nrustc-wrapper = \\\"evil\\\"\n\").is_ok() {
+        panic!(\"the staged dependency cache is writable from the sandbox\");
+    }
+}
+",
+        )
+        .unwrap();
+        // The user (not the agent) pins the dependency set.
+        let generated = std::process::Command::new("cargo")
+            .args(["generate-lockfile"])
+            .current_dir(&root)
+            .output()
+            .expect("cargo generate-lockfile");
+        assert!(
+            generated.status.success(),
+            "{}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let mut context = claim_boundary_context(&root, None);
+        context.agent_role = "supervisor".into();
+
+        let before = ProjectCommandTool
+            .execute(json!({"intent": "test", "toolchain": "cargo"}), &context)
+            .await;
+        assert!(
+            before.is_error,
+            "an unstaged test run with a dependency must fail: {}",
+            before.output
+        );
+
+        let lock_before = std::fs::read(root.join("Cargo.lock")).unwrap();
+        let plan = ProjectCommandTool
+            .execute(staging_input(None), &context)
+            .await;
+        assert!(!plan.is_error, "{}", plan.output);
+        let digest = plan
+            .output
+            .split("plan_sha256=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("plan names the digest")
+            .to_string();
+        let staged = ProjectCommandTool
+            .execute(staging_input(Some(&digest)), &context)
+            .await;
+        assert!(!staged.is_error, "{}", staged.output);
+        let lock_after = std::fs::read(root.join("Cargo.lock")).unwrap();
+        assert_eq!(
+            lock_after, lock_before,
+            "staging must not rewrite Cargo.lock"
+        );
+
+        let after = ProjectCommandTool
+            .execute(json!({"intent": "test", "toolchain": "cargo"}), &context)
+            .await;
+        assert!(
+            !after.is_error,
+            "a staged test run must pass offline in the sandbox: {}",
+            after.output
+        );
+    }
 
     fn write_claim_boundary_cargo_fixture(workspace: &std::path::Path) {
         std::fs::create_dir_all(workspace.join("src")).expect("create cargo source tree");

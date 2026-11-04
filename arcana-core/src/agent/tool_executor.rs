@@ -1461,11 +1461,18 @@ impl ToolExecutor {
             call_id: call_id.to_string(),
             tool_name: tool.name().to_string(),
             input: input.clone(),
-            description: format!(
-                "{} — {}",
-                tool.effect_for_input(input).describe(),
-                tool.description()
-            ),
+            description: match tool.approval_details(input, &self.working_dir) {
+                Some(details) => format!(
+                    "{} — {}\n\n{details}",
+                    tool.effect_for_input(input).describe(),
+                    tool.description()
+                ),
+                None => format!(
+                    "{} — {}",
+                    tool.effect_for_input(input).describe(),
+                    tool.description()
+                ),
+            },
             allow_always: tool.effect_for_input(input).supports_standing_allow(),
         });
 

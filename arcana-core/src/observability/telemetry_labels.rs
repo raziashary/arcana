@@ -177,6 +177,7 @@ const EVENT_TYPES: &[&str] = &[
     "database_backup_created",
     "database_migration_backup_created",
     "database_statement",
+    "dependency_staging_result",
     "fleet_cli_run_blocked",
     "fleet_cli_run_completed",
     "fleet_cli_run_started",

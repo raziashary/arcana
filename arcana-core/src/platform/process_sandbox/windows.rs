@@ -786,17 +786,30 @@ fn spawn_in_workspace_sandbox(
 
     for path in read_only_paths {
         let path = path.canonicalize()?;
-        let runtime_root = crate::db::arcana_dir()
+        let arcana_dir = crate::db::arcana_dir()
             .map_err(|error| io::Error::new(io::ErrorKind::Other, error.to_string()))?
-            .canonicalize()?
-            .join("python-runtimes");
-        if !path.starts_with(&runtime_root) || !path.is_dir() {
+            .canonicalize()?;
+        let runtime_root = arcana_dir.join("python-runtimes");
+        // A staged dependency grant is exactly `<cache>/cargo/<digest>/home`.
+        let dependency_root = arcana_dir
+            .join(crate::agent::builtin_tools::dependency_staging::DEPENDENCY_CACHE_DIR)
+            .join("cargo");
+        let digest = path.parent();
+        let is_staged_home = path.file_name().is_some_and(|name| name == "home")
+            && digest.and_then(Path::parent) == Some(dependency_root.as_path())
+            && digest
+                .and_then(Path::file_name)
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| {
+                    name.len() == 64 && name.bytes().all(|b| b.is_ascii_hexdigit())
+                });
+        if !(path.starts_with(&runtime_root) || is_staged_home) || !path.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "read-only runtime grants must name a staged Arcana Python runtime directory",
+                "read-only grants must name a staged Arcana Python runtime or dependency cache directory",
             ));
         }
-        // PSEC grants this exact staged runtime as read-only below.
+        // PSEC grants this exact staged directory as read-only below.
     }
 
     let mut child_env = environment_block(

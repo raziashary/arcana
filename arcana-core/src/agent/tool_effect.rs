@@ -90,8 +90,9 @@ impl ToolEffect {
         use crate::agent::permission::PermissionMode as M;
 
         match mode {
-            // Nothing is prompted. The user has said so explicitly, and
-            // unattended fleet work depends on it.
+            // Nothing is prompted except a free-form shell and a host-controlled
+            // install, which each need per-call consent. The user has said so
+            // explicitly, and unattended fleet work depends on the rest.
             M::Autonomous => matches!(self, ToolEffect::FreeformShell | ToolEffect::HostApproval),
 
             // Everything with a consequence is prompted.
