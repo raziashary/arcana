@@ -12,6 +12,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, OnceLock,
     },
+    time::{Duration, Instant},
 };
 
 use tracing::Subscriber;
@@ -26,7 +27,106 @@ use tracing_subscriber::{
 /// appenders on shutdown.
 pub struct LoggingGuards {
     guards: Vec<WorkerGuard>,
+    /// One per writer queue, in the same order as `guards`.
+    drains: Vec<(Arc<QueueDrain>, ErrorCounter)>,
     health: LoggingHealth,
+}
+
+/// The longest `LoggingGuards` waits at shutdown for the writer queues to empty.
+const DRAIN_LIMIT: Duration = Duration::from_secs(10);
+
+/// How many writes a queue accepted and how many its worker has finished.
+///
+/// `WorkerGuard` waits at most one second for its worker on drop. The worker
+/// redacts every record, which is slower than the callers emit them, so a
+/// process that logs thousands of events and then exits can leave the last of
+/// them (typically its completion event) in the queue. Counting writes on both
+/// sides lets the guards wait until the queue is actually empty.
+#[derive(Default)]
+struct QueueDrain {
+    accepted: AtomicU64,
+    finished: AtomicU64,
+}
+
+impl QueueDrain {
+    /// Block until every accepted write is finished or dropped by the lossy
+    /// queue, or `limit` passes.
+    fn wait(&self, dropped: &ErrorCounter, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        while Instant::now() < deadline {
+            let finished = self
+                .finished
+                .load(Ordering::Acquire)
+                .saturating_add(dropped.dropped_lines() as u64);
+            if finished >= self.accepted.load(Ordering::Acquire) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+/// The handle given to a layer: counts each write as it enters the queue.
+struct AcceptCountingMakeWriter<M> {
+    inner: M,
+    drain: Arc<QueueDrain>,
+}
+
+struct AcceptCountingWriter<W> {
+    inner: W,
+    drain: Arc<QueueDrain>,
+}
+
+impl<'a, M: fmt::MakeWriter<'a>> fmt::MakeWriter<'a> for AcceptCountingMakeWriter<M> {
+    type Writer = AcceptCountingWriter<M::Writer>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        AcceptCountingWriter {
+            inner: self.inner.make_writer(),
+            drain: Arc::clone(&self.drain),
+        }
+    }
+}
+
+impl<W: Write> Write for AcceptCountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.drain.accepted.fetch_add(1, Ordering::Release);
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+/// The writer the queue's worker owns: counts each write it completes. The
+/// worker issues exactly one `write_all` per queued message, and these writers
+/// accept the whole buffer, so this is one count per accepted write.
+struct FinishCountingWriter<W> {
+    inner: W,
+    drain: Arc<QueueDrain>,
+}
+
+impl<W: Write> Write for FinishCountingWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(buf);
+        self.drain.finished.fetch_add(1, Ordering::Release);
+        written
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl Drop for LoggingGuards {
+    /// Let the writers empty their queues before the `WorkerGuard`s (dropped
+    /// after this body) stop waiting.
+    fn drop(&mut self) {
+        for (drain, dropped) in &self.drains {
+            drain.wait(dropped, DRAIN_LIMIT);
+        }
+    }
 }
 
 /// Process-local health for Arcana's asynchronous log writers.
@@ -146,38 +246,54 @@ pub fn init_with_filter(filter: EnvFilter) -> LoggingGuards {
         tracing::info!("Arcana logging initialised — console only (no writable log dir)");
         return LoggingGuards {
             guards: Vec::new(),
+            drains: Vec::new(),
             health: console_only_health(),
         };
     };
 
     let health = PROCESS_HEALTH.get_or_init(LoggingHealth::default).clone();
     let readable_appender = rolling_appender(&dir, "arcana", "log");
-    let (readable_writer, readable_guard) = tracing_appender::non_blocking(RedactingWriter {
-        inner: ObservedWriter {
-            inner: readable_appender,
-            failures: Arc::clone(&health.readable_write_failures),
+    let readable_drain = Arc::new(QueueDrain::default());
+    let (readable_writer, readable_guard) = tracing_appender::non_blocking(FinishCountingWriter {
+        inner: RedactingWriter {
+            inner: ObservedWriter {
+                inner: readable_appender,
+                failures: Arc::clone(&health.readable_write_failures),
+            },
+            pending: Vec::new(),
+            overflowed: false,
         },
-        pending: Vec::new(),
-        overflowed: false,
+        drain: Arc::clone(&readable_drain),
     });
     let readable_dropped = readable_writer.error_counter();
     let readable_layer = fmt::layer()
-        .with_writer(readable_writer)
+        .with_writer(AcceptCountingMakeWriter {
+            inner: readable_writer,
+            drain: Arc::clone(&readable_drain),
+        })
         .with_ansi(false)
         .with_target(true)
         .compact();
 
     let structured_appender = rolling_appender(&dir, "arcana-events", "jsonl");
+    let structured_drain = Arc::new(QueueDrain::default());
     let (structured_writer, structured_guard) =
-        tracing_appender::non_blocking(RedactingJsonWriter {
-            inner: ObservedWriter {
-                inner: structured_appender,
-                failures: Arc::clone(&health.structured_write_failures),
+        tracing_appender::non_blocking(FinishCountingWriter {
+            inner: RedactingJsonWriter {
+                inner: ObservedWriter {
+                    inner: structured_appender,
+                    failures: Arc::clone(&health.structured_write_failures),
+                },
+                pending: Vec::new(),
             },
-            pending: Vec::new(),
+            drain: Arc::clone(&structured_drain),
         });
-    health.install_drop_counters(readable_dropped, structured_writer.error_counter());
-    let structured_layer = structured_telemetry_layer(structured_writer);
+    let structured_dropped = structured_writer.error_counter();
+    health.install_drop_counters(readable_dropped.clone(), structured_dropped.clone());
+    let structured_layer = structured_telemetry_layer(AcceptCountingMakeWriter {
+        inner: structured_writer,
+        drain: Arc::clone(&structured_drain),
+    });
     // Console/readable verbosity is user-configurable, but the structured
     // stream is the observability contract. Keep sub-10ms SQLite statements
     // and other DEBUG telemetry even under the default INFO console filter.
@@ -199,6 +315,10 @@ pub fn init_with_filter(filter: EnvFilter) -> LoggingGuards {
     );
     LoggingGuards {
         guards: vec![readable_guard, structured_guard],
+        drains: vec![
+            (readable_drain, readable_dropped),
+            (structured_drain, structured_dropped),
+        ],
         health,
     }
 }
@@ -543,6 +663,76 @@ mod tests {
         fn flush(&mut self) -> std::io::Result<()> {
             Err(std::io::Error::other("injected telemetry flush failure"))
         }
+    }
+
+    /// A writer that takes `delay` per line and counts what it finished.
+    struct SlowWriter {
+        delay: Duration,
+        written: Arc<AtomicU64>,
+    }
+
+    impl Write for SlowWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            std::thread::sleep(self.delay);
+            self.written.fetch_add(1, Ordering::SeqCst);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `WorkerGuard` gives up after one second. A queue that holds more than a
+    /// second of work at exit loses its tail (the Fleet CLI's completion event
+    /// was the casualty in CI). The control half shows the loss with only the
+    /// guard; the other half shows `QueueDrain::wait` prevents it.
+    #[test]
+    fn the_drain_wait_delivers_a_backlog_that_the_guard_alone_would_drop() {
+        const LINES: u64 = 700;
+        let delay = Duration::from_millis(3);
+        let run = |wait_for_drain: bool| -> u64 {
+            let written = Arc::new(AtomicU64::new(0));
+            let drain = Arc::new(QueueDrain::default());
+            let (queue, guard) = tracing_appender::non_blocking(FinishCountingWriter {
+                inner: SlowWriter {
+                    delay,
+                    written: Arc::clone(&written),
+                },
+                drain: Arc::clone(&drain),
+            });
+            let dropped = queue.error_counter();
+            let handle = AcceptCountingMakeWriter {
+                inner: queue,
+                drain: Arc::clone(&drain),
+            };
+            for line in 0..LINES {
+                use fmt::MakeWriter;
+                let mut writer = handle.make_writer();
+                writer
+                    .write_all(
+                        format!(
+                            "line {line}
+"
+                        )
+                        .as_bytes(),
+                    )
+                    .expect("queue accepts the line");
+            }
+            if wait_for_drain {
+                drain.wait(&dropped, Duration::from_secs(30));
+            }
+            drop(guard);
+            assert_eq!(dropped.dropped_lines(), 0, "the queue is far from full");
+            written.load(Ordering::SeqCst)
+        };
+
+        let without = run(false);
+        assert!(
+            without < LINES,
+            "control: with a {LINES}-line backlog at {delay:?} each the guard's one-second wait must lose lines, wrote {without}"
+        );
+        assert_eq!(run(true), LINES, "waiting for the drain must lose nothing");
     }
 
     #[test]
