@@ -76,13 +76,16 @@ fn read_spawn_errors(profile: &std::path::Path) -> String {
             } else if let Ok(text) = std::fs::read_to_string(&path) {
                 found.extend(
                     text.lines()
-                        .filter(|line| line.contains("failed to spawn"))
+                        .filter(|line| {
+                            line.contains("failed to spawn")
+                                || line.contains("Python staging failed")
+                        })
                         .map(|line| line.chars().take(1500).collect::<String>()),
                 );
             }
         }
     }
-    found.truncate(3);
+    found.truncate(4);
     found.join(
         "
 ",

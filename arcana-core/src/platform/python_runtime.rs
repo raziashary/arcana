@@ -379,6 +379,15 @@ fn stage_selected_python() -> io::Result<StagedPython> {
         match stage_python_executable(executable) {
             Ok(runtime) => return Ok(runtime),
             Err(primary_error) => {
+                // The error returned to callers is reduced to a fixed summary
+                // so host paths never reach a model; the local log keeps the
+                // cause, which is what diagnoses a runner or install problem.
+                tracing::warn!(
+                    target: "arcana::project_command",
+                    error = %primary_error,
+                    kind = ?primary_error.kind(),
+                    "Python staging failed for the interpreter found on PATH"
+                );
                 let fallback = selected_user_python_fallback()?;
                 let Some(fallback) = fallback else {
                     return Err(io::Error::new(
