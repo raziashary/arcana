@@ -5727,11 +5727,15 @@ fn effect() { ToolEffect::Execute }"#;
                 recipe.instructions.contains("git_commit("),
                 "worker {worker} must consume the host commit tool"
             );
+            // W9: the move off a trunk is a typed tool, not shell text.
             assert!(
-                recipe
-                    .instructions
-                    .contains("If that prints `main`, `master`, or `trunk`, run:"),
+                recipe.instructions.contains("git_use_fleet_branch()")
+                    && recipe.instructions.contains("`main`, `master`, or `trunk`"),
                 "worker {worker} must be told to leave every protected trunk alias"
+            );
+            assert!(
+                !recipe.instructions.contains("bash('git"),
+                "worker {worker} must not run Git through the free-form shell"
             );
         }
         std::fs::remove_dir_all(sandbox).expect("remove sandbox");

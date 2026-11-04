@@ -46,6 +46,11 @@ impl ToolRegistry {
         self.tools.retain(|name, _| names.iter().any(|n| n == name));
     }
 
+    /// Drop the named tools. Unknown names are ignored.
+    pub fn without(&mut self, names: &[&str]) {
+        self.tools.retain(|name, _| !names.contains(&name.as_str()));
+    }
+
     pub fn to_definitions(&self) -> Vec<ToolDefinition> {
         let mut defs: Vec<ToolDefinition> = self
             .tools

@@ -229,6 +229,13 @@ impl AgentEngine {
         self
     }
 
+    /// Remove tools from this engine's registry (`W9`). Like
+    /// [`with_tool_subset`](Self::with_tool_subset) it can only narrow access.
+    pub fn without_tools(mut self, names: &[&str]) -> Self {
+        self.registry.without(names);
+        self
+    }
+
     /// Usage and cost of the most recent run on this engine (`P3-62`).
     ///
     /// `None` until a run has settled its spend.
@@ -2873,6 +2880,8 @@ mod procedural_memory_tests {
             "get_ready_tasks_in_phase",
             "get_task",
             "git_commit",
+            "git_status",
+            "git_use_fleet_branch",
             "glob",
             "grep",
             "list_directory",
@@ -2922,6 +2931,8 @@ mod procedural_memory_tests {
                 }),
             ),
             ("git_commit", private_arguments.clone()),
+            ("git_status", private_arguments.clone()),
+            ("git_use_fleet_branch", private_arguments.clone()),
             ("project_command", private_arguments.clone()),
             ("check_file", private_arguments.clone()),
             ("append_file", private_arguments.clone()),

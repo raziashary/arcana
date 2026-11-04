@@ -358,20 +358,16 @@ are not a style preference, and none of them is optional.
 
 ### Step C1 — Never commit onto a protected trunk
 
-Check where you are, and move to the fleet branch if you are on a trunk:
+Call `git_status()` to see the current branch. If it reports `protected: yes`
+(`main`, `master`, or `trunk`), call:
 
 ```
-bash('git rev-parse --abbrev-ref HEAD')
+git_use_fleet_branch()
 ```
 
-If that prints `main`, `master`, or `trunk`, run:
-
-```
-bash('git switch -c arcana/fleet || git switch arcana/fleet')
-```
-
-This is safe to run concurrently with the other workers: the first form creates
-the branch, and if a peer created it a moment earlier the second form joins it.
+This is safe to call concurrently with the other workers: it creates the branch,
+or joins it if a peer created it a moment earlier, and it refuses rather than
+overwrite your local changes. On any other branch it changes nothing.
 All workers share one checkout, so `arcana/fleet` is a **shared** branch — do
 not create a branch of your own, and do not switch branches again later in the
 task.
@@ -379,7 +375,7 @@ task.
 ### Step C2 — Commit through Arcana's host checks
 
 ```
-bash('git status --porcelain')
+git_status()
 git_commit(
   paths=['src/file.rs', 'tests/file.rs'],
   message='fix(core): describe the task change\n\nExplain why the change is needed and what was verified.'
@@ -862,7 +858,8 @@ Apply this to ALL endpoints: GET, PUT, PATCH, DELETE.
 
 ## Tools
 File/exec:  read_file · write_file · edit_file · append_file · check_file
-            bash · grep · glob · list_directory
+            grep · glob · list_directory
+            project_command · git_status · git_use_fleet_branch · git_commit
 Task board: list_tasks · get_task · update_task_status · claim_task
 ACP inbox: list_worker_messages · send_worker_message · acknowledge_worker_message
 Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
@@ -1076,7 +1073,8 @@ dependencies alone do not authorize installation.
 
 ## Tools
 File/exec:  read_file · write_file · edit_file · append_file · check_file
-            bash · grep · glob · list_directory
+            grep · glob · list_directory
+            project_command · git_status · git_use_fleet_branch · git_commit
 Task board: list_tasks · get_task · update_task_status · claim_task
 ACP inbox: list_worker_messages · send_worker_message · acknowledge_worker_message
 Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
@@ -1212,7 +1210,8 @@ After completing a task, append to ARCANA_PROGRESS.md:
 
 ## Tools
 File/exec:  read_file · write_file · edit_file · append_file · check_file
-            bash · grep · glob · list_directory
+            grep · glob · list_directory
+            project_command · git_status · git_use_fleet_branch · git_commit
 Task board: list_tasks · get_task · update_task_status · claim_task
 ACP inbox: list_worker_messages · send_worker_message · acknowledge_worker_message
 Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
@@ -1396,8 +1395,8 @@ After completing a task, append to ARCANA_PROGRESS.md:
 
 ## Tools
 File/exec:  read_file · write_file · edit_file · append_file · check_file
-            bash · grep · glob · list_directory
-            project_command · git_commit
+            grep · glob · list_directory
+            project_command · git_status · git_use_fleet_branch · git_commit
 Task board: list_tasks · get_task · update_task_status · claim_task
 ACP inbox: list_worker_messages · send_worker_message · acknowledge_worker_message
 Escalation: request_supervisor_action (decompose, reassign, report_issue, request_review)
@@ -1476,9 +1475,9 @@ f. On validation pass:
 
 Cleanup's #1 rule is MUST NOT change functionality. Verify this automatically:
 
-1. Confirm you actually committed something. Your commit from Step 3f must be
-   the tip:
-   bash('git log --oneline -1')
+1. Confirm you actually committed something: the `git_commit` call in Step 3f
+   must have returned "Committed task changes as <id>". If it did not, STOP and
+   report that nothing was committed.
 
 2. Call `analyze_diff` on YOUR OWN commit:
    - repo_path: root of the repository you modified
@@ -1576,7 +1575,8 @@ After completing a task, append to ARCANA_PROGRESS.md:
 - NEVER claim a second task while one is in_progress.
 
 ## Tools
-File/exec:  read_file · edit_file · append_file · check_file · bash · grep · glob · list_directory
+File/exec:  read_file · edit_file · append_file · check_file · grep · glob · list_directory
+            project_command · git_status · git_use_fleet_branch · git_commit
 Task board: list_tasks · get_task · update_task_status · claim_task
 Escalation: request_supervisor_action (reassign if task needs rename/refactor, report_issue)
 QC support: analyze_diff · annotate_file

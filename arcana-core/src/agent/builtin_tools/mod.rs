@@ -37,6 +37,7 @@ pub mod dependency_staging;
 pub mod e2e_probe;
 pub mod external_mcp;
 pub mod get_memory;
+pub mod git_branch;
 pub mod list_memories;
 pub mod npm_staging;
 pub mod project_command;
@@ -122,6 +123,8 @@ pub fn register_for_mode(registry: &mut ToolRegistry, mode: PAMode) {
             registry.register(Arc::new(edit_file::EditFileTool));
             registry.register(Arc::new(bash::BashTool));
             registry.register(Arc::new(git_commit::GitCommitTool));
+            registry.register(Arc::new(git_branch::GitStatusTool));
+            registry.register(Arc::new(git_branch::GitUseFleetBranchTool));
             registry.register(Arc::new(project_command::ProjectCommandTool));
             registry.register(Arc::new(external_mcp::McpListToolsTool));
             registry.register(Arc::new(external_mcp::McpCallTool));

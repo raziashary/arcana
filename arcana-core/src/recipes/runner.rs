@@ -89,6 +89,14 @@ fn worker_run_budget(
     }
 }
 
+/// Tools a default fleet worker is never offered.
+const FLEET_WORKER_HIDDEN_TOOLS: &[&str] = &["bash"];
+
+/// The shipped `worker-*` recipes; the supervisor and QC agents keep their tools.
+fn is_default_fleet_worker(worker_slug: &str) -> bool {
+    worker_slug.starts_with("worker-")
+}
+
 fn worker_output_token_limit(worker_slug: &str) -> Option<u32> {
     (worker_slug == "supervisor").then_some(SUPERVISOR_OUTPUT_TOKEN_LIMIT)
 }
@@ -670,6 +678,13 @@ impl RecipeRunner {
             let engine = match worker_output_token_limit(worker_slug) {
                 Some(limit) => engine.with_output_token_limit(limit),
                 None => engine,
+            };
+            // `W9`: a default worker has typed tools for builds, tests and Git,
+            // so the free-form shell is not offered to it at all.
+            let engine = if is_default_fleet_worker(worker_slug) {
+                engine.without_tools(FLEET_WORKER_HIDDEN_TOOLS)
+            } else {
+                engine
             };
 
             Ok(Some((engine, working_dir, provider_id.to_owned())))
@@ -1427,6 +1442,16 @@ mod production_git_commit_recipe_tests {
         async fn stream(&self, request: CompletionRequest) -> crate::errors::Result<StreamResult> {
             assert!(request.tools.iter().any(|tool| tool.name == "claim_task"));
             assert!(request.tools.iter().any(|tool| tool.name == "git_commit"));
+            for typed in ["git_status", "git_use_fleet_branch", "project_command"] {
+                assert!(
+                    request.tools.iter().any(|tool| tool.name == typed),
+                    "a default worker is offered {typed}"
+                );
+            }
+            assert!(
+                request.tools.iter().all(|tool| tool.name != "bash"),
+                "a default worker is not offered the free-form shell"
+            );
             self.requests
                 .lock()
                 .expect("provider request capture")

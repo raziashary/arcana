@@ -78,7 +78,7 @@ impl Tool for GitCommitTool {
     }
 }
 
-fn resolve_commit_workspace(working_dir: &str) -> Result<std::path::PathBuf, String> {
+pub(super) fn resolve_commit_workspace(working_dir: &str) -> Result<std::path::PathBuf, String> {
     let path = Path::new(working_dir);
     if !path.is_absolute() {
         return Err("Cannot commit outside a valid Arcana workspace: path must be absolute".into());

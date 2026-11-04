@@ -154,6 +154,7 @@ fn begin_operation_journal(
         | "send_worker_message"
         | "propose_memory"
         | "git_commit"
+        | "git_use_fleet_branch"
         | "write_interface_spec"
         | "mcp_list_tools"
         | "mcp_call_tool" => tool_name.to_owned(),
@@ -3102,6 +3103,8 @@ mod p8_execution_registry_tests {
             "edit_file",
             "bash",
             "git_commit",
+            "git_status",
+            "git_use_fleet_branch",
             "project_command",
             "mcp_list_tools",
             "mcp_call_tool",
