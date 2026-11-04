@@ -96,7 +96,28 @@ fresh project with a crates.io dependency fails to build in the sandbox until st
 unbound manifests; both are fixed. **Accepted residuals:** a file swapped and restored during one fetch is not caught (the
 second digest check only sees the end state; it needs a concurrent writer, and tool writes are serialised); the approval shows a
 `Cargo.toml` count, not their paths; only `cargo` itself is killed on timeout; build evidence does not fingerprint the cache.
-npm is next.
+
+**npm (2026-11-04)** is built (`arcana-core/src/agent/builtin_tools/npm_staging.rs`), same two-call shape (`project_command
+install npm`, then the call pinned to `plan_sha256`). It differs from Cargo in one way that matters: a build finds packages by
+walking up to a `node_modules`, so a read-only grant to a cache elsewhere cannot serve them. The host therefore runs
+`npm ci --ignore-scripts` in a scratch project written from the approved `package.json` and lockfile bytes, publishes the result
+as `~/.arcana/dependency-cache/npm/<digest>/`, and **copies** it into `<project>/node_modules`. The cache is never granted to the
+sandbox. Every stage re-copies (the build can edit `node_modules`, so a matching marker proves nothing), replaces only a
+`node_modules` carrying Arcana's `.arcana-staged` marker, and refuses links and junctions. The digest covers `package.json` and
+**every** lockfile present (`npm-shrinkwrap.json` wins over `package-lock.json`; both are bound and policy-checked). Refused before
+any process starts: lockfileVersion below 2; any entry whose `resolved` is not exactly the canonical
+`registry.npmjs.org/<name>/-/<unscoped>-<version>.tgz` for its own name and version, or lacks sha512 integrity (`inBundle` entries
+included unless they have no `resolved` and sit under a parent); aliases (`name` differing from the key), `link` entries, odd or
+Windows-device path segments; dependency and `overrides` specs in `package.json` that are not plain version ranges; any `.npmrc` on
+the path; npm workspaces; pnpm, yarn, bun and go (still refused). `npm ci` also runs with `--allow-git/remote/file/directory=none`,
+a rebuilt environment, empty user and global configs and no stdout capture. A security review (Haiku 5.5 High) found the `inBundle`
+policy skip, spec and canonical-URL gaps and the always-recopy issue; all are fixed, with a Windows test that a junction planted
+inside a replaced `node_modules` is never followed. Proof: an ignored live test
+(`staged_npm_dependencies_build_offline_inside_the_sandbox`) stages `is-number`, runs the test intent offline in the sandbox,
+and shows a repeat call restores a tampered tree. **Accepted residuals:** the sandboxed build can modify `node_modules` after
+staging (the next stage restores it); a hard link in npm's output is not detected; a decompression-bomb package is bounded only
+after it is written (2 GiB / 400k entries, scratch swept after an hour); a sandbox process that outlives its call could race the
+copy; install scripts of staged packages never run, so packages that need them (for example `esbuild`) will not work.
 
 ## D-009 · W9 and P9-02 approved, Linux-only failing tests skipped, P4-49 later — 2026-11-04, Razi
 

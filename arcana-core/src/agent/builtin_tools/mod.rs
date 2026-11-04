@@ -38,6 +38,7 @@ pub mod e2e_probe;
 pub mod external_mcp;
 pub mod get_memory;
 pub mod list_memories;
+pub mod npm_staging;
 pub mod project_command;
 pub mod propose_memory;
 pub mod reconcile_worker_operation;

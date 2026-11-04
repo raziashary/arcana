@@ -28,10 +28,10 @@ use sha2::{Digest, Sha256};
 
 const CRATES_IO_GIT_INDEX: &str = "registry+https://github.com/rust-lang/crates.io-index";
 const CRATES_IO_SPARSE_INDEX: &str = "sparse+https://index.crates.io/";
-const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+pub(super) const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_MANIFESTS: usize = 128;
 const MAX_SUMMARY_PACKAGES: usize = 40;
-const MARKER_FILE: &str = "staged.json";
+pub(super) const MARKER_FILE: &str = "staged.json";
 
 /// The directory name under Arcana's home that holds staged dependencies.
 pub(crate) const DEPENDENCY_CACHE_DIR: &str = "dependency-cache";
@@ -161,7 +161,7 @@ pub(crate) fn plan_cargo(
     })
 }
 
-fn hash_file(hasher: &mut Sha256, workspace_root: &Path, path: &Path, bytes: &[u8]) {
+pub(super) fn hash_file(hasher: &mut Sha256, workspace_root: &Path, path: &Path, bytes: &[u8]) {
     let relative = path
         .strip_prefix(workspace_root)
         .unwrap_or(path)
@@ -173,7 +173,7 @@ fn hash_file(hasher: &mut Sha256, workspace_root: &Path, path: &Path, bytes: &[u
     hasher.update(bytes);
 }
 
-fn read_bounded(path: &Path, label: &str) -> Result<Vec<u8>, String> {
+pub(super) fn read_bounded(path: &Path, label: &str) -> Result<Vec<u8>, String> {
     if is_reparse_point(path).map_err(|error| format!("Could not read {label}: {error}"))? {
         return Err(format!("{label} is a link, which staging refuses."));
     }
@@ -448,7 +448,7 @@ fn confine(workspace_root: &Path, path: &Path) -> Result<PathBuf, String> {
     Ok(normal)
 }
 
-fn display_in(workspace_root: &Path, path: &Path) -> String {
+pub(super) fn display_in(workspace_root: &Path, path: &Path) -> String {
     path.strip_prefix(workspace_root)
         .map(|relative| relative.to_string_lossy().replace('\\', "/"))
         .unwrap_or_else(|_| "a path outside the workspace".into())
@@ -496,7 +496,7 @@ fn registry_packages(lock_text: &str) -> Result<Vec<String>, String> {
     Ok(registry)
 }
 
-fn plain(text: &str, allowed: impl Fn(char) -> bool) -> bool {
+pub(super) fn plain(text: &str, allowed: impl Fn(char) -> bool) -> bool {
     !text.is_empty() && text.len() <= 100 && text.chars().all(allowed)
 }
 
@@ -525,7 +525,10 @@ fn refuse_redirecting_files(workspace_root: &Path, project_dir: &Path) -> Result
 
 /// Every directory from the workspace root to the target must be a real
 /// directory, so a junction cannot steer the host process out of the workspace.
-fn refuse_reparse_components(workspace_root: &Path, target: &Path) -> Result<(), String> {
+pub(super) fn refuse_reparse_components(
+    workspace_root: &Path,
+    target: &Path,
+) -> Result<(), String> {
     let relative = target
         .strip_prefix(workspace_root)
         .map_err(|_| "A staged path is outside the selected workspace.".to_string())?;
@@ -548,7 +551,7 @@ fn refuse_reparse_components(workspace_root: &Path, target: &Path) -> Result<(),
     Ok(())
 }
 
-fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+pub(super) fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     match text.strip_prefix(r"\\?\") {
         Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
@@ -556,7 +559,7 @@ fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     }
 }
 
-fn is_reparse_point(path: &Path) -> io::Result<bool> {
+pub(super) fn is_reparse_point(path: &Path) -> io::Result<bool> {
     let metadata = std::fs::symlink_metadata(path)?;
     #[cfg(windows)]
     {
@@ -570,10 +573,11 @@ fn is_reparse_point(path: &Path) -> io::Result<bool> {
     }
 }
 
-/// Host-owned directory for one plan's staged dependencies.
-fn cache_dir(digest: &str) -> io::Result<PathBuf> {
+/// Host-owned directory for one plan's staged dependencies; `kind` is the
+/// ecosystem (`cargo`, `npm`).
+pub(super) fn cache_dir(kind: &str, digest: &str) -> io::Result<PathBuf> {
     let base = crate::db::arcana_dir().map_err(|error| io::Error::other(error.to_string()))?;
-    Ok(base.join(DEPENDENCY_CACHE_DIR).join("cargo").join(digest))
+    Ok(base.join(DEPENDENCY_CACHE_DIR).join(kind).join(digest))
 }
 
 /// The `CARGO_HOME` of a completed staging that matches the project's current
@@ -581,7 +585,7 @@ fn cache_dir(digest: &str) -> io::Result<PathBuf> {
 /// digest and finds nothing, so a build then runs unstaged.
 pub(crate) fn staged_cargo_home(workspace_root: &Path, project_dir: &Path) -> Option<PathBuf> {
     let plan = plan_cargo(workspace_root, project_dir).ok()?;
-    let directory = cache_dir(&plan.digest).ok()?.canonicalize().ok()?;
+    let directory = cache_dir("cargo", &plan.digest).ok()?.canonicalize().ok()?;
     let marker = std::fs::read_to_string(directory.join(MARKER_FILE)).ok()?;
     let marker: serde_json::Value = serde_json::from_str(&marker).ok()?;
     (marker["plan_sha256"] == plan.digest.as_str())
@@ -611,7 +615,7 @@ pub(crate) async fn stage_cargo(
     toolchain_dir: &Path,
     timeout: Duration,
 ) -> Result<StagingReport, String> {
-    let final_dir = cache_dir(&plan.digest).map_err(|error| error.to_string())?;
+    let final_dir = cache_dir("cargo", &plan.digest).map_err(|error| error.to_string())?;
     if final_dir.join(MARKER_FILE).is_file() {
         return Ok(StagingReport {
             package_count: plan.packages.len(),

@@ -12,6 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 use super::build_evidence::BuildEvidenceKind;
 use super::dependency_staging;
+use super::npm_staging;
 use super::path_jail::validate_workspace_path;
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
 use crate::platform::command::{self, CommandIntent, Toolchain};
@@ -198,9 +199,10 @@ impl Tool for ProjectCommandTool {
 
     fn effect_for_input(&self, input: &Value) -> crate::agent::tool_effect::ToolEffect {
         if input["intent"].as_str() == Some("install") {
-            // The first Cargo staging call only reads Cargo.lock and returns the
-            // plan and digest. The call that pins that digest is what fetches.
-            if is_cargo_staging_plan_request(input) {
+            // The first Cargo or npm staging call only reads the lockfile and
+            // returns the plan and digest. The call that pins that digest is
+            // what fetches.
+            if is_staging_plan_request(input) {
                 self.effect()
             } else {
                 crate::agent::tool_effect::ToolEffect::HostApproval
@@ -211,28 +213,33 @@ impl Tool for ProjectCommandTool {
     }
 
     fn approval_details(&self, input: &Value, working_dir: &str) -> Option<String> {
-        if input["intent"].as_str() != Some("install")
-            || input["toolchain"].as_str() != Some("cargo")
-        {
+        if input["intent"].as_str() != Some("install") {
+            return None;
+        }
+        let toolchain = input["toolchain"].as_str()?;
+        if toolchain != "cargo" && toolchain != "npm" {
             return None;
         }
         let planned = (|| {
             let workspace_root = validate_workspace_path(Path::new(working_dir), working_dir)?;
             let project_dir =
                 resolve_project_directory(&workspace_root, input["project_path"].as_str())?;
-            dependency_staging::plan_cargo(&workspace_root, &project_dir)
+            if toolchain == "npm" {
+                npm_staging::plan_npm(&workspace_root, &project_dir)
+                    .map(|plan| (plan.digest.clone(), plan.summary()))
+            } else {
+                dependency_staging::plan_cargo(&workspace_root, &project_dir)
+                    .map(|plan| (plan.digest.clone(), plan.summary()))
+            }
         })();
         Some(match planned {
-            Ok(plan) => {
-                match input["plan_sha256"].as_str() {
-                    Some(pinned) if pinned.eq_ignore_ascii_case(&plan.digest) => plan.summary(),
-                    Some(_) => format!(
-                        "The call pins a plan digest that no longer matches the project files (now {}); it will be refused.",
-                        plan.digest
-                    ),
-                    None => plan.summary(),
-                }
-            }
+            Ok((digest, summary)) => match input["plan_sha256"].as_str() {
+                Some(pinned) if pinned.eq_ignore_ascii_case(&digest) => summary,
+                Some(_) => format!(
+                    "The call pins a plan digest that no longer matches the project files (now {digest}); it will be refused."
+                ),
+                None => summary,
+            },
             Err(reason) => format!("This staging will be refused: {reason}"),
         })
     }
@@ -242,7 +249,7 @@ impl Tool for ProjectCommandTool {
     }
 
     fn description(&self) -> &str {
-        "Run an explicit install, build, test, lint, or run intent. Rust discovers supported projects under the selected workspace, detects package managers, and constructs fixed argv. An optional toolchain selector runs every detected project for that ecosystem; without it, each detected project runs separately. Dependency installs are fail-closed except Cargo: `intent=install`, `toolchain=cargo` first returns the plan and the Cargo.lock digest, then fetches only that exact lockfile's crates.io packages after the user approves the digest-pinned call; build scripts do not run and later builds read the packages offline. Other ecosystems stay refused. The only host-tool install is `intent=install`, `toolchain=python`, `package=ruff`, which requires per-call approval and stages a pinned Ruff binary in Arcana's runtime cache."
+        "Run an explicit install, build, test, lint, or run intent. Rust discovers supported projects under the selected workspace, detects package managers, and constructs fixed argv. An optional toolchain selector runs every detected project for that ecosystem; without it, each detected project runs separately. Dependency installs are fail-closed except Cargo and npm: `intent=install`, `toolchain=cargo` or `npm` first returns the plan and the digest of the lockfile (and manifests), then fetches only that exact lockfile's packages (crates.io or registry.npmjs.org) after the user approves the digest-pinned call; install and build scripts do not run, and builds then read the packages offline (npm installs a fresh copy into node_modules, replacing one Arcana installed earlier and refusing one it did not). Other ecosystems stay refused. The only host-tool install is `intent=install`, `toolchain=python`, `package=ruff`, which requires per-call approval and stages a pinned Ruff binary in Arcana's runtime cache."
     }
 
     fn input_schema(&self) -> Value {
@@ -261,7 +268,7 @@ impl Tool for ProjectCommandTool {
                 },
                 "plan_sha256": {
                     "type": "string",
-                    "description": "Only used with install + cargo. Call install + cargo first without it to read the plan and its digest, then repeat the call with that digest; the user approves the exact packages and the call is refused if Cargo.lock or any Cargo.toml it covers has changed."
+                    "description": "Only used with install + cargo or npm. Call install first without it to read the plan and its digest, then repeat the call with that digest; the user approves the exact packages and the call is refused if the lockfile or any manifest it covers (Cargo.toml files, or package.json) has changed."
                 },
                 "package": {
                     "type": "string",
@@ -316,6 +323,9 @@ impl Tool for ProjectCommandTool {
         }
         if intent == CommandIntent::Install && input["toolchain"].as_str() == Some("cargo") {
             return stage_cargo_dependencies(&input, ctx).await;
+        }
+        if intent == CommandIntent::Install && input["toolchain"].as_str() == Some("npm") {
+            return stage_npm_dependencies(&input, ctx).await;
         }
         if intent == CommandIntent::Install {
             tracing::warn!(
@@ -898,8 +908,9 @@ impl Tool for ProjectCommandTool {
     }
 }
 
-fn is_cargo_staging_plan_request(input: &Value) -> bool {
-    input["toolchain"].as_str() == Some("cargo") && input["plan_sha256"].as_str().is_none()
+fn is_staging_plan_request(input: &Value) -> bool {
+    matches!(input["toolchain"].as_str(), Some("cargo" | "npm"))
+        && input["plan_sha256"].as_str().is_none()
 }
 
 /// Stage a Cargo project's locked dependencies into Arcana's host cache.
@@ -1018,6 +1029,131 @@ async fn stage_cargo_dependencies(input: &Value, ctx: &ToolContext) -> ToolResul
                     "dependency",
                     reason,
                     "Check host network access, then retry the same pinned call once. Do not run cargo through Bash.",
+                )
+            }
+        };
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = plan;
+        refuse("Dependency staging is available on Windows only in v1.")
+    }
+}
+
+/// Stage an npm project's locked dependencies into Arcana's host cache and
+/// install them into the project's `node_modules`. Same two-call shape as Cargo.
+async fn stage_npm_dependencies(input: &Value, ctx: &ToolContext) -> ToolResult {
+    let refuse = |reason: &str| {
+        tracing::warn!(
+            target: "arcana::telemetry",
+            event_type = "dependency_staging_result",
+            toolchain = "npm",
+            tool_call_id = %ctx.call_id,
+            task_id = %crate::observability::timing::correlation_task_id(ctx.task_id),
+            outcome = "refused",
+            "dependency staging refused"
+        );
+        ToolResult::categorized_error(
+            "dependency_staging_refused",
+            "dependency",
+            reason.to_string(),
+            "Do not retry with Bash or give build children network access. Fix the named cause, or ask the user to stage the dependencies.",
+        )
+    };
+    let workspace_root =
+        match validate_workspace_path(Path::new(&ctx.working_dir), &ctx.working_dir) {
+            Ok(path) => path,
+            Err(error) => return ToolResult::error(error),
+        };
+    let project_dir =
+        match resolve_project_directory(&workspace_root, input["project_path"].as_str()) {
+            Ok(path) => path,
+            Err(error) => return ToolResult::error(error),
+        };
+    let plan = match npm_staging::plan_npm(&workspace_root, &project_dir) {
+        Ok(plan) => plan,
+        Err(reason) => return refuse(&reason),
+    };
+    let Some(pinned) = input["plan_sha256"].as_str() else {
+        return ToolResult::success(format!(
+            "{} To stage them, call project_command again with intent=install, toolchain=npm and plan_sha256=\"{}\"; the user is asked to approve that call.",
+            plan.summary(),
+            plan.digest
+        ));
+    };
+    if !pinned.eq_ignore_ascii_case(&plan.digest) {
+        return refuse(&format!(
+            "The project files now hash to plan sha256 {}, not the {pinned} the call pinned. Read the plan again and have the user approve the current files.",
+            plan.digest
+        ));
+    }
+    if let Err(message) = ctx.require_current_task_claim() {
+        return ToolResult::error(message);
+    }
+    #[cfg(windows)]
+    {
+        let npm_shim = command::resolve_program(Toolchain::Npm);
+        let toolchain = match trusted_windows_shim_runtime(OsStr::new(&npm_shim))
+            .map_err(|error| error.to_string())
+            .and_then(|directory| npm_staging::toolchain_in(&directory))
+        {
+            Ok(toolchain) => toolchain,
+            Err(reason) => {
+                return refuse(&format!(
+                    "npm staging needs a system-installed Node under Program Files: {reason}"
+                ))
+            }
+        };
+        let started = std::time::Instant::now();
+        let outcome = npm_staging::stage_npm(
+            &plan,
+            &workspace_root,
+            &toolchain,
+            Duration::from_secs(bounded_timeout_secs(input["timeout_secs"].as_u64())),
+        )
+        .await;
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        return match outcome {
+            Ok(report) => {
+                tracing::info!(
+                    target: "arcana::telemetry",
+                    event_type = "dependency_staging_result",
+                    toolchain = "npm",
+                    tool_call_id = %ctx.call_id,
+                    task_id = %crate::observability::timing::correlation_task_id(ctx.task_id),
+                    package_count = report.package_count as u64,
+                    already_staged = report.already_staged,
+                    elapsed_ms,
+                    outcome = "staged",
+                    "dependency staging finished"
+                );
+                ToolResult::success(format!(
+                    "Staged {} npm package(s) for plan sha256 {}{} and installed a fresh copy into node_modules. Build, test and lint now find them offline; install scripts were not run.",
+                    report.package_count,
+                    plan.digest,
+                    if report.already_staged {
+                        " (already staged)"
+                    } else {
+                        ""
+                    }
+                ))
+            }
+            Err(reason) => {
+                tracing::warn!(
+                    target: "arcana::telemetry",
+                    event_type = "dependency_staging_result",
+                    toolchain = "npm",
+                    tool_call_id = %ctx.call_id,
+                    task_id = %crate::observability::timing::correlation_task_id(ctx.task_id),
+                    elapsed_ms,
+                    outcome = "failed",
+                    "dependency staging failed"
+                );
+                ToolResult::categorized_error(
+                    "dependency_staging_failed",
+                    "dependency",
+                    reason,
+                    "Check host network access, then retry the same pinned call once. Do not run npm through Bash.",
                 )
             }
         };
@@ -4920,7 +5056,7 @@ fn main() {
             ProjectCommandTool.effect_for_input(&staging_input(Some("ab"))),
             crate::agent::tool_effect::ToolEffect::HostApproval
         );
-        for toolchain in ["npm", "pnpm", "yarn", "bun", "go"] {
+        for toolchain in ["pnpm", "yarn", "bun", "go"] {
             assert_eq!(
                 ProjectCommandTool
                     .effect_for_input(&json!({"intent": "install", "toolchain": toolchain})),
@@ -4928,6 +5064,260 @@ fn main() {
                 "{toolchain} install stays an approval call"
             );
         }
+    }
+
+    // ── npm dependency staging (D-008) ───────────────────────────────────────
+
+    const NPM_INTEGRITY: &str = "sha512-41Cifkg6e8TylSpdtTpeLVMqvSBEVzTttHvERD741+pnZ8ANv0004MRL43QKPDlK9cGvNp6NZWZUBlbGXYxxng==";
+
+    fn write_npm_lock_fixture(workspace: &std::path::Path) -> String {
+        std::fs::write(
+            workspace.join("package.json"),
+            r#"{"name":"npm-staging-demo","version":"1.0.0","private":true,"scripts":{"build":"node build.js"},"dependencies":{"is-number":"7.0.0"}}"#,
+        )
+        .expect("write manifest");
+        let lock = format!(
+            r#"{{"name":"npm-staging-demo","version":"1.0.0","lockfileVersion":3,"requires":true,"packages":{{"":{{"name":"npm-staging-demo","version":"1.0.0","dependencies":{{"is-number":"7.0.0"}}}},"node_modules/is-number":{{"version":"7.0.0","resolved":"https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz","integrity":"{NPM_INTEGRITY}"}}}}}}"#
+        );
+        std::fs::write(workspace.join("package-lock.json"), lock).expect("write lockfile");
+        super::npm_staging::plan_npm(workspace, workspace)
+            .expect("fixture plan")
+            .digest
+    }
+
+    fn npm_staging_input(digest: Option<&str>) -> Value {
+        match digest {
+            Some(digest) => {
+                json!({"intent": "install", "toolchain": "npm", "plan_sha256": digest})
+            }
+            None => json!({"intent": "install", "toolchain": "npm"}),
+        }
+    }
+
+    #[test]
+    fn npm_staging_plan_needs_no_approval_but_the_pinned_call_does() {
+        assert_eq!(
+            ProjectCommandTool.effect_for_input(&npm_staging_input(None)),
+            crate::agent::tool_effect::ToolEffect::Execute,
+            "reading the plan starts no process and fetches nothing"
+        );
+        assert_eq!(
+            ProjectCommandTool.effect_for_input(&npm_staging_input(Some("ab"))),
+            crate::agent::tool_effect::ToolEffect::HostApproval
+        );
+    }
+
+    #[tokio::test]
+    async fn npm_staging_plan_reports_the_digest_and_creates_nothing() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("workspace");
+        let digest = write_npm_lock_fixture(workspace.path());
+
+        let result = ProjectCommandTool
+            .execute(
+                npm_staging_input(None),
+                &claim_boundary_context(workspace.path(), None),
+            )
+            .await;
+        assert!(!result.is_error, "{}", result.output);
+        assert!(result.output.contains(&digest), "{}", result.output);
+        assert!(
+            result.output.contains("is-number 7.0.0"),
+            "{}",
+            result.output
+        );
+        assert!(
+            !crate::db::arcana_dir()
+                .unwrap()
+                .join(super::dependency_staging::DEPENDENCY_CACHE_DIR)
+                .exists(),
+            "planning must not create the cache"
+        );
+        assert!(
+            !workspace.path().join("node_modules").exists(),
+            "planning must not install anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn npm_staging_refuses_a_stale_digest_and_unsafe_projects_before_any_effect() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+
+        let stale = tempfile::tempdir().expect("workspace");
+        let approved = write_npm_lock_fixture(stale.path());
+        let mut manifest = std::fs::read_to_string(stale.path().join("package.json")).unwrap();
+        manifest.push_str("\n");
+        std::fs::write(stale.path().join("package.json"), manifest).unwrap();
+
+        let git = tempfile::tempdir().expect("workspace");
+        write_npm_lock_fixture(git.path());
+        let lock = std::fs::read_to_string(git.path().join("package-lock.json"))
+            .unwrap()
+            .replace(
+                "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz",
+                "git+https://example.com/is-number.git",
+            );
+        std::fs::write(git.path().join("package-lock.json"), lock).unwrap();
+
+        let redirected = tempfile::tempdir().expect("workspace");
+        write_npm_lock_fixture(redirected.path());
+        std::fs::write(
+            redirected.path().join(".npmrc"),
+            "registry=https://evil.test/\n",
+        )
+        .unwrap();
+
+        for (workspace, input, expected) in [
+            (
+                stale.path(),
+                npm_staging_input(Some(&approved)),
+                "the call pinned",
+            ),
+            (git.path(), npm_staging_input(None), "does not name its"),
+            (redirected.path(), npm_staging_input(None), ".npmrc"),
+        ] {
+            let result = ProjectCommandTool
+                .execute(input, &claim_boundary_context(workspace, None))
+                .await;
+            let envelope: Value = serde_json::from_str(&result.output).expect("structured refusal");
+            assert!(result.is_error, "{}", result.output);
+            assert_eq!(envelope["error"]["code"], "dependency_staging_refused");
+            assert!(result.output.contains(expected), "{}", result.output);
+            assert!(!workspace.join("node_modules").exists());
+        }
+        assert!(
+            !crate::db::arcana_dir()
+                .unwrap()
+                .join(super::dependency_staging::DEPENDENCY_CACHE_DIR)
+                .exists(),
+            "a refused call must not create the cache"
+        );
+    }
+
+    #[test]
+    fn npm_approval_names_the_packages_and_flags_a_stale_digest() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let digest = write_npm_lock_fixture(workspace.path());
+        let dir = workspace.path().to_string_lossy().into_owned();
+
+        let shown = ProjectCommandTool
+            .approval_details(&npm_staging_input(Some(&digest)), &dir)
+            .expect("details for an npm install");
+        assert!(
+            shown.contains(&digest) && shown.contains("is-number 7.0.0"),
+            "{shown}"
+        );
+        let stale = ProjectCommandTool
+            .approval_details(&npm_staging_input(Some("deadbeef")), &dir)
+            .expect("details for a stale digest");
+        assert!(stale.contains("will be refused"), "{stale}");
+        assert!(ProjectCommandTool
+            .approval_details(&json!({"intent": "install", "toolchain": "pnpm"}), &dir)
+            .is_none());
+    }
+
+    /// The real thing, on a machine with network: a fresh npm project with a
+    /// registry dependency cannot build in the sandbox until it is staged, and
+    /// builds offline afterwards, with the root project's install script not
+    /// run. Run with `-- --ignored`.
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "needs network and a system Node: fetches is-number from registry.npmjs.org"]
+    async fn staged_npm_dependencies_build_offline_inside_the_sandbox() {
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("workspace");
+        let root = workspace.path().canonicalize().unwrap();
+        let sentinel = home.path().join("install-script-ran.txt");
+        let script = format!(
+            "node -e \"require('fs').writeFileSync(process.argv[1], 'ran')\" \"{}\"",
+            sentinel.to_string_lossy().replace('\\', "/")
+        );
+        let manifest = json!({
+            "name": "npm-staging-live",
+            "version": "1.0.0",
+            "private": true,
+            "scripts": {"test": "node build.js", "preinstall": script},
+            "dependencies": {"is-number": "7.0.0"}
+        });
+        std::fs::write(root.join("package.json"), manifest.to_string()).unwrap();
+        std::fs::write(
+            root.join("build.js"),
+            "if (!require('is-number')(5)) process.exit(3);\nconsole.log('NPM_STAGED_BUILD_OK');\n",
+        )
+        .unwrap();
+        // The user (not the agent) pins the dependency set.
+        let generated = std::process::Command::new(command::resolve_program(Toolchain::Npm))
+            .args([
+                "install",
+                "--package-lock-only",
+                "--ignore-scripts",
+                "--no-audit",
+                "--no-fund",
+            ])
+            .current_dir(&root)
+            .output()
+            .expect("npm install --package-lock-only");
+        assert!(
+            generated.status.success(),
+            "{}",
+            String::from_utf8_lossy(&generated.stderr)
+        );
+        let mut context = claim_boundary_context(&root, None);
+        context.agent_role = "supervisor".into();
+
+        let before = ProjectCommandTool
+            .execute(json!({"intent": "test", "toolchain": "npm"}), &context)
+            .await;
+        assert!(
+            before.is_error,
+            "an unstaged test run with a dependency must fail: {}",
+            before.output
+        );
+
+        let lock_before = std::fs::read(root.join("package-lock.json")).unwrap();
+        let plan = ProjectCommandTool
+            .execute(npm_staging_input(None), &context)
+            .await;
+        assert!(!plan.is_error, "{}", plan.output);
+        let digest = plan
+            .output
+            .split("plan_sha256=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("plan names the digest")
+            .to_string();
+        let staged = ProjectCommandTool
+            .execute(npm_staging_input(Some(&digest)), &context)
+            .await;
+        assert!(!staged.is_error, "{}", staged.output);
+        assert_eq!(
+            std::fs::read(root.join("package-lock.json")).unwrap(),
+            lock_before,
+            "staging must not rewrite the lockfile"
+        );
+        assert!(!sentinel.exists(), "an install script ran during staging");
+        assert!(root.join("node_modules/is-number/package.json").is_file());
+
+        // A repeat call restores the tree even though the digest matches.
+        let tampered = root.join("node_modules/is-number/tampered.js");
+        std::fs::write(&tampered, "").unwrap();
+        let again = ProjectCommandTool
+            .execute(npm_staging_input(Some(&digest)), &context)
+            .await;
+        assert!(!again.is_error, "{}", again.output);
+        assert!(!tampered.exists(), "a repeat stage must replace the tree");
+
+        let after = ProjectCommandTool
+            .execute(json!({"intent": "test", "toolchain": "npm"}), &context)
+            .await;
+        assert!(
+            !after.is_error && after.output.contains("NPM_STAGED_BUILD_OK"),
+            "a staged test run must pass offline in the sandbox: {}",
+            after.output
+        );
     }
 
     #[tokio::test]
