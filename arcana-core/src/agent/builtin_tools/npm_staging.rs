@@ -173,7 +173,8 @@ pub(crate) fn plan_npm(
 /// to a fetch from somewhere other than the registry.
 fn refuse_non_registry_specs(manifest: &serde_json::Value) -> Result<(), String> {
     fn plain_spec(value: &str) -> bool {
-        value.len() <= 200 && !value.contains([':', '/', '\\', '#', '@'])
+        // A leading dot is npm's spelling of a directory spec (`.`, `..`).
+        value.len() <= 200 && !value.starts_with('.') && !value.contains([':', '/', '\\', '#', '@'])
     }
     fn check(value: &serde_json::Value, field: &str) -> Result<(), String> {
         match value {
@@ -309,6 +310,25 @@ fn locked_packages(label: &str, bytes: &[u8]) -> Result<(Vec<String>, usize), St
             ));
         }
         if bundled && entry.get("resolved").is_none() {
+            // npm takes it from the parent's tarball, which is pinned. If the
+            // parent does not actually bundle it, npm fetches `name@version`
+            // from the registry with no integrity check, so the parent's lock
+            // entry must say it does.
+            let parent = key.rfind("/node_modules/").map(|at| &key[..at]);
+            let declared = parent
+                .and_then(|parent_key| entries.get(parent_key))
+                .is_some_and(|parent_entry| {
+                    ["bundleDependencies", "bundledDependencies"]
+                        .iter()
+                        .filter_map(|field| parent_entry[*field].as_array())
+                        .flatten()
+                        .any(|bundled_name| bundled_name.as_str() == Some(name.as_str()))
+                });
+            if !declared {
+                return Err(format!(
+                    "{label} package {name} is marked bundled but its parent does not bundle it, so npm would fetch it without an integrity check."
+                ));
+            }
             fetched.push(format!("{name} {version} (bundled)"));
             continue;
         }
@@ -717,7 +737,8 @@ fn is_link(metadata: &std::fs::Metadata) -> bool {
 }
 
 /// Count a tree's entries and bytes, refusing links and anything over the
-/// bounds. Used on what npm produced and again on what is copied.
+/// bounds. Run once, on what npm produced; the copy relies on that bound
+/// and refuses links itself.
 fn measure_tree(root: &Path) -> Result<(usize, u64), String> {
     let mut pending = vec![root.to_path_buf()];
     let (mut entries, mut bytes) = (0usize, 0u64);
@@ -1038,11 +1059,22 @@ mod tests {
     fn a_nested_bundled_package_without_a_tarball_is_allowed_and_listed() {
         let bundled = r#""node_modules/a/node_modules/b": {"version": "1.0.0", "inBundle": true}"#
             .to_string();
-        let (_workspace, root) = project(&lock(3, &[registry_entry("a"), bundled]));
+        let parent = registry_entry("a").replace(
+            r#""version": "1.0.0""#,
+            r#""version": "1.0.0", "bundleDependencies": ["b"]"#,
+        );
+        let (_workspace, root) = project(&lock(3, &[parent, bundled.clone()]));
         assert_eq!(
             plan_npm(&root, &root).unwrap().packages,
             ["a 1.0.0", "b 1.0.0 (bundled)"]
         );
+
+        // Without the parent saying it bundles `b`, npm would fetch b@1.0.0
+        // from the registry with no integrity value.
+        let (_workspace, root) = project(&lock(3, &[registry_entry("a"), bundled]));
+        assert!(plan_npm(&root, &root)
+            .unwrap_err()
+            .contains("its parent does not bundle it"));
     }
 
     #[test]
@@ -1068,6 +1100,9 @@ mod tests {
             "../x",
             "user/repo",
             "1.0.0#abc",
+            ".",
+            "..",
+            "./x",
         ] {
             for field in [
                 "dependencies",
