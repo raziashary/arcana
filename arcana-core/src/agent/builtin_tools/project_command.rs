@@ -652,11 +652,17 @@ impl Tool for ProjectCommandTool {
                     }
                     failure_count += 1;
                     failure_codes.push("command_spawn_failed");
+                    // The error envelope keeps only a diagnostic's code, so the
+                    // reason travels as codes: the error kind, then the OS code.
                     safe_diagnostics.push(json!({
                         "code": "command_spawn_failed",
                         "severity": "error",
-                        "reason": spawn_error_summary(&error),
                     }));
+                    safe_diagnostics.extend(
+                        spawn_error_codes(&error)
+                            .into_iter()
+                            .map(|code| json!({"code": code, "severity": "error"})),
+                    );
                     result.push(format!(
                         "Could not start the {:?} command for project {} ({}).",
                         project.toolchain,
@@ -1211,6 +1217,16 @@ fn workspace_fingerprint_matches(baseline: Option<&str>, current: Option<&str>) 
     baseline
         .zip(current)
         .is_some_and(|(before, after)| before == after)
+}
+
+/// Source-free diagnostic codes for a spawn error: `spawn_<kind>` and, when
+/// the OS gave one, `os_error_<code>`.
+fn spawn_error_codes(error: &io::Error) -> Vec<String> {
+    let mut codes = vec![format!("spawn_{:?}", error.kind()).to_lowercase()];
+    if let Some(code) = error.raw_os_error() {
+        codes.push(format!("os_error_{code}"));
+    }
+    codes
 }
 
 /// The part of a spawn error that is safe to show the model: the error kind
@@ -2623,6 +2639,18 @@ fn main() {
         );
         let output: Value = serde_json::from_str(&result.output).expect("structured tool error");
         assert_eq!(output["error"]["code"], "command_spawn_failed");
+        let diagnostic_codes = output["error"]["diagnostics"]
+            .as_array()
+            .expect("diagnostics survive the error envelope")
+            .iter()
+            .filter_map(|diagnostic| diagnostic["code"].as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            diagnostic_codes
+                .iter()
+                .any(|code| code.starts_with("spawn_")),
+            "the spawn failure names its error kind: {diagnostic_codes:?}"
+        );
 
         let db = crate::db::tasks::TasksDb::open().expect("reopen isolated TasksDb");
         let (outcome, expected, observed, passing, ..) = db
