@@ -97,3 +97,16 @@ unbound manifests; both are fixed. **Accepted residuals:** a file swapped and re
 second digest check only sees the end state; it needs a concurrent writer, and tool writes are serialised); the approval shows a
 `Cargo.toml` count, not their paths; only `cargo` itself is killed on timeout; build evidence does not fingerprint the cache.
 npm is next.
+
+## D-009 · W9 and P9-02 approved, Linux-only failing tests skipped, P4-49 later — 2026-11-04, Razi
+
+Razi approved the two items that waited on a ruling and settled three others:
+
+- **W9 v1** (the smaller version in `SHIP_PLAN.md` R1: typed git tools for the worker recipe, `bash` hidden from default Fleet
+  workers, intent suite re-run through the production `execute` path) is in v1 scope.
+- **P9-02** (Windows code-signing certificate) is approved as a v1 item. Obtaining the certificate is Razi's action; the
+  installer build is wired to sign when one is available and ships unsigned (SmartScreen warning) until then.
+- **Linux CI:** tests that fail only on Linux because the sandbox/platform behaviour they check exists on Windows only are
+  skipped on Linux (`#[cfg(windows)]` or an `#[ignore]` with the reason), not fixed and not removed from Windows. This keeps
+  the Linux CI job honest for the code that does run there; Linux stays parked for v1 (D-005). The CI job itself is unchanged.
+- **P4-49** (Razi's Calendar acceptance) is deferred until Razi asks for it; R1 can close without it, and the plan row stays open.
