@@ -150,3 +150,15 @@ Also built the same day, no ruling needed: command-path attack tests (P4-56 narr
 fix for Cargo lint through the registered tool (a plain workspace root against a verbatim project path made the Clippy config
 walk climb out of the workspace; found by the new execute-path test). See `SHIP_PLAN.md` R1.
 
+## D-011 · The Windows sandbox gates run locally, not on hosted runners — 2026-11-04, Razi
+
+The hosted `windows-latest` job failed `project_command_stage_logs` (TG4-32) for six runs. Staging the PATH interpreter was a
+real bug and is fixed (`resolve_stdlib_root` demanded a per-user Python install even for a `Lib` inside the prefix; it
+surfaced as `command_spawn_failed` and took diagnostics at three layers to find). The next failure is not ours: Arcana's Windows
+sandbox loads `processmodel.dll` (the experimental SBOX process API) and the hosted runner does not have it (os error 126), so
+no sandboxed command can start there, and the sandbox correctly refuses to run unconfined. Razi chose **skip on hosted** over a
+self-hosted Windows 11 runner. The TG4-32 step now runs on Linux only and the "Project command portability corpora" step runs
+on every OS except Windows. **Consequences:** the Windows sandbox, the `npm.cmd` shim path and the Windows corpus (TG4-18, TG4-31,
+TG4-32 on Windows) are proven only by running the suites on a Windows 11 machine (the 2026-11-04 local runs), not by CI; the
+other Windows build-smoke steps after TG4-32 (TG4-19, P4-39, build) had never run on a hosted runner because the job stopped
+at TG4-32, so they may still fail. A self-hosted runner stays the way to close this if Windows regressions slip through.

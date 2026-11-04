@@ -332,8 +332,12 @@ jobs:
 
       # On failure the failing lines are repeated as annotations, which are
       # readable without signing in to download the job log.
+      #
+      # Linux only (D-011): the Windows sandbox needs processmodel.dll, which
+      # hosted Windows runners do not have, so the sandboxed build cannot start
+      # there. The Windows run is a local gate. macOS is parked.
       - name: Registered project command to Logs export (TG4-32)
-        if: runner.os != 'macOS'
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           if ! cargo test -p arcanactl --test project_command_stage_logs --locked -- --test-threads=1 2>&1 | tee tg4-32.log; then
@@ -380,8 +384,11 @@ jobs:
 
       # TG4-18: run Rust, npm and Python command intents through Arcana's
       # production argv resolver and process launcher on each OS in this
-      # matrix, including the real Windows npm.cmd shim path.
+      # matrix, including the real Windows npm.cmd shim path. The Windows
+      # corpus runs only locally (D-011): it launches through the Windows
+      # sandbox, which hosted runners cannot provide.
       - name: Project command portability corpora
+        if: runner.os != 'Windows'
         run: cargo test -p arcana-core --lib agent::builtin_tools::project_command::tests::checked_in_ecosystem_corpora_run_real_intents_through_the_production_launcher --locked -- --exact --nocapture
 
       - name: Install deps
