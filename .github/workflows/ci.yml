@@ -88,14 +88,10 @@ jobs:
       - name: Tests
         shell: bash
         run: |
-          set +e
-          cargo test --workspace --all-targets -- --test-threads=4 2>&1 | tee workspace-tests.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            grep -E "^test .*FAILED|panicked at|^error" workspace-tests.log \
-              | head -9 | cut -c1-700 | while IFS= read -r line; do echo "::error::$line"; done
+          if ! cargo test --workspace --all-targets -- --test-threads=4 2>&1 | tee workspace-tests.log; then
+            grep -E "^test .*FAILED|panicked at|^error" -A3 workspace-tests.log               | head -9 | cut -c1-700 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
           fi
-          exit "$status"
 
       # This fixture installs process-global native manager/analytics. Keep it
       # separate from ordinary no-manager failure fixtures.
@@ -226,18 +222,10 @@ jobs:
       - name: Offline Fleet CLI suite
         shell: bash
         run: |
-          set +e
-          cargo test \
-            --manifest-path src-cli/Cargo.toml \
-            --features offline-fleet-test \
-            --test fleet_offline \
-            -- --test-threads=4 2>&1 | tee fleet-offline.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            grep -E "panicked at|^test .*FAILED|project_command|^error" fleet-offline.log \
-              | head -8 | cut -c1-1500 | while IFS= read -r line; do echo "::error::$line"; done
+          if ! cargo test             --manifest-path src-cli/Cargo.toml             --features offline-fleet-test             --test fleet_offline             -- --test-threads=4 2>&1 | tee fleet-offline.log; then
+            grep -E "panicked at|Timed out|log directory|\.jsonl|^error" -A3 fleet-offline.log               | head -9 | cut -c1-1500 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
           fi
-          exit "$status"
 
   # ── Build smoke: all three platforms, on pull requests ────────────────────
   #
