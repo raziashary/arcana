@@ -653,9 +653,10 @@ impl Tool for ProjectCommandTool {
                     failure_count += 1;
                     failure_codes.push("command_spawn_failed");
                     result.push(format!(
-                        "Could not start the {:?} command for project {}.",
+                        "Could not start the {:?} command for project {} ({}).",
                         project.toolchain,
-                        workspace_relative_path(&workspace_root, &project.project_dir)
+                        workspace_relative_path(&workspace_root, &project.project_dir),
+                        spawn_error_summary(&error)
                     ));
                     continue;
                 }
@@ -1205,6 +1206,15 @@ fn workspace_fingerprint_matches(baseline: Option<&str>, current: Option<&str>) 
     baseline
         .zip(current)
         .is_some_and(|(before, after)| before == after)
+}
+
+/// The part of a spawn error that is safe to show the model: the error kind
+/// and the OS error code, never the message, which can carry host paths.
+fn spawn_error_summary(error: &io::Error) -> String {
+    match error.raw_os_error() {
+        Some(code) => format!("{:?}, os error {code}", error.kind()),
+        None => format!("{:?}", error.kind()),
+    }
 }
 
 fn workspace_relative_path(workspace_root: &Path, project_dir: &Path) -> String {

@@ -339,7 +339,7 @@ jobs:
           if ! cargo test -p arcanactl --test project_command_stage_logs --locked -- --test-threads=1 2>&1 | tee tg4-32.log; then
             # The log opens with compiler warnings, so the cause is read from
             # the panic lines and the end of the log, not the first matches.
-            { grep -E "panicked at|^error|Access is denied" -A4 tg4-32.log | head -16; echo "--- end of log ---"; tail -n 20 tg4-32.log; } | cut -c1-1500 | while IFS= read -r line; do echo "::error::$line"; done
+            { grep -E "panicked at|^error|Access is denied" -A4 tg4-32.log | head -16; echo "--- end of log ---"; tail -n 20 tg4-32.log; } | cut -c1-6000 | while IFS= read -r line; do echo "::error::$line"; done
             exit 1
           fi
 
