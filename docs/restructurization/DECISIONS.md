@@ -107,8 +107,8 @@ sandbox. Every stage re-copies (the build can edit `node_modules`, so a matching
 **every** lockfile present (`npm-shrinkwrap.json` wins over `package-lock.json`; both are bound and policy-checked). Refused before
 any process starts: lockfileVersion below 2; any entry whose `resolved` is not exactly the canonical
 `registry.npmjs.org/<name>/-/<unscoped>-<version>.tgz` for its own name and version, or lacks sha512 integrity (`inBundle` entries
-included unless they have no `resolved` and sit under a parent); aliases (`name` differing from the key), `link` entries, odd or
-Windows-device path segments; dependency and `overrides` specs in `package.json` that are not plain version ranges; any `.npmrc` on
+included unless they have no `resolved` and their parent's lock entry lists them in `bundleDependencies`); aliases (`name` differing from the key), `link` entries, odd or
+Windows-device path segments; dependency and `overrides` specs in `package.json` that are not plain version ranges (a leading dot, npm's spelling of a directory spec, included); any `.npmrc` on
 the path; npm workspaces; pnpm, yarn, bun and go (still refused). `npm ci` also runs with `--allow-git/remote/file/directory=none`,
 a rebuilt environment, empty user and global configs and no stdout capture. A security review (Haiku 5.5 High) found the `inBundle`
 policy skip, spec and canonical-URL gaps and the always-recopy issue; all are fixed, with a Windows test that a junction planted
@@ -138,8 +138,11 @@ The Fleet CLI offline suite failed in CI with the run successful but its last te
 file. `tracing-appender`'s `WorkerGuard` waits at most one second for its worker on drop, and the worker redacts each record
 (measured: 10,000 events emit in 245 ms and drain in 1.25 s in a debug build; the queue holds 128k lines, so overflow and the
 existing drop counters are ruled out). Per the rule "change production logging only if the diagnostics point at the cause",
-`LoggingGuards` now counts writes accepted and finished per queue and waits in `Drop`, up to 10 s, until they match (plus
-lossy-queue drops) before the guards drop. This applies to the desktop host as well as `arcanactl`. Proof is a unit test with a
+`LoggingGuards` now counts writes accepted and finished per queue and waits in `Drop`, up to 10 s in total across all queues,
+until they match (plus lossy-queue drops) before the guards drop. This takes effect where `LoggingGuards` is actually dropped,
+which is `arcanactl` returning from `main`. The desktop host keeps `_log_guard` in `main()` but leaves through Tauri's event loop,
+which exits the process without unwinding `main`, so the drain does not run there; flushing on `RunEvent::Exit` is a backlog
+item (`HARDENING_BACKLOG.md` B). Proof is a unit test with a
 control (700 lines at 3 ms: lost with the guard alone, none lost with the wait); the CI flake itself is not reproduced locally,
 so the next CI runs are the check. If `fleet_offline` fails again with the same signature, the cause was something else.
 

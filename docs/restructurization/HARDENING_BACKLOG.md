@@ -33,6 +33,8 @@ Still open:
 - `P4-56` / `TG4-30`: independent attack testing of the non-command failure paths (retry loops, checkpoints and resume, supervisor reassignment, telemetry retention). The command and sandbox path was moved into `SHIP_PLAN.md` R1 on 2026-11-03.
 - `P7-19` / `TG7-06`: automatic replay or reassignment after process loss.
 - `P4-49` live-provider paid Fleet completion beyond the Calendar acceptance run.
+- Desktop log flush on exit: `src-tauri/src/main.rs` holds `_log_guard`, but the Tauri event loop exits the process without dropping it, so the `LoggingGuards` drain (D-010) never runs there and the last events of a session can be lost. Flush from the `RunEvent::Exit` handler.
+- npm staging, small edges from the R1 review: `copy_tree` has no size or depth bound, `already_staged` trusts the marker alone, `npm ci` stderr is read unbounded, and `sweep_stale_scratch` removes scratch older than one hour even if a very slow install still uses it.
 
 ## C. Codebase audit workstreams (2026-10-18)
 

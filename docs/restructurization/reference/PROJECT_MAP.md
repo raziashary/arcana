@@ -77,9 +77,9 @@ open P5 proof work.
 `CoreRuntimeOptions` carries host prompt availability into `RecipeRunner`,
 `AgentEngine`, and `ToolExecutor`. The desktop has a live permission responder;
 the headless CLI marks it unavailable, so one-call `HostApproval` effects are
-refused before a pending request or tool handler is created. CLI Fleet still
-fails closed on dependency installation until locked host-controlled staging
-exists.
+refused before a pending request or tool handler is created. CLI Fleet therefore
+cannot run the pinned staging call (Cargo and npm staging exist since 2026-11-04,
+D-008), so dependency installation still fails closed there.
 
 P4-50 observability crosses `arcana-core/src/observability/` producers and the
 shared `arcana-core/src/observability/logging.rs` writer. Its private
