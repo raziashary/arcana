@@ -330,9 +330,16 @@ jobs:
       - name: Structured telemetry identity and redaction
         run: cargo test -p arcana-core --lib observability::logging::tests --locked -- --test-threads=1
 
+      # On failure the failing lines are repeated as annotations, which are
+      # readable without signing in to download the job log.
       - name: Registered project command to Logs export (TG4-32)
         if: runner.os != 'macOS'
-        run: cargo test -p arcanactl --test project_command_stage_logs --locked -- --test-threads=1
+        shell: bash
+        run: |
+          if ! cargo test -p arcanactl --test project_command_stage_logs --locked -- --test-threads=1 2>&1 | tee tg4-32.log; then
+            grep -E "panicked at|^error|Access is denied|Windows 11|sandbox" -A3 tg4-32.log | head -12 | cut -c1-1500 | while IFS= read -r line; do echo "::error::$line"; done
+            exit 1
+          fi
 
       # Selected TG4-19 producer/reader pairs. This does not substitute for
       # the remaining per-database inventory required to close the gate.
@@ -340,8 +347,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo test -p arcana-core --lib analytics_timestamp_pairs_ --locked -- --test-threads=1
-          cargo test -p arcana-core --lib timestamp_readers_preserve_legacy_rows_after_reopen --locked -- --test-threads=1
+          # Annotate the failing lines, as the TG4-32 step does.
+          run_logged() {
+            if ! "$@" 2>&1 | tee tg4-19.log; then
+              grep -E "panicked at|^error|FAILED" -A3 tg4-19.log | head -12 | cut -c1-1500 | while IFS= read -r line; do echo "::error::$line"; done
+              exit 1
+            fi
+          }
+          run_logged cargo test -p arcana-core --lib analytics_timestamp_pairs_ --locked -- --test-threads=1
+          run_logged cargo test -p arcana-core --lib timestamp_readers_preserve_legacy_rows_after_reopen --locked -- --test-threads=1
           for filter in \
             generated_task_and_run_writers_round_trip_a_leap_year_and_dst_after_reopen \
             generated_worker_and_plan_writers_round_trip_a_leap_year_and_dst_after_reopen \
@@ -351,7 +365,7 @@ jobs:
             generated_checkpoint_writes_round_trip_a_leap_year_and_dst \
             generated_graph_writes_round_trip_a_leap_year_and_dst \
             generated_hook_config_writes_round_trip_a_leap_year_and_dst; do
-            cargo test -p arcana-core --lib "$filter" --locked -- --test-threads=1
+            run_logged cargo test -p arcana-core --lib "$filter" --locked -- --test-threads=1
           done
 
       - name: Explicit task budget resolution and persisted Fleet completion (P4-39)
