@@ -131,3 +131,19 @@ Razi approved the two items that waited on a ruling and settled three others:
   skipped on Linux (`#[cfg(windows)]` or an `#[ignore]` with the reason), not fixed and not removed from Windows. This keeps
   the Linux CI job honest for the code that does run there; Linux stays parked for v1 (D-005). The CI job itself is unchanged.
 - **P4-49** (Razi's Calendar acceptance) is deferred until Razi asks for it; R1 can close without it, and the plan row stays open.
+
+## D-010 · Log writers drain before the process exits — 2026-11-04, build decision
+
+The Fleet CLI offline suite failed in CI with the run successful but its last telemetry event missing from a 3.2 MB event
+file. `tracing-appender`'s `WorkerGuard` waits at most one second for its worker on drop, and the worker redacts each record
+(measured: 10,000 events emit in 245 ms and drain in 1.25 s in a debug build; the queue holds 128k lines, so overflow and the
+existing drop counters are ruled out). Per the rule "change production logging only if the diagnostics point at the cause",
+`LoggingGuards` now counts writes accepted and finished per queue and waits in `Drop`, up to 10 s, until they match (plus
+lossy-queue drops) before the guards drop. This applies to the desktop host as well as `arcanactl`. Proof is a unit test with a
+control (700 lines at 3 ms: lost with the guard alone, none lost with the wait); the CI flake itself is not reproduced locally,
+so the next CI runs are the check. If `fleet_offline` fails again with the same signature, the cause was something else.
+
+Also built the same day, no ruling needed: command-path attack tests (P4-56 narrowed), the execute-path intent suite (W9), and a
+fix for Cargo lint through the registered tool (a plain workspace root against a verbatim project path made the Clippy config
+walk climb out of the workspace; found by the new execute-path test). See `SHIP_PLAN.md` R1.
+

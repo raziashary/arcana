@@ -22,6 +22,7 @@ TG4-31 retains strict confinement/dependency staging.
 The remaining TG4-18 Windows command failure is isolated to Cargo Clippy
 configuration path canonicalization: Rust Run and npm Lint/Run also pass the
 production sandbox. See `_verify/P4-18-WINDOWS-INTENT-ISOLATION-2026-10-14.md`.
+*(Superseded 2026-11-04: the Clippy failure was a path-spelling bug in the registered tool path, now fixed, and the whole Windows corpus passes; see `SHIP_PLAN.md` R1.)*
 The scheduler's in-process timeout recovery now has a real `kick("supervisor")`
 consumer receipt: persisted Supervisor recipe → RecipeRunner → AgentEngine →
 registered health/task tools → next model turn. Together with the prior
