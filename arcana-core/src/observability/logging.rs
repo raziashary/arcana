@@ -32,7 +32,8 @@ pub struct LoggingGuards {
     health: LoggingHealth,
 }
 
-/// The longest `LoggingGuards` waits at shutdown for the writer queues to empty.
+/// The longest `LoggingGuards` waits in total at shutdown for all the writer
+/// queues to empty.
 const DRAIN_LIMIT: Duration = Duration::from_secs(10);
 
 /// How many writes a queue accepted and how many its worker has finished.
@@ -50,9 +51,8 @@ struct QueueDrain {
 
 impl QueueDrain {
     /// Block until every accepted write is finished or dropped by the lossy
-    /// queue, or `limit` passes.
-    fn wait(&self, dropped: &ErrorCounter, limit: Duration) {
-        let deadline = Instant::now() + limit;
+    /// queue, or `deadline` passes.
+    fn wait(&self, dropped: &ErrorCounter, deadline: Instant) {
         while Instant::now() < deadline {
             let finished = self
                 .finished
@@ -123,8 +123,9 @@ impl Drop for LoggingGuards {
     /// Let the writers empty their queues before the `WorkerGuard`s (dropped
     /// after this body) stop waiting.
     fn drop(&mut self) {
+        let deadline = Instant::now() + DRAIN_LIMIT;
         for (drain, dropped) in &self.drains {
-            drain.wait(dropped, DRAIN_LIMIT);
+            drain.wait(dropped, deadline);
         }
     }
 }
@@ -686,7 +687,7 @@ mod tests {
     /// `WorkerGuard` gives up after one second. A queue that holds more than a
     /// second of work at exit loses its tail (the Fleet CLI's completion event
     /// was the casualty in CI). The control half shows the loss with only the
-    /// guard; the other half shows `QueueDrain::wait` prevents it.
+    /// guard; the other half shows dropping `LoggingGuards` prevents it.
     #[test]
     fn the_drain_wait_delivers_a_backlog_that_the_guard_alone_would_drop() {
         const LINES: u64 = 700;
@@ -720,9 +721,16 @@ mod tests {
                     .expect("queue accepts the line");
             }
             if wait_for_drain {
-                drain.wait(&dropped, Duration::from_secs(30));
+                // The production shutdown path: dropping the guards waits for
+                // the drain, then the `WorkerGuard` stops.
+                drop(LoggingGuards {
+                    guards: vec![guard],
+                    drains: vec![(Arc::clone(&drain), dropped.clone())],
+                    health: LoggingHealth::default(),
+                });
+            } else {
+                drop(guard);
             }
-            drop(guard);
             assert_eq!(dropped.dropped_lines(), 0, "the queue is far from full");
             written.load(Ordering::SeqCst)
         };
