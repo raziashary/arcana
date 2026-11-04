@@ -5992,7 +5992,9 @@ fn main() {
         let outer = tempfile::tempdir().expect("outer directory");
         let workspace = outer.path().join("workspace");
         let outside = outer.path().join("outside");
-        for directory in [&workspace, &outside] {
+        // `outer` holds a runnable project too, so `..` has a real target to
+        // reach rather than failing for want of a manifest.
+        for directory in [&workspace, &outside, outer.path()] {
             std::fs::create_dir_all(directory).expect("create directory");
             std::fs::write(
                 directory.join("package.json"),
@@ -6048,7 +6050,9 @@ fn main() {
                 result.output
             );
             assert!(
-                !outside.join("ran.txt").exists() && !workspace.join("ran.txt").exists(),
+                !outside.join("ran.txt").exists()
+                    && !workspace.join("ran.txt").exists()
+                    && !outer.path().join("ran.txt").exists(),
                 "project_path {spelling:?} started a process"
             );
         }
