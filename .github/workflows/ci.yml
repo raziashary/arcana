@@ -83,13 +83,18 @@ jobs:
 
       # --all-targets, not --lib: integration tests under src-tauri/tests/ must
       # actually run. With --lib they are silently skipped and the job is green.
-      # On failure the failing test names are repeated as annotations, which
-      # are readable without signing in to download the job log.
+      # On failure every failing test name and its panic text are repeated as
+      # two annotations (annotations are capped per step, so they are joined
+      # into one message each), readable without signing in to download the
+      # job log.
       - name: Tests
         shell: bash
         run: |
           if ! cargo test --workspace --all-targets -- --test-threads=4 2>&1 | tee workspace-tests.log; then
-            grep -E "^test .*FAILED|panicked at|^error" -A3 workspace-tests.log               | head -9 | cut -c1-700 | while IFS= read -r line; do echo "::error::$line"; done
+            failed=$(awk '/^test .*FAILED/ {print $2}' workspace-tests.log | tr '\n' ' ')
+            detail=$(awk '/panicked at|^error/ {n=5} n>0 && c<80 {print substr($0,1,500); n--; c++}' workspace-tests.log | awk 'BEGIN{ORS="%0A"} {print}')
+            echo "::error title=Failed tests::$failed"
+            echo "::error title=Failure detail::$detail"
             exit 1
           fi
 

@@ -624,6 +624,13 @@ mod shell_boundary_tests {
         }
     }
 
+    /// The portability guard refuses any command or directory containing a
+    /// hardcoded `/tmp/`, which is where `tempdir()` lives on Linux; anchoring
+    /// the fixture inside the crate keeps these tests on the guard they target.
+    fn isolated_dir() -> tempfile::TempDir {
+        tempfile::tempdir_in(env!("CARGO_MANIFEST_DIR")).expect("isolated Arcana home")
+    }
+
     fn context(workspace: Option<&std::path::Path>) -> HookContext {
         HookContext {
             hook_type: HookType::PostFileWrite.as_str().into(),
@@ -650,7 +657,7 @@ mod shell_boundary_tests {
 
     #[tokio::test]
     async fn shell_hook_requires_selected_workspace_before_spawn() {
-        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let home = isolated_dir();
         let _home = crate::db::test_support::with_home(home.path());
         let sentinel = home.path().join("shell-hook-ran.txt");
         let log = HookExecutor::execute(
@@ -672,7 +679,7 @@ mod shell_boundary_tests {
 
     #[tokio::test]
     async fn shell_hook_rejects_action_directory_outside_selected_workspace() {
-        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let home = isolated_dir();
         let _home = crate::db::test_support::with_home(home.path());
         let workspace = home.path().join("workspace");
         let outside = home.path().join("outside");
@@ -721,7 +728,7 @@ mod shell_boundary_tests {
     #[cfg(not(windows))]
     #[tokio::test]
     async fn shell_hook_fails_closed_when_platform_policy_is_unavailable() {
-        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let home = isolated_dir();
         let _home = crate::db::test_support::with_home(home.path());
         let workspace = home.path().join("workspace");
         std::fs::create_dir(&workspace).expect("selected workspace");
