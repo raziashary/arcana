@@ -124,7 +124,7 @@ mod observability_tests {
             .with_writer(move || SharedWriter(Arc::clone(&writer_output)))
             .finish();
 
-        let (observed, ()) = tracing::subscriber::with_default(subscriber, || {
+        let (observed, ()) = crate::test_support::capture_default(subscriber, || {
             let empty = get_github_mcp_config().expect("read missing configuration");
             set_github_mcp_config(
                 true,

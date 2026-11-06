@@ -390,7 +390,7 @@ mod connection_audit_tests {
                     .json()
                     .with_writer(move || CapturedWriter(output.clone()))
                     .finish();
-                let result = tracing::subscriber::with_default(subscriber, || {
+                let result = crate::test_support::capture_default(subscriber, || {
                     runtime.block_on(check_provider_metadata_connection(
                         &provider,
                         key_validation,

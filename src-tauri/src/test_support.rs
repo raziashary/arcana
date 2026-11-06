@@ -34,3 +34,25 @@ pub fn isolate_home(path: &std::path::Path) -> HomeGuard {
         home,
     }
 }
+
+/// Run `action` with `subscriber` as this thread's default, so a test can read
+/// the telemetry its own code emits.
+///
+/// With exactly one dispatcher registered, `tracing-core` computes a callsite's
+/// interest from whichever thread reaches it first, using that thread's own
+/// default. A test thread with no subscriber then caches "never" for a callsite
+/// the capturing test needs (the shared `operation_timing` event, for one), and
+/// the capture comes back empty. A process-wide default that enables everything
+/// is a second dispatcher, so interest becomes the union and stays enabled.
+pub fn capture_default<T>(
+    subscriber: impl tracing::Subscriber + Send + Sync + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    static ENABLE_ALL_CALLSITES: std::sync::Once = std::sync::Once::new();
+    ENABLE_ALL_CALLSITES.call_once(|| {
+        // Another test binary hook may already own the global default; then
+        // callsites are already enabled for every thread.
+        let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry());
+    });
+    tracing::subscriber::with_default(subscriber, action)
+}

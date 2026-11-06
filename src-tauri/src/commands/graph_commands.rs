@@ -523,7 +523,7 @@ mod observability_tests {
             .with_writer(move || SharedWriter(Arc::clone(&writer_output)))
             .finish();
 
-        tracing::subscriber::with_default(subscriber, || {
+        crate::test_support::capture_default(subscriber, || {
             let result: Result<()> = graph_phase("graph-run-test", "detect", || {
                 Err(anyhow::anyhow!("sensitive underlying detail").into())
             });

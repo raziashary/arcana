@@ -177,7 +177,7 @@ mod tests {
             observed: observed.clone(),
             fired: fired.clone(),
         });
-        let error = tracing::subscriber::with_default(subscriber, || {
+        let error = crate::test_support::capture_default(subscriber, || {
             force_release_task(
                 task.id,
                 observed.status.as_str().to_string(),

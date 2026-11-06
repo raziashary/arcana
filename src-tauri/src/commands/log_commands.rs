@@ -1285,7 +1285,7 @@ mod tests {
                     .with_writer(writer)
                     .with_filter(filter_fn(TELEMETRY_TARGET_FILTER)),
             );
-            tracing::subscriber::with_default(subscriber, || {
+            crate::test_support::capture_default(subscriber, || {
                 let mut parent = arcana_core::observability::timing::OperationTimer::start(
                     "logs_export_isolation_parent",
                 )
@@ -1320,7 +1320,7 @@ mod tests {
                 .with_writer(writer)
                 .with_filter(filter_fn(TELEMETRY_TARGET_FILTER)),
         );
-        let error = tracing::subscriber::with_default(subscriber, || {
+        let error = crate::test_support::capture_default(subscriber, || {
             super::export_observability_bundle(
                 date.clone(),
                 destination.to_string_lossy().into_owned(),
@@ -1638,7 +1638,7 @@ mod tests {
                     && *metadata.level() == tracing::Level::INFO
             }));
         let subscriber = Registry::default().with(layer);
-        let error = tracing::subscriber::with_default(subscriber, || {
+        let error = crate::test_support::capture_default(subscriber, || {
             tracing::info!(target: "arcana::telemetry", event_type = "retention_capture_probe", "Retention capture active");
             db.prune_append_only_before("2026-07-06T12:00:00Z")
                 .expect_err("malformed timestamps must fail closed")
@@ -1705,7 +1705,7 @@ mod tests {
                     && *metadata.level() == tracing::Level::INFO
             }));
         let subscriber = Registry::default().with(layer);
-        let error = tracing::subscriber::with_default(subscriber, || {
+        let error = crate::test_support::capture_default(subscriber, || {
             tracing::info!(target: "arcana::telemetry", event_type = "retention_capture_probe", "Retention capture active");
             hooks
                 .prune_logs_before("2026-07-06T12:00:00Z")
@@ -2138,7 +2138,7 @@ mod tests {
                     || metadata.target().starts_with("arcana::telemetry::")
             }));
         let subscriber = Registry::default().with(layer);
-        tracing::subscriber::with_default(subscriber, || {
+        crate::test_support::capture_default(subscriber, || {
             let mut operation =
                 arcana_core::observability::timing::OperationTimer::start("logs_roundtrip_fixture")
                     .with_run_id("run-logs-roundtrip")
@@ -2231,7 +2231,7 @@ mod tests {
             agent_role: AgentIdentity::supervisor().role,
             run_token_budget: None,
         };
-        let tool_result = tracing::subscriber::with_default(subscriber, || {
+        let tool_result = crate::test_support::capture_default(subscriber, || {
             futures::executor::block_on(
                 arcana_core::agent::builtin_tools::search_memory::SearchMemoryTool.execute(
                     serde_json::json!({
@@ -2368,7 +2368,7 @@ mod tests {
             .enable_all()
             .build()
             .expect("create isolated command runtime");
-        let result = tracing::subscriber::with_default(subscriber, || {
+        let result = crate::test_support::capture_default(subscriber, || {
             runtime.block_on(arcana_core::agent::builtin_tools::project_command::ProjectCommandTool.execute(
                 serde_json::json!({"intent": "build", "toolchain": "cargo", "timeout_secs": 120}),
                 &context,
@@ -2466,7 +2466,7 @@ mod tests {
             agent_role: AgentIdentity::supervisor().role,
             run_token_budget: None,
         };
-        let result = tracing::subscriber::with_default(subscriber, || {
+        let result = crate::test_support::capture_default(subscriber, || {
             futures::executor::block_on(
                 arcana_core::agent::builtin_tools::external_mcp::McpListToolsTool
                     .execute(serde_json::json!({}), &context),
@@ -2643,7 +2643,7 @@ mod tests {
             agent_role: AgentIdentity::worker("worker-backend").role,
             run_token_budget: None,
         };
-        let result = tracing::subscriber::with_default(subscriber, || {
+        let result = crate::test_support::capture_default(subscriber, || {
             runtime.block_on(async {
                 arcana_core::agent::builtin_tools::external_mcp::McpCallTool
                     .execute(
@@ -2827,7 +2827,7 @@ mod tests {
             .enable_all()
             .build()
             .expect("create isolated provider runtime");
-        tracing::subscriber::with_default(subscriber, || {
+        crate::test_support::capture_default(subscriber, || {
             // Deterministic success: the production compaction path makes one
             // real provider call and emits provider_call with usage/outcome.
             runtime
@@ -3047,7 +3047,7 @@ mod tests {
             .with_writer(writer)
             .with_filter(filter_fn(TELEMETRY_TARGET_FILTER));
         let subscriber = Registry::default().with(layer);
-        tracing::subscriber::with_default(subscriber, || {
+        crate::test_support::capture_default(subscriber, || {
             // The open path installed the profile callback through the shared
             // `open_tuned` route, so every workload statement persists
             // through the production profiler while the sink is attached.
@@ -3163,7 +3163,7 @@ mod tests {
             .with_writer(writer)
             .with_filter(filter_fn(TELEMETRY_TARGET_FILTER));
         let subscriber = Registry::default().with(layer);
-        tracing::subscriber::with_default(subscriber, || {
+        crate::test_support::capture_default(subscriber, || {
             let runs = arcana_core::db::runs::RunsDb::open()
                 .expect("open migrated isolated runs database");
             let run_id = runs
@@ -3281,7 +3281,7 @@ mod tests {
             .with_writer(writer)
             .with_filter(filter_fn(TELEMETRY_TARGET_FILTER));
         let subscriber = Registry::default().with(layer);
-        tracing::subscriber::with_default(subscriber, || {
+        crate::test_support::capture_default(subscriber, || {
             let mut parent =
                 arcana_core::observability::timing::OperationTimer::start("logs_correlated_parent")
                     .with_trace_id("trace-logs-correlation-proof")
@@ -3431,7 +3431,7 @@ mod tests {
             .with_writer(writer)
             .with_filter(filter_fn(TELEMETRY_TARGET_FILTER));
         let subscriber = Registry::default().with(layer);
-        tracing::subscriber::with_default(subscriber, || {
+        crate::test_support::capture_default(subscriber, || {
             // Production provider calls run inside the agent's run/session
             // scope; attribute the persisted provider_call records to the
             // session the way production spans do. The span carries the
