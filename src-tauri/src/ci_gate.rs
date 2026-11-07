@@ -224,7 +224,8 @@ mod tests {
             );
         }
 
-        for os in ["windows-latest", "ubuntu-22.04", "macos-14"] {
+        // macOS is not listed: D-012 dropped the hosted macOS leg for v1.
+        for os in ["windows-latest", "ubuntu-22.04"] {
             assert!(source.contains(os), "ci.yml never builds on {os}");
         }
 

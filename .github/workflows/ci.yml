@@ -232,11 +232,12 @@ jobs:
             exit 1
           fi
 
-  # ── Build smoke: all three platforms, on pull requests ────────────────────
+  # ── Build smoke: Windows and Linux, on pull requests ───────────────────────
   #
   # These used to be gated to `push` on `main`, so a pull request could be
-  # merged without any platform ever having compiled the app — and macOS was
-  # not built in CI at all. R-4 names "macOS verified last" as release-blocking.
+  # merged without any platform ever having compiled the app. The macOS leg
+  # was dropped for v1 (D-012): v1 is Windows-only and the hosted
+  # `macos-14` runner configuration was refused by GitHub.
 
   build-smoke:
     name: Build smoke (${{ matrix.name }})
@@ -250,8 +251,6 @@ jobs:
             os: windows-latest
           - name: Linux
             os: ubuntu-22.04
-          - name: macOS
-            os: macos-14   # Apple Silicon
 
     steps:
       - uses: actions/checkout@v4
@@ -299,7 +298,7 @@ jobs:
       # TG4-17: exercise the production read/write boundaries for saved
       # workflows and defaults on every supported host. The skill loader is
       # part of the desktop crate; running these tests in this matrix ensures
-      # Linux and macOS do not silently skip the persisted-skill contract.
+      # Linux does not silently skip the persisted-skill contract.
       - name: Persisted workflow shell portability (TG4-17)
         shell: bash
         run: |
@@ -335,7 +334,7 @@ jobs:
       #
       # Linux only (D-011): the Windows sandbox needs processmodel.dll, which
       # hosted Windows runners do not have, so the sandboxed build cannot start
-      # there. The Windows run is a local gate. macOS is parked.
+      # there. The Windows run is a local gate.
       - name: Registered project command to Logs export (TG4-32)
         if: runner.os == 'Linux'
         shell: bash

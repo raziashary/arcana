@@ -162,3 +162,15 @@ on every OS except Windows. **Consequences:** the Windows sandbox, the `npm.cmd`
 TG4-32 on Windows) are proven only by running the suites on a Windows 11 machine (the 2026-11-04 local runs), not by CI; the
 other Windows build-smoke steps after TG4-32 (TG4-19, P4-39, build) had never run on a hosted runner because the job stopped
 at TG4-32, so they may still fail. A self-hosted runner stays the way to close this if Windows regressions slip through.
+
+## D-012 · The macOS build-smoke leg is dropped from CI for v1 — 2026-11-07, Razi
+
+The `build-smoke` matrix had a macOS leg (`macos-14`). In run `358fd74` it never started: GitHub refused the runner ("The
+configuration 'macos-14-arm64-us-default' is not supported"), so no step ran and the whole run read as "cancelled". Before that
+it had failed at "Structured telemetry identity and redaction" (exit 101, no panic text); that cause was never found. v1 is
+Windows-only and macOS is parked, so Razi chose **drop the leg** over fixing it. The `build-smoke` matrix is now Windows and
+Linux, and the `tg0_02_every_required_check_is_present_and_distinct` assertion in `ci_gate.rs` no longer requires `macos-14`.
+**Consequences:** nothing in CI compiles or tests the app on macOS, and the unexplained telemetry test failure there stays
+unexplained. `build-release.yml` still has a macOS DMG job; it only runs for releases and is parked with the rest of the macOS
+work. Re-adding macOS (a matrix entry plus the `ci_gate.rs` assertion) is part of the post-v1 Linux/macOS parity work in
+`HARDENING_BACKLOG.md`.
