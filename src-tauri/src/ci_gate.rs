@@ -3877,11 +3877,19 @@ fn effect() { ToolEffect::Execute }"#;
             .nth(1)
             .expect("the override branch must exist");
         let branch = branch.split("};").next().unwrap_or(branch);
+        // Since R2 (P5-14) the volatile half has one composer,
+        // `volatile_prompt`, which assembles memory (`memory_block`) and the
+        // code graph; the override path must call it with the real query, and
+        // the composer must still call `memory_block`.
         assert!(
-            branch.contains("memory_block(working_dir, user_message)"),
-            "the override path does not assemble memory. It returns the \
-             volatile half, and the memory block lives there — so a custom \
-             system prompt silently disables all recall."
+            branch.contains("volatile_prompt(working_dir, user_message, None)"),
+            "the override path does not assemble the volatile half. It returns \
+             it, and the memory block lives there — so a custom system prompt \
+             silently disables all recall."
+        );
+        assert!(
+            ctx.contains("self.memory_block(repo_path, query)"),
+            "volatile_prompt no longer assembles the memory block"
         );
         assert!(
             !branch.contains("String::new()"),
@@ -3905,6 +3913,92 @@ fn effect() { ToolEffect::Execute }"#;
             !ctx_code.contains("build_memory_context(sid, \"\", repo_path)"),
             "the empty-string query is back. That single literal made recall \
              byte-identical every turn, whatever the user asked."
+        );
+    }
+
+    /// `TG-P5-14` (P5-14, P5-16, P5-17) — the code graph reaches the prompt
+    /// through the one volatile-half composer, and cannot write.
+    ///
+    /// The `P3-45` defect was a block assembled at one of two sites. So: each of
+    /// `memory_block` and `graph_block` has exactly one call site in the prompt
+    /// path (inside `volatile_prompt`), and both the normal builder and the
+    /// override branch go through `volatile_prompt`. The graph reader must open
+    /// the database read-only and never through `GraphStore::open` (which
+    /// migrates and creates), must exclude `module::` stubs, and must pass every
+    /// repository string through `field`.
+    #[test]
+    fn tg_p5_14_graph_block_has_one_composer_and_is_read_only() {
+        // Production code only: the test modules call the blocks directly.
+        // ⚠ Not `uncommented`: that one cuts a line at `#` (it is the YAML
+        // helper) and would delete the `#[cfg(test)]` this looks for.
+        let rust_code = |relative: &str| {
+            read_source(&repo_root().join(relative))
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let production = |relative: &str| {
+            let source = rust_code(relative);
+            // Cut at the first top-level `#[cfg(test)]` that opens a module
+            // (an item-level one, indented, does not end production code).
+            let lines: Vec<&str> = source.lines().collect();
+            let cut = lines
+                .windows(2)
+                .position(|w| w[0].trim_end() == "#[cfg(test)]" && w[1].starts_with("mod "))
+                .unwrap_or(lines.len());
+            lines[..cut].join("\n")
+        };
+        let engine = production("arcana-core/src/agent/engine.rs");
+        let ctx = production("arcana-core/src/agent/context.rs");
+        assert!(
+            ctx.contains("fn volatile_prompt") && engine.contains("system_prompt_override"),
+            "the production halves were not found (is #[cfg(test)] now above them?)"
+        );
+        assert_eq!(
+            ctx.matches(".graph_block(").count(),
+            1,
+            "graph_block must be called only from volatile_prompt"
+        );
+        assert_eq!(
+            ctx.matches(".memory_block(").count(),
+            1,
+            "memory_block must be called only from volatile_prompt"
+        );
+        assert!(
+            !engine.contains(".graph_block(") && !engine.contains(".memory_block("),
+            "engine.rs assembles a volatile block itself instead of calling volatile_prompt"
+        );
+        assert!(
+            engine.contains("volatile_prompt(working_dir, user_message, None)")
+                && ctx.contains("self.volatile_prompt(repo_path, query, roster)"),
+            "the override path and the normal path must both use volatile_prompt"
+        );
+
+        let graph = rust_code("arcana-core/src/graph/context.rs");
+        assert!(
+            graph.contains("SQLITE_OPEN_READ_ONLY"),
+            "the graph reader must open read-only"
+        );
+        for banned in [
+            "GraphStore::open",
+            "INSERT ",
+            "UPDATE ",
+            "DELETE ",
+            "CREATE ",
+        ] {
+            assert!(
+                !graph.contains(banned),
+                "graph/context.rs contains `{banned}`; prompt assembly must never write or build"
+            );
+        }
+        assert!(
+            graph.matches("NOT LIKE 'module::%'").count() >= 3,
+            "seeding, expansion and degree must all exclude module:: stubs"
+        );
+        assert!(
+            graph.contains("field(&row.name)") && graph.contains("field(&relative("),
+            "repository names and paths must pass through field()"
         );
     }
 

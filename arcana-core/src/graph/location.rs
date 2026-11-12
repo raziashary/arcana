@@ -71,6 +71,17 @@ pub fn locate(workspace_as_given: &str) -> Result<GraphLocation> {
     Ok(GraphLocation { root, db_path })
 }
 
+/// The location of a workspace's graph **only if it has been built**: nothing is
+/// created and nothing is copied, so a read (prompt assembly, a tool call) can
+/// never leave an empty database behind. A graph stored under a legacy spelling
+/// is adopted by `locate`, which the Graph tab calls; until then this reports
+/// none.
+pub fn find_existing(workspace_as_given: &str) -> Result<Option<GraphLocation>> {
+    let root = canonical_workspace(Path::new(workspace_as_given))?;
+    let db_path = graph_db_path(&root)?;
+    Ok(db_path.is_file().then_some(GraphLocation { root, db_path }))
+}
+
 /// Every spelling an older build could have hashed for this workspace: the
 /// string as given, its slash and trailing-separator variants, and the
 /// resolved forms.

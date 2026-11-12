@@ -411,9 +411,12 @@ impl AgentEngine {
             // ⚠ The cache split is unchanged: everything here is still the
             // STABLE half and the memory block is still volatile and last.
             // What changed is what the stable half contains.
+            // 🔴 P5-14. The volatile half is composed by `volatile_prompt`, the
+            // same function the normal path uses, so memory and the code
+            // graph reach an override and a plain run alike.
             Some(override_str) => (
                 context_builder.build_agent_stable_prompt(working_dir, override_str),
-                context_builder.memory_block(working_dir, user_message),
+                context_builder.volatile_prompt(working_dir, user_message, None),
             ),
             // 🔴 P3-43. `user_message` is the query. It used to be the empty
             // string literal, which made recall byte-identical every turn.
@@ -3872,6 +3875,97 @@ mod procedural_memory_tests {
 
         assert_eq!(supervisor_max_tokens, 6_144);
         assert_eq!(worker_max_tokens, 8_192);
+    }
+
+    /// `P5-14` / `S5-05`, to the `P3-44` standard: a symbol recalled for THIS
+    /// request is in the bytes the engine hands the provider
+    /// (`CompletionRequest.system`), a different request gives a different
+    /// block, and the override path carries it as well as the plain path.
+    /// Presence alone would prove nothing — the same bytes whatever was asked.
+    #[tokio::test]
+    async fn the_code_graph_reaches_the_outbound_prompt_and_follows_the_request() {
+        ensure_isolated_test_analytics().await;
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("isolated workspace");
+        crate::graph::context_tests::write_invoice_workspace(workspace.path());
+        let location = crate::graph::context_tests::build_workspace_graph(workspace.path());
+        let working_dir = location.root.display().to_string();
+
+        async fn outbound_system(
+            working_dir: &str,
+            request: &str,
+            system_prompt_override: Option<&str>,
+        ) -> String {
+            let provider = scripted_provider("unused");
+            *provider.responses.lock().expect("script response lock") = VecDeque::from([vec![
+                StreamChunk::TextDelta {
+                    text: "finished".into(),
+                    block_index: 0,
+                },
+                StreamChunk::MessageDelta {
+                    stop_reason: "end_turn".into(),
+                    usage: Usage::default(),
+                },
+                StreamChunk::Done,
+            ]]);
+            let engine = AgentEngine::new(
+                provider.clone(),
+                super::super::permission::PermissionMode::Autonomous,
+                super::super::PAMode::FastDevelopment,
+                Arc::new(Mutex::new(crate::state::AppState::default())),
+                super::super::permission::new_pending_permissions(),
+                super::super::tool_trait::AgentIdentity::worker("worker-backend"),
+            );
+            engine
+                .run(
+                    "graph-prompt-session",
+                    working_dir,
+                    "fixture-model",
+                    Vec::new(),
+                    request,
+                    system_prompt_override,
+                )
+                .await
+                .expect("scripted engine completes");
+            let system = provider.requests.lock().expect("request capture lock")[0]
+                .system
+                .clone()
+                .expect("the request carries a system prompt");
+            system
+        }
+
+        for override_text in [None, Some("Worker instructions.")] {
+            let invoices =
+                outbound_system(&working_dir, "Where is render_invoice used?", override_text).await;
+            let settings =
+                outbound_system(&working_dir, "Explain parse_settings", override_text).await;
+
+            let graph_part = |system: &str| {
+                system
+                    .split("## Code graph (untrusted repository data)")
+                    .nth(1)
+                    .map(str::to_string)
+                    .unwrap_or_default()
+            };
+            let (a, b) = (graph_part(&invoices), graph_part(&settings));
+            assert!(
+                a.contains("`render_invoice`") && !a.contains("parse_settings"),
+                "override={override_text:?}: the invoice request got:\n{a}"
+            );
+            assert!(
+                b.contains("`parse_settings`") && !b.contains("render_invoice"),
+                "override={override_text:?}: the settings request got:\n{b}"
+            );
+            // The graph is volatile: it sits after the stable half.
+            let stable_end = invoices
+                .find("## Code graph")
+                .expect("graph block position");
+            assert!(
+                invoices[..stable_end].contains("You are Arcana"),
+                "the graph block must follow the stable prompt"
+            );
+        }
     }
 
     fn scripted_tool_response(

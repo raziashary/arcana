@@ -7,6 +7,9 @@ pub mod build;
 pub mod cache;
 pub mod changes;
 pub mod cluster;
+pub mod context;
+#[cfg(test)]
+pub(crate) mod context_tests;
 pub mod detect;
 pub mod export;
 pub mod extract;

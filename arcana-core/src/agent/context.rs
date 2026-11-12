@@ -231,14 +231,40 @@ impl ContextBuilder {
         // rebuilt from the episodic and semantic stores on every call, so a
         // single new fact changes these bytes — and anything sharing a cache
         // region with it is invalidated along with it.
-        let mut volatile = self.memory_block(repo_path, query);
-        if let Some(roster) = roster {
-            if !volatile.is_empty() {
-                volatile.push_str("\n\n");
-            }
-            volatile.push_str(&roster);
-        }
-        (stable, volatile)
+        (stable, self.volatile_prompt(repo_path, query, roster))
+    }
+
+    /// The volatile half of the system prompt: memory, then the code graph,
+    /// then (PA delegate mode only) the worker roster, in that order.
+    ///
+    /// 🔴 `P5-14`. **The one place the volatile half is composed**, for the
+    /// normal path above and for the system-prompt-override path in `engine.rs`
+    /// alike. Memory used to be assembled separately in each, which is exactly
+    /// how an override came to drop it (`P3-45`); a graph block added to only
+    /// one of the two would repeat that, so there is no second assembly site.
+    ///
+    /// Each block is rebuilt from the query on every call, so all of it is
+    /// volatile (`P2-14`). A block that has nothing to say is empty and adds no
+    /// separator.
+    pub fn volatile_prompt(&self, repo_path: &str, query: &str, roster: Option<String>) -> String {
+        let blocks = [
+            self.memory_block(repo_path, query),
+            self.graph_block(repo_path, query),
+            roster.unwrap_or_default(),
+        ];
+        blocks
+            .into_iter()
+            .filter(|block| !block.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    /// The code-graph block for `query` in `repo_path`: symbols whose names
+    /// match the request and their nearest neighbours, bounded and read-only.
+    /// Empty when the workspace has no graph or nothing matches — never an
+    /// error (`P5-14`, `P5-17`).
+    pub fn graph_block(&self, repo_path: &str, query: &str) -> String {
+        crate::graph::context::graph_context_block(repo_path, query)
     }
 
     /// The memory block for this session, scoped to `repo_path` and searched
