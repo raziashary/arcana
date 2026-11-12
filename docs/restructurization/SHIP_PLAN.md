@@ -196,6 +196,7 @@ Last feature commit: `8356aea` (2026-10-28), worker dispatch lineage. Since then
 
 | Open item | State | Next action |
 |---|---|---|
+| **R2 (Graph) closed 2026-11-13** | Built in 8 commits (path, upserts, prompt block, eight tools, extractor and edge-kind fixes, review fixes, telemetry labels; D-013, D-014). Full suite run crate by crate with keys unset: `arcana-shared` 4, `arcana` 185, `arcanactl` all targets, `arcana-core` lib 1298 passed and 1 failed (three graph telemetry labels unregistered; fixed, re-run green), the 11 integration binaries and the doc tests pass. Independent review (`implementation-reviewer`, read-only) found 10 issues, each checked against the code and fixed or recorded (D-014, backlog G): graph tools migrated an older graph on read, tests promised by `graph_impact` that no extractor produces, hub fan-out in the prompt block, silent truncation, overstated comments. Known flake: `production_graph_build_emits_correlated_operation_outcomes` in parallel module runs (backlog G) | None |
 | macOS build smoke (parked platform) | dropped from the `build-smoke` matrix and from the `ci_gate.rs` assertion (D-012, 2026-11-07); it never started in `358fd74` | none. Re-adding it belongs to the post-v1 Linux/macOS parity work |
 | Windows sandbox gates on hosted CI | ruled **local only** (D-011): hosted Windows has no `processmodel.dll`. **Run locally 2026-11-12, all pass:** TG4-18 (corpus test and the `project_command` module, 53 passed), TG4-31 (the `project_command` sandbox and attack tests in that module and in the `arcana-core` lib run) and TG4-32 (`arcanactl` `project_command_stage_logs`, 112 s) | Again before release |
 | Windows full suite | **done 2026-11-12**, run crate by crate with provider keys unset: `arcana-shared` 4, `arcana` 179 (plus empty bins), `arcanactl` all targets, `arcana-core` lib 1258 passed and 2 failed (the drain test's timing and the corpus test's home race, both fixed and re-run green), `arcana-core` integration tests (11 binaries) and doc tests pass. `live_provider_smoke` stays off (feature `live-smoke`, spends money). The lib run took 49 minutes | None |
@@ -203,7 +204,7 @@ Last feature commit: `8356aea` (2026-10-28), worker dispatch lineage. Since then
 | Desktop log flush on exit, small npm staging edges | `HARDENING_BACKLOG.md` B | After v1 |
 | P4-49, pnpm/yarn/bun/go staging | deferred / refused by design | Only when Razi asks |
 
-Local state: working tree clean; no servers or watchers left running. The full workspace suite was run crate by crate on 2026-11-12 (see the table). The two failures in the `arcana-core` lib run were fixed and those tests re-run; the other 1258 passed before those edits and were not re-run after them. R1 is closed; R2 (Graph, P5) is next and starts with a plan audit and a graph-DB backup.
+Local state: working tree clean; no servers or watchers left running. R1 and R2 are closed. R3 (UI and experience) is in progress: its plan audit is in D-015, and the first unit (Graph City labels, the command contract gates `TG-P6-10`/`TG-P6-11`, the `navigate_to_logs` fix) is built and green. Next in R3: the listener side of `P6-10..13` and event subscription above the tab boundary (`P6-06/07/09`), settings persistence (`P6-15..18`), then the P7 rows; open owner decisions are in D-015.
 
 ## 6. Where things are
 
