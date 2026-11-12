@@ -180,7 +180,7 @@ Verified on 2026-11-03 (R0 run; provider keys unset, `USERPROFILE`/`HOME` redire
 Environment effects, not product defects (each passes once the condition is removed):
 
 - Four tests (`sandbox_allows_workspace_writes_and_blocks_sibling_writes_from_child_tree`, `dropping_a_sandbox_command_terminates_its_descendant_processes`, `confirmed_tree_stop_counts_and_terminates_real_bridge_descendants`, `production_command_timeout_stops_nested_process_writes…`) fail with "`parent.cmd` is not recognized" when the invoking shell sets `NoDefaultCurrentDirectoryInExePath=1`. This session's shell does. Fixed after R0: the tests now launch `.\name.cmd`, which names the file and does not depend on that variable (verified passing with it set to 1).
-- `checked_in_ecosystem_corpora_run_real_intents_through_the_production_launcher` needs the signed Python runtime staged under the real `~/.arcana/python-runtimes`; it fails under a redirected home.
+- `checked_in_ecosystem_corpora_run_real_intents_through_the_production_launcher` uses the real home (staged Python runtime, toolchains). It passed alone but failed in the full suite until 2026-11-12, when another test's home redirect landed mid-run; it now takes the crate-wide home lock (`test_support::hold_real_home`) and passes in the full suite. It is not an environment limit.
 - No `OS error 5` AppContainer failure appeared in this run.
 
 Claimed progress from the archived plan, **not re-verified**: P0–P3 and P8 closed; P4 at 51/59 tasks and
@@ -197,13 +197,13 @@ Last feature commit: `8356aea` (2026-10-28), worker dispatch lineage. Since then
 | Open item | State | Next action |
 |---|---|---|
 | macOS build smoke (parked platform) | dropped from the `build-smoke` matrix and from the `ci_gate.rs` assertion (D-012, 2026-11-07); it never started in `358fd74` | none. Re-adding it belongs to the post-v1 Linux/macOS parity work |
-| Windows sandbox gates on hosted CI | ruled **local only** (D-011): hosted Windows has no `processmodel.dll` | Run TG4-18, TG4-31 and TG4-32 on a Windows 11 machine before claiming them, and again before release |
-| Windows full suite | last full `cargo test --workspace` was not run this session (about 35 minutes) | Run it once locally before closing R1 |
+| Windows sandbox gates on hosted CI | ruled **local only** (D-011): hosted Windows has no `processmodel.dll`. **Run locally 2026-11-12, all pass:** TG4-18 (corpus test and the `project_command` module, 53 passed), TG4-31 (the `project_command` sandbox and attack tests in that module and in the `arcana-core` lib run) and TG4-32 (`arcanactl` `project_command_stage_logs`, 112 s) | Again before release |
+| Windows full suite | **done 2026-11-12**, run crate by crate with provider keys unset: `arcana-shared` 4, `arcana` 179 (plus empty bins), `arcanactl` all targets, `arcana-core` lib 1258 passed and 2 failed (the drain test's timing and the corpus test's home race, both fixed and re-run green), `arcana-core` integration tests (11 binaries) and doc tests pass. `live_provider_smoke` stays off (feature `live-smoke`, spends money). The lib run took 49 minutes | None |
 | `fleet_offline`, telemetry-capture race | `fleet_offline` passed on every run since the drain fix (D-010); the capture race is fixed by `capture_default` and held in `358fd74` (one run) | None unless they recur |
 | Desktop log flush on exit, small npm staging edges | `HARDENING_BACKLOG.md` B | After v1 |
 | P4-49, pnpm/yarn/bun/go staging | deferred / refused by design | Only when Razi asks |
 
-Local state: working tree clean; no servers or watchers left running. A full `cargo test --workspace` was not run in the 2026-11-04 to 2026-11-06 work; the affected tests, the 80 `ci_gate` tests, `cargo fmt --check` and `cargo check --workspace --all-targets` were.
+Local state: working tree clean; no servers or watchers left running. The full workspace suite was run crate by crate on 2026-11-12 (see the table). The two failures in the `arcana-core` lib run were fixed and those tests re-run; the other 1258 passed before those edits and were not re-run after them. R1 is closed; R2 (Graph, P5) is next and starts with a plan audit and a graph-DB backup.
 
 ## 6. Where things are
 
