@@ -86,4 +86,13 @@ History: [`archive/development/HISTORICAL_DESIGN_PROGRAMME.md`](archive/developm
 - **Test flake:** `graph::build::observability_tests::production_graph_build_emits_correlated_operation_outcomes` fails in about
   one parallel module run in three and passes alone. It is the thread-local `with_default` callsite-interest race already noted
   in section B for `src-tauri`; `arcana-core` needs the same process-wide default (`capture_default`).
+- **No `TESTED_BY` producer.** `analyze.rs`, `changes.rs` and `cluster.rs` read `TESTED_BY` edges that no extractor writes, so impact
+  analysis never lists tests. Add a producer (test-file naming or call from a `Test` node) before surfacing test links again.
+- **Per-call connection churn in the tools:** every `GraphStore` method opens a connection, so `graph_impact` (up to ~200 nodes) and
+  `graph_path` (up to 5000 visited) open one per visited node, and `get_edges_for_node` has no `LIMIT`. Not measured. Give the
+  store a held read connection for traversals if it shows up.
+- **Pre-ladder graphs get no backup:** `GraphStore::open` backs up only a database with `user_version` 1..head, so a database at
+  version 0 that already holds data runs the whole ladder, including the v7 duplicate-edge delete, without one. Whether such
+  files exist is unverified. Builder path, not a reader; found in review.
+- **Graph block bidi/zero-width characters** are not stripped from repository names (structure is safe; display could mislead).
 - **`P5-08..13`** (true incremental update) stays deferred; `update_graph` is a full re-index (D-013).

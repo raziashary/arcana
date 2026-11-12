@@ -66,6 +66,29 @@ pub struct GraphStore {
     db_path: PathBuf,
 }
 
+/// Why `GraphStore::open_current` did not hand back a store.
+#[derive(Debug)]
+pub enum OpenCurrentError {
+    /// The graph exists but was written by an older version; the builder
+    /// upgrades it (with a backup), a reader must not.
+    NotCurrent {
+        found: u32,
+        expected: u32,
+    },
+    Unreadable(String),
+}
+
+impl std::fmt::Display for OpenCurrentError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotCurrent { found, expected } => {
+                write!(f, "graph schema v{found} is older than v{expected}")
+            }
+            Self::Unreadable(error) => write!(f, "{error}"),
+        }
+    }
+}
+
 fn install_timestamp_triggers(conn: &Connection) -> Result<()> {
     let now = crate::db::timestamps::SQLITE_UTC_NOW;
     let sql = format!(
@@ -147,6 +170,32 @@ impl GraphStore {
         install_timestamp_triggers(&conn)?;
 
         operation.with_result_count(1).succeed();
+        Ok(GraphStore {
+            db_path: db_path.to_path_buf(),
+        })
+    }
+
+    /// A handle on an existing graph that is already at the current schema,
+    /// opened without changing it: no directory is created, no backup is taken,
+    /// no migration or trigger is run. A graph below the head, or a file that is
+    /// not a graph, is reported instead, so a reader (the agent's graph tools)
+    /// can never be the thing that rewrites a user's graph. Only `open`, used by
+    /// the builder, migrates.
+    pub fn open_current(db_path: &Path) -> std::result::Result<Self, OpenCurrentError> {
+        use rusqlite::OpenFlags;
+        let conn = Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| OpenCurrentError::Unreadable(e.to_string()))?;
+        let version = super::migrations::get_schema_version(&conn)
+            .map_err(|e| OpenCurrentError::Unreadable(e.to_string()))?;
+        if version != super::migrations::SCHEMA_HEAD {
+            return Err(OpenCurrentError::NotCurrent {
+                found: version,
+                expected: super::migrations::SCHEMA_HEAD,
+            });
+        }
         Ok(GraphStore {
             db_path: db_path.to_path_buf(),
         })

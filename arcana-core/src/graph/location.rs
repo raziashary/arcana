@@ -71,9 +71,11 @@ pub fn locate(workspace_as_given: &str) -> Result<GraphLocation> {
     Ok(GraphLocation { root, db_path })
 }
 
-/// The location of a workspace's graph **only if it has been built**: nothing is
-/// created and nothing is copied, so a read (prompt assembly, a tool call) can
-/// never leave an empty database behind. A graph stored under a legacy spelling
+/// The location of a workspace's graph **only if it has been built**: no graph
+/// database and no `graphs` directory is created and nothing is copied, so a
+/// read (prompt assembly, a tool call) can never leave an empty database behind.
+/// (Resolving the path ensures the app's own `~/.arcana` directory exists, as
+/// every other store does.) A graph stored under a legacy spelling
 /// is adopted by `locate`, which the Graph tab calls; until then this reports
 /// none.
 pub fn find_existing(workspace_as_given: &str) -> Result<Option<GraphLocation>> {

@@ -3993,8 +3993,8 @@ fn effect() { ToolEffect::Execute }"#;
             );
         }
         assert!(
-            graph.matches("NOT LIKE 'module::%'").count() >= 3,
-            "seeding, expansion and degree must all exclude module:: stubs"
+            graph.matches("NOT LIKE 'module::%'").count() >= 5,
+            "seeding (1), expansion (2) and degree (2) must all exclude module:: stubs"
         );
         assert!(
             graph.contains("field(&row.name)") && graph.contains("field(&relative("),
@@ -4073,6 +4073,12 @@ fn effect() { ToolEffect::Execute }"#;
             "rebuild_fts",
             "reindex(",
             "GraphBuilder",
+            // `GraphStore::open` migrates (and backs up) an older graph and
+            // creates its directory; a reader goes through `open_current`.
+            "GraphStore::open(",
+            "open_tuned",
+            "journal_mode",
+            "create_dir_all",
             "std::fs",
             "tokio::fs",
             "Path::new",

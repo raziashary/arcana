@@ -507,7 +507,7 @@ impl ListTestsTool {
 
         let tests: Vec<_> = all_edges
             .iter()
-            .filter(|e| e.source_qualified == qualified_name && e.kind == "TestedBy")
+            .filter(|e| e.source_qualified == qualified_name && e.kind == "TESTED_BY")
             .map(|e| {
                 json!({
                     "test": e.target_qualified,

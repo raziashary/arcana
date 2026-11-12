@@ -6,9 +6,9 @@
 // the 27 unregistered structs in `graph_tools.rs`, which could not be
 // registered as they stood: every one loaded the whole node and edge tables
 // per call, `list_callers` was a transitive closure, and the traversal helpers
-// they leaned on compared edge kinds against `"Calls"`/`"TestedBy"` while the
-// extractor stores `"CALLS"`/`"TESTED_BY"`, so callers, callees, impact and
-// tests all came back empty.
+// they leaned on compared edge kinds against `"Calls"` while the extractor
+// stores `"CALLS"`, so callers, callees and impact all came back empty. (No
+// extractor writes TESTED_BY edges yet, so these tools do not report tests.)
 //
 // Properties every tool here keeps:
 //   * Read-only and bounded. Queries go through the indexed per-node edge
@@ -26,7 +26,7 @@
 use crate::agent::tool_effect::ToolEffect;
 use crate::agent::tool_registry::ToolRegistry;
 use crate::agent::tool_trait::{Tool, ToolContext, ToolResult};
-use crate::graph::store::{GraphEdge, GraphNode, GraphStats, GraphStore};
+use crate::graph::store::{GraphEdge, GraphNode, GraphStats, GraphStore, OpenCurrentError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -60,7 +60,6 @@ const MAX_PATH_VISITED: usize = 5000;
 
 /// Edge kinds as the extractor stores them (`EdgeKind`'s `Display`).
 const CALLS: &str = "CALLS";
-const TESTED_BY: &str = "TESTED_BY";
 /// What makes one symbol depend on another.
 const DEPENDENCY_KINDS: [&str; 6] = [
     "CALLS",
@@ -146,7 +145,18 @@ where
             }
             Err(error) => return Err(read_failed(error)),
         };
-        let store = GraphStore::open(&location.db_path).map_err(read_failed)?;
+        let store = match GraphStore::open_current(&location.db_path) {
+            Ok(store) => store,
+            Err(OpenCurrentError::NotCurrent { .. }) => {
+                return Err(ToolResult::categorized_error(
+                    "graph_needs_rebuild",
+                    "precondition",
+                    "The code graph for this workspace was built by an older version and is not read until it is rebuilt.",
+                    "Continue with grep, glob and read_file, or ask the user to rebuild the graph from the Graph tab.",
+                ))
+            }
+            Err(error) => return Err(read_failed(error)),
+        };
         query(&store, &location.root)
     })
     .await;
@@ -195,8 +205,10 @@ fn describe(store: &GraphStore, root: &Path, qualified_name: &str) -> Result<Val
 
 enum Resolved {
     One(Box<GraphNode>),
-    Ambiguous(Vec<GraphNode>),
-    Missing,
+    /// The matches, and whether the name index was cut off while collecting them.
+    Ambiguous(Vec<GraphNode>, bool),
+    /// No match, and whether the name index was cut off while looking.
+    Missing(bool),
 }
 
 /// A symbol by qualified name, else by simple name through the search index.
@@ -206,11 +218,12 @@ fn resolve(store: &GraphStore, symbol: &str) -> Result<Resolved, ToolResult> {
     }
     let query = fts_query(symbol);
     if query.is_empty() {
-        return Ok(Resolved::Missing);
+        return Ok(Resolved::Missing(false));
     }
     let candidates = store
         .search_nodes(&query, NAME_CANDIDATES)
         .map_err(read_failed)?;
+    let capped = candidates.len() >= NAME_CANDIDATES;
     let mut exact: Vec<GraphNode> = candidates
         .iter()
         .filter(|n| n.name == symbol)
@@ -225,9 +238,9 @@ fn resolve(store: &GraphStore, symbol: &str) -> Result<Resolved, ToolResult> {
     exact.sort_by(|a, b| a.qualified_name.cmp(&b.qualified_name));
     exact.dedup_by(|a, b| a.qualified_name == b.qualified_name);
     Ok(match exact.len() {
-        0 => Resolved::Missing,
+        0 => Resolved::Missing(capped),
         1 => Resolved::One(Box::new(exact.remove(0))),
-        _ => Resolved::Ambiguous(exact),
+        _ => Resolved::Ambiguous(exact, capped),
     })
 }
 
@@ -240,9 +253,11 @@ fn single(
 ) -> Result<GraphNode, std::result::Result<Value, ToolResult>> {
     match resolve(store, symbol).map_err(Err)? {
         Resolved::One(node) => Ok(*node),
-        Resolved::Ambiguous(nodes) => Err(Ok(json!({
+        Resolved::Ambiguous(nodes, capped) => Err(Ok(json!({
             "status": "ambiguous",
             "symbol": symbol,
+            "total_candidates": nodes.len(),
+            "truncated": nodes.len() > AMBIGUOUS_SHOWN || capped,
             "candidates": nodes
                 .iter()
                 .take(AMBIGUOUS_SHOWN)
@@ -250,8 +265,12 @@ fn single(
                 .collect::<Vec<_>>(),
             "next": "Call again with one candidate's exact qualified_name.",
         }))),
-        Resolved::Missing => Err(Err(not_found(
-            format!("No symbol named '{symbol}' is in the code graph."),
+        Resolved::Missing(capped) => Err(Err(not_found(
+            if capped {
+                format!("No symbol named '{symbol}' was found among the first {NAME_CANDIDATES} index matches; the name is common, so pass its qualified_name.")
+            } else {
+                format!("No symbol named '{symbol}' is in the code graph.")
+            },
             "Use graph_search to find the symbol's name, or rebuild the graph if the code is new.",
         ))),
     }
@@ -348,7 +367,9 @@ impl Tool for GraphSearchTool {
             Ok(json!({
                 "status": "ok",
                 "count": matching.len().min(limit),
-                "truncated": matching.len() > limit,
+                // Cut when more matched than shown, or when the index itself was
+                // capped (a kind filter is applied after that cap).
+                "truncated": matching.len() > limit || found.len() >= SEARCH_CANDIDATES,
                 "results": matching.iter().take(limit).map(|n| node_json(root, n)).collect::<Vec<_>>(),
             }))
         })
@@ -367,7 +388,7 @@ impl Tool for GraphNodeTool {
     }
 
     fn description(&self) -> &str {
-        "Show one symbol from the code graph: where it is defined and its incoming and outgoing edges (calls, imports, containment, tests), up to 30 each. A simple name shared by several symbols returns the candidates to choose from."
+        "Show one symbol from the code graph: where it is defined and its incoming and outgoing edges (calls, imports, containment), up to 30 each. A simple name shared by several symbols returns the candidates to choose from."
     }
 
     fn input_schema(&self) -> Value {
@@ -546,7 +567,7 @@ impl Tool for GraphImpactTool {
     }
 
     fn description(&self) -> &str {
-        "Find what may be affected by changing a symbol: the symbols that depend on it through calls, imports, inheritance or references, out to a chosen depth (default 3, at most 5), and the tests the graph links to them. Calls are recorded only within a file, so pass a file name to find the files that import it. A static estimate, not proof; capped at 200 symbols."
+        "Find what may be affected by changing a symbol: the symbols that depend on it through calls, imports, inheritance or references, out to a chosen depth (default 3, at most 5). The graph records no test links. Calls are recorded only within a file, so pass a file name to find the files that import it. A static estimate, not proof; capped at 200 symbols."
     }
 
     fn input_schema(&self) -> Value {
@@ -585,14 +606,8 @@ impl Tool for GraphImpactTool {
             reached.insert(start.qualified_name.clone(), 0);
             let mut queue = VecDeque::from([(start.qualified_name.clone(), 0usize)]);
             let mut node_cap_hit = false;
-            let mut tests: BTreeSet<String> = BTreeSet::new();
             while let Some((current, at)) = queue.pop_front() {
                 let edges = edges_of(store, &current)?;
-                for edge in &edges {
-                    if edge.kind == TESTED_BY && edge.source_qualified == current {
-                        tests.insert(edge.target_qualified.clone());
-                    }
-                }
                 if at >= depth {
                     continue;
                 }
@@ -628,11 +643,6 @@ impl Tool for GraphImpactTool {
                 }
                 listed.push(entry);
             }
-            let tests_total = tests.len();
-            let mut listed_tests = Vec::new();
-            for qualified in tests.iter().take(limit) {
-                listed_tests.push(describe(store, root, qualified)?);
-            }
             Ok(json!({
                 "status": "ok",
                 "symbol": node_json(root, &start),
@@ -640,7 +650,6 @@ impl Tool for GraphImpactTool {
                 "total_affected": total,
                 "truncated": total > limit || node_cap_hit,
                 "affected": listed,
-                "tests": { "total": tests_total, "truncated": tests_total > limit, "results": listed_tests },
             }))
         })
         .await

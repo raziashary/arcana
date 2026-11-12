@@ -218,6 +218,75 @@ async fn without_a_graph_every_tool_says_so_and_creates_nothing() {
     );
 }
 
+/// Every file under `dir`, relative and sorted.
+fn tree(dir: &std::path::Path) -> Vec<String> {
+    fn walk(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(base, &path, out);
+            } else {
+                out.push(
+                    path.strip_prefix(base)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string(),
+                );
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+/// A graph written by an older version is the builder's to upgrade (with a
+/// backup); a tool reads, so it must refuse and leave the graph and the
+/// directory exactly as they were.
+#[tokio::test]
+async fn a_tool_never_migrates_or_backs_up_an_older_graph() {
+    let (_guard, home, _workspace, root) = invoice_graph();
+    let db = crate::graph::location::find_existing(&root)
+        .expect("locate")
+        .expect("graph exists")
+        .db_path;
+    {
+        let conn = rusqlite::Connection::open(&db).expect("open raw");
+        conn.execute_batch("PRAGMA user_version = 6")
+            .expect("age the graph");
+    }
+    let before = tree(home.path());
+
+    for tool in tools() {
+        let (error, body) = call(
+            tool.as_ref(),
+            json!({"query": "render_invoice", "symbol": "render_invoice", "from": "render_invoice", "to": "format_total", "file": "invoices.py"}),
+            &root,
+        )
+        .await;
+        assert!(error, "{} must refuse an older graph: {body}", tool.name());
+        assert_eq!(
+            body["error"]["code"],
+            "graph_needs_rebuild",
+            "{}: {body}",
+            tool.name()
+        );
+    }
+
+    let conn = rusqlite::Connection::open(&db).expect("reopen raw");
+    let version: u32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, 6, "a tool migrated the graph");
+    drop(conn);
+    assert_eq!(
+        tree(home.path()),
+        before,
+        "a tool created or removed a file (a backup?)"
+    );
+}
+
 fn node(name: &str, qualified: &str) -> NodeInfo {
     NodeInfo {
         kind: "Function".into(),

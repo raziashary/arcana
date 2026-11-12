@@ -294,6 +294,47 @@ fn module_stubs_are_neither_seeds_nor_bridges() {
     );
 }
 
+/// A file is a hub: a function that matches reaches its file, but the file's
+/// other members are not the request's neighbours and must not fill the block.
+#[test]
+fn a_file_hub_does_not_pull_in_the_unrelated_members_of_the_matched_file() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let _guard = crate::db::test_support::with_home(home.path());
+    let mut file = node("a.py", "a.py", "a.py");
+    file.kind = "File".into();
+    let mut nodes = vec![
+        file,
+        node("alpha_widget", "a.py::alpha_widget", "a.py"),
+        node("beta_gadget", "b.py::beta_gadget", "b.py"),
+    ];
+    let mut edges = vec![
+        edge("CONTAINS", "a.py", "a.py::alpha_widget", 1),
+        edge("CALLS", "a.py::alpha_widget", "b.py::beta_gadget", 2),
+    ];
+    for name in [
+        "sibling_one",
+        "sibling_two",
+        "sibling_three",
+        "sibling_four",
+    ] {
+        let qualified = format!("a.py::{name}");
+        nodes.push(node(name, &qualified, "a.py"));
+        edges.push(edge("CONTAINS", "a.py", &qualified, 3));
+    }
+    let (_store, root) = synthetic(&nodes, &edges);
+
+    let block = graph_context_block(&root, "alpha_widget");
+    assert!(block.contains("`alpha_widget`"), "{block}");
+    assert!(
+        block.contains("`beta_gadget`"),
+        "the real call neighbour belongs in the block:\n{block}"
+    );
+    assert!(
+        !block.contains("sibling_"),
+        "unrelated members of the same file filled the block:\n{block}"
+    );
+}
+
 /// P5-16: the block is bounded however large the graph, and byte-stable.
 #[test]
 fn the_block_is_bounded_deterministic_and_fast_on_a_large_graph() {

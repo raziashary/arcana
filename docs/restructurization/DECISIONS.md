@@ -232,3 +232,27 @@ bends to the code (`SHIP_PLAN.md` R2 now says what shipped).
   resolution is a larger extractor change and goes to the backlog, not into R2.
 - **Graph block order:** `volatile_prompt` composes memory, then the graph block, then the roster; both the plain and the
   override path call it (`TG-P5-14`, and `TG-P3-44/45` now follows the composer).
+
+End-of-phase review (2026-11-12, `implementation-reviewer`) and what I did with it (Razi asleep; I decided what the existing
+rules already settle and recorded the rest):
+
+- **A tool must not migrate.** `GraphStore::open` creates the directory, backs up and migrates an older graph (v7 deletes duplicate
+  edge rows). The tools used it, contradicting "read-only". Now `GraphStore::open_current` opens read-only, checks the schema is
+  the head, and creates or changes nothing; an older graph returns `graph_needs_rebuild` ("rebuild from the Graph tab"). The
+  builder alone upgrades. `TG-P5-18` bans `GraphStore::open(`, `open_tuned`, `journal_mode` and `create_dir_all` in the tools file,
+  and a test ages a real graph to v6, calls all eight tools and checks the version and the directory tree are unchanged. The
+  mutation (back to `GraphStore::open`) fails that test.
+- **`graph_impact` no longer promises tests.** Nothing in the extractor produces `TESTED_BY` edges (`EdgeKind::TestedBy` is never
+  constructed), so the tests list was always empty. Removed from the output and the description; the consumers of that edge kind
+  in `analyze.rs` and `changes.rs` stay until a producer exists (backlog G).
+- **The prompt block no longer fans out through a file or class.** From a seed, a CONTAINS edge names members, but a node reached
+  that way is not expanded through CONTAINS again, so alphabetical siblings of a match cannot fill the 12 slots. Test added
+  (fails without the rule).
+- **The graph block reaches every engine, as the memory block does.** It is part of the volatile prompt both the plain and the
+  override path build, so fleet workers and subagents in a workspace with a graph also get the bounded block (3 KB, read-only,
+  empty with no graph) but no tools. I judged this consistent with the memory block and useful orientation; recorded here as
+  intended. Gating it behind an opt-in is a one-line change if Razi prefers.
+- **Truncation is reported where it was silent:** `graph_search` with a `kind` filter, and an ambiguous or not-found symbol when the
+  name index was cut off at its cap.
+- **Claims corrected:** `find_existing` creates no graph database or `graphs` directory (it still ensures the app's `~/.arcana`,
+  like every store); the module-stub gate now needs all five exclusions.

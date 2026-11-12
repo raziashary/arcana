@@ -206,6 +206,12 @@ fn expand(conn: &Connection, seeds: Vec<Pick>) -> Result<Vec<Pick>, String> {
                 .map_err(|e| e.to_string())?;
             for row in rows {
                 let (kind, source, target) = row.map_err(|e| e.to_string())?;
+                // A file or class is a hub: from a seed it names its members,
+                // but fanning out through it again would fill the block with
+                // unrelated siblings of whatever matched.
+                if kind == "CONTAINS" && from.distance > 0 {
+                    continue;
+                }
                 let from_is_source = source == from.qualified_name;
                 let other = if from_is_source { target } else { source };
                 if picked.contains_key(&other) {
