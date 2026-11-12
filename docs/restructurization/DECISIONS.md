@@ -174,3 +174,29 @@ Linux, and the `tg0_02_every_required_check_is_present_and_distinct` assertion i
 unexplained. `build-release.yml` still has a macOS DMG job; it only runs for releases and is parked with the rest of the macOS
 work. Re-adding macOS (a matrix entry plus the `ci_gate.rs` assertion) is part of the post-v1 Linux/macOS parity work in
 `HARDENING_BACKLOG.md`.
+
+## D-013 · R2 (Graph) build plan after the adversarial audit — 2026-11-12, Razi for the tool surface, the rest mine
+
+A read-only plan audit (Haiku 5.5 High) found the first R2 draft wrong in places that matter; the code confirmed each of the
+following (`SHIP_PLAN.md` R2 keeps the task list, this entry records how it is built).
+- **`update_graph` loses edges today.** It diffs only against `HEAD~1`, deletes each changed file's nodes, and the cascade
+  removes edges from *unchanged* files that point into them; `build` then drops outbound edges to unchanged files. The UI calls
+  it (`Graph.tsx`). Decision: it becomes a full re-index with non-destructive upserts and a key-set prune, which is the plan's own
+  "re-index in full on change" (P5-08..13 stay deferred); the `incremental.rs` path is no longer used by the command.
+- **Node identity depends on path spelling** (`qualified_name` of a file node is the raw path), so one DB path is not enough.
+  Decision: canonicalise the workspace root once at every entry point and form every key from it; `graph_db_path` uses the
+  shared `path_key` and `db::arcana_dir()`. S5-01 proves equal node and edge key sets across four spellings, not just one file.
+- **Upsert and migration.** `ON CONFLICT(qualified_name) DO UPDATE` (with `updated_at`) for nodes; schema v7 adds a unique index on
+  edges `(kind, source, target, file_path, line)` after removing duplicate rows, with an **unconditional** backup that honours the
+  test redirect (Rule 13), and the version pins at 6 move in the same step. `INSERT OR REPLACE` on `snapshots` stays (no FK).
+- **Graph text in the prompt is untrusted repository data.** It goes through the memory module's flattening and caps, FTS input is
+  tokenised like `LexicalBackend::to_fts_query`, `module::` stubs are excluded, ordering has `qualified_name` tie-breaks, any graph
+  error yields an empty block, and one composer serves both the normal and the override prompt path.
+- **Tools: Razi ruled "interactive agent, working tools only".** Register only the tools that return a real answer, for interactive
+  sessions only (not fleet workers, headless runs or QC). `detect_graph_changes` (runs `git` in the process directory),
+  `get_graph_diff` (no snapshot producer), `get_graph_report` (placeholder) and `get_flow_criticality` (edges labelled as flows) go to
+  the backlog until fixed. One `impl Tool` per tool, matching the codebase and the TG-P3-20 gate, not a table adapter. Definition
+  bytes are measured before and after.
+- **Legacy graph DBs:** a non-empty DB named by an old raw-spelling hash is copied (`VACUUM INTO`, no new rusqlite feature) to the
+  canonical name; the legacy file is left alone. The one live graph DB on this machine is empty and backed up
+  (`~/.arcana/backups/graph-43cee5c8d519-20261112-212330-before-r2-graph-work.db`).

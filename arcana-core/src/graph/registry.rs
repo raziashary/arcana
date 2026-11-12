@@ -2,6 +2,7 @@
 
 use super::store::GraphStore;
 use crate::errors::Result;
+use crate::security::path_key::path_key;
 use crate::state::lock::LockTolerant;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -33,10 +34,9 @@ pub struct RepoRegistry {
 
 impl RepoRegistry {
     pub fn load() -> Result<Self> {
-        let registry_path = dirs::home_dir()
-            .ok_or_else(|| crate::errors::ArcanaError::Agent("Cannot find home dir".to_string()))?
-            .join(".arcana")
-            .join("registry.json");
+        // Same data root as the graph databases (`db::arcana_dir`), so a test
+        // that redirects the home redirects the registry too.
+        let registry_path = crate::db::arcana_dir()?.join("registry.json");
 
         // Create if doesn't exist
         if !registry_path.exists() {
@@ -63,23 +63,30 @@ impl RepoRegistry {
             )));
         }
 
-        let db_path = path.join(".arcana").join("graph.db");
+        // One root and one database per workspace, whatever the spelling (P5-01).
+        let location = super::location::locate(&path.to_string_lossy())?;
 
         let mut registry: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&self.db_path)?)?;
 
         let entry = RepoEntry {
-            path: path.to_string_lossy().to_string(),
+            path: location.root.to_string_lossy().to_string(),
             alias: alias.map(|s| s.to_string()),
-            db_path: db_path.to_string_lossy().to_string(),
+            db_path: location.db_path.to_string_lossy().to_string(),
             last_updated: None,
             node_count: None,
             edge_count: None,
         };
 
         if let Some(repos) = registry["repos"].as_array_mut() {
-            // Check if already registered
-            if !repos.iter().any(|r| r["path"] == entry.path) {
+            // Check if already registered, by the canonical key so two spellings
+            // of one workspace are one entry.
+            let wanted = path_key(&location.root);
+            if !repos.iter().any(|r| {
+                r["path"]
+                    .as_str()
+                    .is_some_and(|p| path_key(Path::new(p)) == wanted)
+            }) {
                 repos.push(serde_json::to_value(&entry)?);
             }
         }
@@ -89,19 +96,23 @@ impl RepoRegistry {
     }
 
     pub fn unregister(&self, path: &Path) -> Result<()> {
-        let path_str = path.to_string_lossy().to_string();
+        let wanted = path_key(path);
         let mut registry: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&self.db_path)?)?;
 
         if let Some(repos) = registry["repos"].as_array_mut() {
-            repos.retain(|r| r["path"] != path_str);
+            repos.retain(|r| {
+                !r["path"]
+                    .as_str()
+                    .is_some_and(|p| path_key(Path::new(p)) == wanted)
+            });
         }
 
         std::fs::write(&self.db_path, serde_json::to_string_pretty(&registry)?)?;
 
         // Remove from cache
         let mut cache = self.store_cache.lock_tolerant();
-        cache.remove(path);
+        cache.remove(&PathBuf::from(&wanted));
 
         Ok(())
     }
@@ -123,13 +134,15 @@ impl RepoRegistry {
     pub fn get_store(&self, path: &Path) -> Result<Arc<Mutex<GraphStore>>> {
         let mut cache = self.store_cache.lock_tolerant();
 
-        if let Some(store) = cache.get(path) {
+        // Keyed by the canonical key: two spellings share one open store.
+        let key = PathBuf::from(path_key(path));
+        if let Some(store) = cache.get(&key) {
             return Ok(store.clone());
         }
 
-        let db_path = path.join(".arcana").join("graph.db");
-        let store = Arc::new(Mutex::new(GraphStore::open(&db_path)?));
-        cache.insert(path.to_path_buf(), store.clone());
+        let location = super::location::locate(&path.to_string_lossy())?;
+        let store = Arc::new(Mutex::new(GraphStore::open(&location.db_path)?));
+        cache.insert(key, store.clone());
 
         // Limit cache to 10 entries (LRU)
         if cache.len() > 10 {
@@ -203,5 +216,34 @@ impl GraphRegistry {
     pub fn manage_repos(_repo_path: &str) -> Result<()> {
         // TODO: Implement multi-repo registry
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two spellings of one workspace are one registry entry and one open store.
+    #[test]
+    fn two_spellings_of_one_workspace_are_one_entry_and_one_store() {
+        let home = tempfile::tempdir().expect("isolated home");
+        let _guard = crate::db::test_support::with_home(home.path());
+        let workspace = tempfile::tempdir().expect("workspace");
+        let plain = workspace.path().display().to_string();
+        let slashed = format!("{plain}{}.", std::path::MAIN_SEPARATOR);
+
+        let registry = RepoRegistry::load().expect("load registry");
+        let first = registry
+            .register(Path::new(&plain), None)
+            .expect("register");
+        let second = registry
+            .register(Path::new(&slashed), None)
+            .expect("register again");
+        assert_eq!(first.db_path, second.db_path);
+        assert_eq!(registry.list().expect("list").len(), 1);
+
+        let a = registry.get_store(Path::new(&plain)).expect("store");
+        let b = registry.get_store(Path::new(&slashed)).expect("store");
+        assert!(Arc::ptr_eq(&a, &b), "one cached store for both spellings");
     }
 }

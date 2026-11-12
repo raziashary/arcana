@@ -66,7 +66,7 @@ pub fn path_key(path: &Path) -> String {
 /// ⚠ Stripping it blindly from `\\?\UNC\server\share\…` yields a **relative**
 /// path — the same corruption `P3-15` fixed in the jail. Kept consistent here
 /// so the key and the jail agree about what a path is.
-fn strip_verbatim(p: &Path) -> PathBuf {
+pub(crate) fn strip_verbatim(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
         return PathBuf::from(format!(r"\\{rest}"));

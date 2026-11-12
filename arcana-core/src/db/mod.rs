@@ -10,7 +10,8 @@
 //   analytics.db    — Token/cost telemetry and fleet health
 //   memory.db       — Memory records
 //   arcana.db       — Session store (opened in `session/storage.rs`)
-//   `<project>/.arcana/graph.db` — Per-project code graph (`graph/registry.rs`)
+//   `graphs/<hash>.db` — Per-workspace code graph; one name for every spelling of the
+//                        workspace (`graph/location.rs`)
 //
 // Session data lives in ~/.arcana/arcana.db. It was ~/.airs/arcana.db until
 // P1-14 consolidated the two data roots.

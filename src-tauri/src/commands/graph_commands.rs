@@ -66,21 +66,11 @@ pub struct GraphVisualizationData {
 // PER-REPO DATABASE PATH HELPER
 // ============================================================================
 
-// Derives a stable, per-repo SQLite path stored under ~/.arcana/graphs/<12-char-hash>.db.
-// Using a hash of the repo path ensures:
-//   1. The DB is always in user's home dir (not inside the repo).
-//   2. Two different repos never share the same DB.
-//   3. The path is filesystem-safe regardless of spaces or Unicode in repo_path.
+// The per-repo SQLite path under ~/.arcana/graphs/. The location logic lives in
+// `arcana_core::graph::location` so the headless tools and this host derive the
+// same path, and every spelling of one workspace reaches one database (P5-01).
 fn repo_db_path(repo_path: &str) -> Result<PathBuf> {
-    use sha2::{Digest, Sha256};
-    let home =
-        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
-    let slug = hex::encode(Sha256::digest(repo_path.as_bytes()));
-    let slug = &slug[..12];
-    Ok(home
-        .join(".arcana")
-        .join("graphs")
-        .join(format!("{}.db", slug)))
+    Ok(crate::graph::location::locate(repo_path)?.db_path)
 }
 
 // ============================================================================
@@ -147,8 +137,11 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
         },
     );
 
-    let db_path = repo_db_path(&repo_path)?;
-    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
+    // Every node key is built from the resolved root, never from the string the
+    // caller passed, so one workspace is one graph whatever its spelling (P5-01).
+    let location = crate::graph::location::locate(&repo_path)?;
+    let repo_dir = location.root.as_path();
+    let db_path = location.db_path.clone();
     tracing::debug!("[GraphBuild] Database path: {:?}", db_path);
 
     let start = std::time::Instant::now();

@@ -12,6 +12,7 @@ pub mod export;
 pub mod extract;
 pub mod flows;
 pub mod incremental;
+pub mod location;
 pub mod migrations;
 pub mod query;
 pub mod registry;
