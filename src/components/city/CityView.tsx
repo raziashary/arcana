@@ -1,5 +1,5 @@
 // CityView.tsx — 3D Code City using React Three Fiber
-import { Suspense, useMemo, useCallback, useState } from 'react'
+import { useMemo, useCallback, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { Stats } from '@react-three/drei'
 import { useGraphStore } from '../../stores/graphStore'
@@ -199,27 +199,24 @@ export function CityView() {
             />
           )}
 
-          {/* Districts — use drei <Text> which suspends for font load; individual boundaries
-              so one suspended label never blanks the whole scene */}
+          {/* Districts and god-node landmarks. Their labels are DOM overlays
+              (CityLabel), not drei <Text>: troika fetches fonts from a CDN the
+              CSP forbids, and the suspended text used to hide the whole mesh. */}
           {layout.districts.map(district => (
-            <Suspense key={district.communityId} fallback={null}>
-              <DistrictMesh district={district} />
-            </Suspense>
+            <DistrictMesh key={district.communityId} district={district} />
           ))}
 
-          {/* God node landmarks — also use <Text>; same granular Suspense pattern */}
           {godNodes.map(node => {
             const bl = layout.buildingPositions.get(node.id)
             if (!bl) return null
             return (
-              <Suspense key={node.id} fallback={null}>
-                <GodNodeBuilding
-                  node={node}
-                  layout={bl}
-                  isSelected={selectedNodeId === node.id}
-                  impactData={impactData}
-                />
-              </Suspense>
+              <GodNodeBuilding
+                key={node.id}
+                node={node}
+                layout={bl}
+                isSelected={selectedNodeId === node.id}
+                impactData={impactData}
+              />
             )
           })}
 

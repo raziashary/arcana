@@ -2,8 +2,8 @@
 // Rendered as a tall octagonal tower with animated beacon + point light
 import { useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { Text, Billboard } from '@react-three/drei'
 import * as THREE from 'three'
+import { CityLabel } from '../CityLabel'
 import type { GraphNode, ImpactData } from '../../../stores/graphStore'
 import type { BuildingLayout } from '../layout/layoutTypes'
 import { IMPACT_COLORS } from './buildingMaterials'
@@ -101,22 +101,14 @@ export function GodNodeBuilding({ node, layout, isSelected, impactData }: GodNod
       />
 
       {/* Name label — billboard so it always faces camera */}
-      <Billboard position={[0, towerH + width + 1.5, 0]} follow>
-        <Text
-          fontSize={0.6}
-          color={color}
-          fillOpacity={0.9}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.04}
-          outlineColor="#000000"
-          outlineOpacity={0.8}
-          maxWidth={10}
-          textAlign="center"
-        >
-          {label}
-        </Text>
-      </Billboard>
+      <CityLabel
+        position={[0, towerH + width + 1.5, 0]}
+        label={label}
+        color={color}
+        fontPx={12}
+        distanceFactor={24}
+        maxWidthPx={140}
+      />
     </group>
   )
 }

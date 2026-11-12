@@ -6868,4 +6868,229 @@ fn effect() { ToolEffect::Execute }"#;
             "store.rs lost its node or edge upsert"
         );
     }
+
+    /// The command names `register_commands` hands to Tauri, read from the
+    /// `register_handler!` list in `lib.rs`.
+    fn registered_commands() -> std::collections::BTreeSet<String> {
+        let lib = read_source(&repo_root().join("src-tauri/src/lib.rs"));
+        let start = lib
+            .find("register_handler!(\n        builder,")
+            .expect("lib.rs lost its register_handler! call");
+        let list = &lib[start..];
+        let open = list.find('[').expect("register_handler! list opens");
+        let close = list[open..]
+            .find("\n        ]")
+            .expect("register_handler! list closes");
+        list[open + 1..open + close]
+            .lines()
+            .map(|line| line.split("//").next().unwrap_or(""))
+            .flat_map(|line| line.split(','))
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    /// Every non-test `.ts`/`.tsx` file under `src/`, as (path with `/`, text).
+    fn frontend_sources() -> Vec<(String, String)> {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("ts") | Some("tsx")
+                ) {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&repo_root().join("src"), &mut files);
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let name = file.to_string_lossy().replace('\\', "/");
+                if name.contains(".test.") || name.contains(".spec.") {
+                    return None;
+                }
+                std::fs::read_to_string(&file).ok().map(|text| (name, text))
+            })
+            .collect()
+    }
+
+    /// Every string-literal command name the frontend passes to `invoke`, with
+    /// the file that does it. Test files are excluded.
+    fn frontend_invocations() -> Vec<(String, String)> {
+        let invoke = regex::Regex::new(r#"\binvoke(?:<[^()\n]*>)?\(\s*['"]([a-z0-9_]+)['"]"#)
+            .expect("invoke pattern");
+        let mut found = Vec::new();
+        for (name, text) in frontend_sources() {
+            for caps in invoke.captures_iter(&text) {
+                found.push((caps[1].to_string(), name.clone()));
+            }
+        }
+        found
+    }
+
+    /// `TG-P6-10` (P6-10..13) — the frontend never calls a command Tauri does
+    /// not have. `navigate_to_logs` was invoked for months and was never
+    /// registered; every click failed and the failure was swallowed. Both
+    /// halves are checked, so the gate cannot pass because a scan found nothing.
+    #[test]
+    fn tg_p6_10_every_command_the_frontend_invokes_is_registered() {
+        let registered = registered_commands();
+        assert!(
+            registered.len() > 150,
+            "the register_handler! parse found only {} commands; the gate has lost its input",
+            registered.len()
+        );
+        assert!(
+            registered.contains("send_message") && registered.contains("cancel_agent"),
+            "the parse missed commands that certainly exist: {registered:?}"
+        );
+
+        let invoked = frontend_invocations();
+        assert!(
+            invoked.len() > 100 && invoked.iter().any(|(name, _)| name == "send_message"),
+            "the frontend scan found {} invocations; the gate has lost its input",
+            invoked.len()
+        );
+
+        let unregistered: Vec<String> = invoked
+            .iter()
+            .filter(|(name, _)| !registered.contains(name))
+            .map(|(name, file)| format!("{name} (in {file})"))
+            .collect();
+        assert!(
+            unregistered.is_empty(),
+            "the frontend invokes commands that no `register_handler!` entry provides: {}",
+            unregistered.join(", ")
+        );
+    }
+
+    /// `TG-P6-11` (P6-10..13) — the other side of the contract. Commands that
+    /// are registered but that no frontend code invokes are a debt register: it
+    /// **may only shrink**. A new command must be called by the frontend (or the
+    /// list must be edited deliberately, with a reason), and a command that
+    /// gains a caller must leave the list. Deleting the entries is the owner's
+    /// call (`DECISIONS.md` D-015): several back later R3 rows (`has_provider_key`
+    /// for the first-run check, `get_user_preferences` for settings hydration,
+    /// `get_daily_budget_summary` for the spend ceiling).
+    #[test]
+    fn tg_p6_11_registered_commands_nobody_calls_may_only_shrink() {
+        const UNCALLED: &[&str] = &[
+            "analyze_diff",
+            "analyze_pr_diff",
+            "break_down_epic",
+            "check_arcana_instructions_exists",
+            "cmd_set_task_budget",
+            "compare_checkpoints",
+            "create_checkpoint",
+            "create_phased_task",
+            "find_symbol_references",
+            "force_release_task",
+            "get_arcana_instructions_char_count",
+            "get_daily_budget_summary",
+            "get_file_metadata",
+            "get_graph_communities",
+            "get_graph_edges_for_viz",
+            "get_graph_nodes_for_viz",
+            "get_orphaned_tasks",
+            "get_plugin_config",
+            "get_recipe",
+            "get_session",
+            "get_system_logs",
+            "get_task",
+            "get_user_preferences",
+            "get_worker_analytics",
+            "get_worker_by_slug",
+            "git_blame",
+            "git_clone",
+            "git_init",
+            "git_worktree_add",
+            "git_worktree_remove",
+            "has_provider_key",
+            "import_skill",
+            "list_installed_plugins",
+            "list_repos",
+            "list_skills",
+            "merge_all_repos_cmd",
+            "read_log_file_full",
+            "read_structured_events_full",
+            "register_repo",
+            "resolve_symbol",
+            "save_memory_md",
+            "search_file_contents",
+            "search_procedural",
+            "search_semantic",
+            "set_plugin_config",
+            "suggest_worker_for_task",
+            "summarize_session_cmd",
+            "unregister_repo",
+            "update_worker_model_sync",
+        ];
+        let registered = registered_commands();
+        let invoked: std::collections::BTreeSet<String> = frontend_invocations()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert!(
+            invoked.len() > 100,
+            "the frontend scan found only {} commands; the gate has lost its input",
+            invoked.len()
+        );
+
+        let uncalled: std::collections::BTreeSet<&str> = registered
+            .iter()
+            .filter(|name| !invoked.contains(*name))
+            .map(String::as_str)
+            .collect();
+        let allowed: std::collections::BTreeSet<&str> = UNCALLED.iter().copied().collect();
+
+        let grew: Vec<&&str> = uncalled.difference(&allowed).collect();
+        assert!(
+            grew.is_empty(),
+            "registered but never invoked by the frontend: {grew:?}. Call it from the UI, or remove it; the list above may not grow."
+        );
+        let stale: Vec<&&str> = allowed.difference(&uncalled).collect();
+        assert!(
+            stale.is_empty(),
+            "{stale:?} is now called or no longer registered; remove it from UNCALLED so the debt register stays true."
+        );
+    }
+
+    /// `TG-P6-02` (P6-02, P6-19) — no drei `<Text>` in the frontend. It is troika:
+    /// it fetches its fonts from a CDN and starts a blob web worker, and the
+    /// app's CSP allows neither, so the text never resolved and every district
+    /// and landmark wrapped in its `<Suspense>` stayed invisible (Graph City
+    /// "hung"). Labels in the 3D city are DOM overlays (`CityLabel`). Reproduced
+    /// in a browser under the shipped CSP before the fix; the labels and the
+    /// districts render after it.
+    #[test]
+    fn tg_p6_02_no_troika_text_the_csp_forbids() {
+        let drei_text = regex::Regex::new(
+            r#"import\s*\{[^}]*\bText\b[^}]*\}\s*from\s*['"]@react-three/drei['"]"#,
+        )
+        .expect("pattern");
+        let sources = frontend_sources();
+        assert!(
+            sources.len() > 100 && sources.iter().any(|(n, _)| n.ends_with("CityLabel.tsx")),
+            "the frontend scan found {} files; the gate has lost its input",
+            sources.len()
+        );
+        let offenders: Vec<&str> = sources
+            .iter()
+            .filter(|(_, text)| drei_text.is_match(text))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "drei <Text> needs a CDN font fetch and a blob worker, both blocked by the CSP: {offenders:?}. Use CityLabel (a DOM overlay)."
+        );
+    }
 }

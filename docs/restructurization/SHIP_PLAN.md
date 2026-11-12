@@ -129,15 +129,15 @@ Goal: a new user reaches a working agent turn, errors are visible, nothing is lo
 
 | Task | Scope | Proof |
 |---|---|---|
-| `P6-02` v1 | Self-host the font (the CSP blocks the external fetch, which is why Graph City hangs) | `S6-01` |
+| `P6-02` v1 | **Changed by D-015:** the hang was drei `<Text>` (CDN font fetch and a blob worker, both outside the CSP), not the Google Fonts link. **Built:** labels are DOM overlays (`CityLabel`), `TG-P6-02` bans drei `<Text>`. **Open (Razi):** bundle IBM Plex, keep the runtime fetch, or use system fonts; `ui-anchor.md` names other fonts | `TG-P6-02`; `S6-01` = the city draws its districts under the shipped CSP, checked in a browser |
 | `P6-01`, `P6-04` v1 | Token set from [`reference/ui-anchor.md`](reference/ui-anchor.md), defined once, no literal hex in components | Static gate |
 | `P6-03`, `P6-05` | Dark mode and a drift gate for every surface: defer | — |
 | `P6-06/07/09` v1 | Event subscription above the tab boundary; no event lost on tab switch; dead listeners removed | `S6-02` |
 | `P6-08` | Reconnect replay: defer | — |
-| `P6-10..13` v1 | Add the 2 missing commands, remove the 47 dead commands and 10 dead listeners, gate that both sides agree | Contract test |
+| `P6-10..13` v1 | **Partly built (D-015):** 1 missing command, not 2 (`navigate_to_logs`, fixed in the frontend); `TG-P6-10` fails on any invoke of an unregistered command, `TG-P6-11` pins the 49 registered-but-uncalled commands as a list that may only shrink. **Not done:** deleting them (Razi, after P6-15 and P7 rows decide which ones are needed) and the listener side | `TG-P6-10`, `TG-P6-11` |
 | `P6-14` | Argument/return type checking: defer | — |
 | `P6-15..18` v1 | Every setting persists and hydrates; provider/model survive restart; `ModelConfigsDb` read as well as written; no inert controls | `S6-03` |
-| `P6-19..20` v1 | Graph City renders and reads the real graph; `P6-21` performance bench deferred | `S6-01` |
+| `P6-19..20` v1 | Graph City renders and reads the real graph; `P6-21` performance bench deferred. Rendering is fixed (see `P6-02`); reading the real graph after the R2 edge-kind changes is not yet checked | `S6-01` |
 | `P6-22..23` v1 | Route or delete ~3,700 orphaned frontend lines; every route reachable from a cold start; `P6-24` gate deferred | `S6-04` |
 | `P7-01..04` v1 | BYOK first run: enter a key, see it accepted, reach a turn, key never echoed, every failure names its next action | `S7-01` |
 | `P7-05..08` v1 | Fix the two toast producers; errors surface once in one place; provider errors say what the user can do; completion, cancel, provider error and tool error are distinguishable | Smoke |

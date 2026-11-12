@@ -1,6 +1,6 @@
 // DistrictMesh.tsx — Community ground plane + boundary wall + name billboard
-import { Text, Billboard } from '@react-three/drei'
 import * as THREE from 'three'
+import { CityLabel } from '../CityLabel'
 import type { DistrictLayout } from '../layout/layoutTypes'
 
 interface DistrictMeshProps {
@@ -75,24 +75,14 @@ export function DistrictMesh({ district }: DistrictMeshProps) {
       </mesh>
 
       {/* District name billboard */}
-      <Billboard position={[centerX, 4.0, centerZ]} follow lockX={false} lockY={false} lockZ={false}>
-        <Text
-          fontSize={Math.max(4.0, Math.min(width, depth) * 0.20)}
-          color={color}
-          fillOpacity={0.9}
-          anchorX="center"
-          anchorY="middle"
-          outlineWidth={0.15}
-          outlineColor="#000000"
-          outlineOpacity={1.0}
-          maxWidth={width * 0.95}
-          textAlign="center"
-          depthOffset={-2}
-          renderOrder={10}
-        >
-          {label}
-        </Text>
-      </Billboard>
+      <CityLabel
+        position={[centerX, 4.0, centerZ]}
+        label={label}
+        color={color}
+        fontPx={Math.max(14, Math.min(24, Math.min(width, depth) * 0.9))}
+        distanceFactor={90}
+        maxWidthPx={Math.max(160, Math.min(width, depth) * 6)}
+      />
     </group>
   )
 }

@@ -256,3 +256,37 @@ rules already settle and recorded the rest):
   name index was cut off at its cap.
 - **Claims corrected:** `find_existing` creates no graph database or `graphs` directory (it still ensures the app's `~/.arcana`,
   like every store); the module-stub gate now needs all five exclusions.
+
+## D-015 · R3 start: the audit's findings, what was built first, and what waits for Razi — 2026-11-13, mine within the plan
+
+A start-of-phase `plan-auditor` pass over R3 (read-only, against the code) found the plan's counts roughly right and its stated
+causes partly wrong. What changed in the plan, and what I did:
+
+- **Graph City's hang was not the Google Fonts fetch.** The CSP allows `fonts.googleapis.com` and `fonts.gstatic.com`. The hang was
+  drei's `<Text>` (troika): it loads its default and unicode-fallback fonts from a CDN (`connect-src` allows only IPC) and starts a
+  blob web worker (`index.html`'s CSP has no `worker-src`/`blob:`). The text never resolved, and each district and god-node
+  landmark sat inside a `<Suspense fallback={null}>`, so the districts, walls and landmarks never drew. Reproduced in a browser
+  under the shipped CSP (buildings only, no districts, two worker-CSP errors), then fixed: labels are DOM overlays
+  (`city/CityLabel.tsx`, drei `<Html>`), with no font file and no fetch, and the districts render. **`TG-P6-02`** bans a drei
+  `<Text>` import. Built with no new dependency and no download.
+- **Still open under `P6-02`, Razi's call:** the app still loads IBM Plex from Google Fonts at runtime (works online, falls back to
+  system fonts offline) while `ui-anchor.md` names Urbanist/Manrope/Roboto Mono. By the "code wins" rule the anchor is what is
+  wrong; bundling IBM Plex needs a font download, which I will not do unasked. Options: (a) bundle IBM Plex (download the OFL
+  files, add `@font-face`, drop the Google origins from both CSPs); (b) keep the runtime fetch and correct `ui-anchor.md`; (c) a
+  system-font stack. I recommend (a).
+- **The command contract has two gates now.** `TG-P6-10`: every `invoke('…')` in the frontend names a registered command (this is
+  the "missing" side; the audit found one, `navigate_to_logs`, not two — fixed by switching the tab through `uiStore`, since tab
+  navigation is a frontend concern; the Logs tab has no per-agent filter, so it opens unfiltered). `TG-P6-11`: the 49 commands that
+  are registered and never invoked are a list that may only shrink (the plan said 47). **Deleting them is not done**: several back
+  later R3 rows (`has_provider_key` for the P7-01 first-run check, `get_user_preferences` for P6-15 hydration,
+  `get_daily_budget_summary` for P2-21), the git and checkpoint ones are possible undo UI (P7-12..14), and removing a registered
+  command is a shipped-contract change. Razi decides which to delete once those rows are built.
+- **Proof ids:** `S6-01..04` and `S7-01..03` exist only in the archived master plan as one-line bullets. `SHIP_PLAN.md` R3 states
+  the real check for the rows built so far (`TG-P6-02`, `TG-P6-10`, `TG-P6-11`); each remaining row gets its runnable check when it starts.
+- **Open owner decisions, not blocking the next build steps:** the font option above; whether the 3D city's colours are exempt from
+  a no-literal-hex gate (recommend: allow hex only in the token file and one city palette module); the BYOK proof (recommend a
+  mock-provider automated path plus one manual run with a real key); which of the 49 uncalled commands to delete; whether to wire
+  the checkpoint commands as undo.
+- **Counts re-derived from source (2026-11-13):** 255 registered commands, 206 distinct `invoke` names in non-test frontend code;
+  709 hex literals in 80 files (plan: 75); 37 `listen` names; dead listeners and the 3,700 orphaned lines were not recounted by
+  the audit (event names are Rust constants, so a literal search is invalid; "orphan" is undefined).

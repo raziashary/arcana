@@ -2,7 +2,6 @@
 // Click to expand (shows 12 log lines, spans 2 columns). Click again to collapse.
 
 import { useState, useMemo } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { useAgentLiveStore } from '../../stores/agentLiveStore'
 import { useTaskStore }      from '../../stores/taskStore'
 import { useUiStore }        from '../../stores/uiStore'
@@ -59,6 +58,7 @@ export function AgentLiveCard({ agentId }: Props) {
   const agent    = useAgentLiveStore(s => s.agents[agentId])
   const tasks    = useTaskStore(s => s.tasks)
   const pulseTaskColumn = useUiStore(s => s.pulseTaskColumn)
+  const setActiveTab = useUiStore(s => s.setActiveTab)
   // ACP unread badge — pending messages addressed to this worker.
   const unreadCount = useWorkerChatStore(s => s.unreadByTarget[agentId] ?? 0)
   const setSelectedTaskId = useWorkerChatStore(s => s.setSelectedTaskId)
@@ -102,17 +102,11 @@ export function AgentLiveCard({ agentId }: Props) {
 
   function openInLogs(e: React.MouseEvent) {
     e.stopPropagation()
-    // `navigate_to_logs` is not a registered command — this click has always
-    // done nothing, and the empty `.catch` hid that. Tab navigation is a
-    // frontend concern and gets a real implementation with the UI work in P6;
-    // until then the failure is at least visible rather than silent.
-    // Found by the P0 post-phase audit (F-16).
-    invoke('navigate_to_logs', { filterAgent: agentId }).catch((err) => {
-      console.error(
-        '[AgentLiveCard] "Open in Logs" is not wired up yet (no navigate_to_logs command):',
-        err,
-      )
-    })
+    // Tab navigation is a frontend concern: switch the tab through the UI
+    // store. (This used to invoke a `navigate_to_logs` command that was never
+    // registered, so the click did nothing; P0 audit F-16, fixed in P6-10.)
+    // The Logs tab has no per-agent filter, so it opens unfiltered.
+    setActiveTab('logs')
   }
 
   // Doc 06 Phase 3 — clicking the QC count chip scrolls + pulses the
