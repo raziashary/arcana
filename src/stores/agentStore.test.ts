@@ -134,3 +134,42 @@ describe('chat listeners belong to the store, not the Chat tab', () => {
     expect(bus.live).toBe(0)
   })
 })
+
+describe('a failed turn is always shown', () => {
+  beforeEach(() => {
+    releaseSessionListeners()
+    bus.handlers.clear()
+    bus.live = 0
+    useAgentStore.setState({ messages: [], isStreaming: false, streamingText: '' })
+  })
+
+  it('fills the empty reply when the turn fails before any text', async () => {
+    await useAgentStore.getState().setupListeners('session-1')
+    useAgentStore.getState().startStreaming('session-1')
+    emit('agent:error', { session_id: 'session-1', message: 'API key rejected' })
+    const messages = useAgentStore.getState().messages
+    expect(messages.at(-1)?.content).toMatch(/^Error: API key rejected/)
+    expect(useAgentStore.getState().isStreaming).toBe(false)
+  })
+
+  it('adds the error after partial text instead of dropping it', async () => {
+    await useAgentStore.getState().setupListeners('session-1')
+    useAgentStore.getState().startStreaming('session-1')
+    emit('agent:token', { session_id: 'session-1', text: 'Partial answer' })
+    emit('agent:error', { session_id: 'session-1', message: 'The provider is overloaded' })
+    const contents = useAgentStore.getState().messages.map(m => m.content)
+    expect(contents).toContain('Partial answer')
+    expect(contents.at(-1)).toMatch(/^Error: The provider is overloaded/)
+  })
+
+  it('adds the error when the last message is a tool result', async () => {
+    await useAgentStore.getState().setupListeners('session-1')
+    useAgentStore.getState().startStreaming('session-1')
+    emit('agent:tool-start', { session_id: 'session-1', call_id: 'c1', tool_name: 'read_file', input: {} })
+    emit('agent:tool-end', { session_id: 'session-1', call_id: 'c1', tool_name: 'read_file', output: 'ok', is_error: false })
+    expect(useAgentStore.getState().messages.at(-1)?.role).toBe('tool')
+    emit('agent:error', { session_id: 'session-1', message: 'Rate limited' })
+    expect(useAgentStore.getState().messages.at(-1)?.content).toMatch(/^Error: Rate limited/)
+    expect(useAgentStore.getState().messages.at(-1)?.role).toBe('assistant')
+  })
+})

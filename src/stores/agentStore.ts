@@ -6,6 +6,7 @@ import { create } from 'zustand'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { useCostStore } from './costStore'
+import { explainTurnError } from '../utils/errorHints'
 
 export type MessageRole = 'user' | 'assistant' | 'tool'
 
@@ -319,10 +320,26 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       set(s => {
         const msgs = [...s.messages]
         const last = msgs[msgs.length - 1]
+        const text = explainTurnError(payload.message)
         if (last?.role === 'assistant' && !last.content) {
-          msgs[msgs.length - 1] = { ...last, content: `Error: ${payload.message}` }
+          msgs[msgs.length - 1] = { ...last, content: text }
+        } else {
+          // The failure came after text or a tool call (the last message is
+          // the partial reply or a tool result): it used to be dropped here, so
+          // a provider error on the second model call of a turn left no trace.
+          msgs.push({
+            id: crypto.randomUUID(),
+            sessionId,
+            role: 'assistant',
+            content: text,
+            toolCalls: [],
+            tokensIn: 0,
+            tokensOut: 0,
+            costUsd: 0,
+            createdAt: new Date().toISOString(),
+          })
         }
-        return { messages: msgs, isStreaming: false }
+        return { messages: msgs, isStreaming: false, streamingText: '' }
       })
     }))
 

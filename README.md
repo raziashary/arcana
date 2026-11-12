@@ -2,7 +2,7 @@
 
 Arcana is a personal desktop workspace for a multi-agent software development team. It combines a React/TypeScript interface with a Tauri/Rust host and a shared native agent engine. The intended workflow is to plan coding tasks, assign them to workers, review their work, and keep the task board, memory, and code graph available to later turns.
 
-This repository is under active restructuring. The Python orchestrator and memory sidecars were removed in P8, and the former PD0 design reference sidecar has been retired. P4 is nearly closed and the graph, UI and experience phases (P5–P7) and packaging (P9) are still to do. The target is a Windows-only v1; the plan, roadmap and status are in the [ship plan](docs/restructurization/SHIP_PLAN.md), and deferred work is in the [hardening backlog](docs/restructurization/HARDENING_BACKLOG.md).
+This repository is under active restructuring. The Python orchestrator and memory sidecars were removed in P8, and the former PD0 design reference sidecar has been retired. P4 (the Windows coding path) and P5 (the code graph) are closed; the UI and experience phase (P6–P7) is in progress and packaging (P9) is still to do. The target is a Windows-only v1; the plan, roadmap and status are in the [ship plan](docs/restructurization/SHIP_PLAN.md), and deferred work is in the [hardening backlog](docs/restructurization/HARDENING_BACKLOG.md).
 
 ## Codebase
 
