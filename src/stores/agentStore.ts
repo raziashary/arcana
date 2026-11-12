@@ -5,6 +5,7 @@
 import { create } from 'zustand'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
+import { useCostStore } from './costStore'
 
 export type MessageRole = 'user' | 'assistant' | 'tool'
 
@@ -125,6 +126,16 @@ export function hydrateActiveToolCalls(
   return msgs
 }
 
+// The handles of the listeners `setupListeners` registered for the live session.
+let sessionListeners: UnlistenFn[] = []
+
+/** Unregister the live session's listeners (idempotent). */
+export function releaseSessionListeners(): void {
+  const handles = sessionListeners
+  sessionListeners = []
+  handles.forEach(unlisten => unlisten())
+}
+
 export const useAgentStore = create<AgentState>((set, get) => ({
   messages:          [],
   isStreaming:       false,
@@ -178,6 +189,11 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   clearMessages: () => set({ messages: [], isStreaming: false, streamingText: '' }),
 
   setupListeners: async (sessionId) => {
+    // The listeners belong to this store, not to the Chat tab: the tab unmounts
+    // when the user opens another one, and a reply that is still streaming must
+    // keep arriving (and `agent:done` must still end it). A new call replaces
+    // the previous set, so a second send cannot double every token.
+    releaseSessionListeners()
     const unlisteners: UnlistenFn[] = []
     const completedDuringHydration = new Set<string>()
 
@@ -281,6 +297,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // Agent done
     unlisteners.push(await listen<{ session_id: string; tokens_in: number; tokens_out: number; cost_usd: number }>('agent:done', ({ payload }) => {
       if (payload.session_id !== sessionId) return
+      useCostStore.getState().addCost(payload.cost_usd, payload.tokens_in, payload.tokens_out)
       set(s => {
         const msgs = [...s.messages]
         const last = msgs[msgs.length - 1]
@@ -322,6 +339,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       console.warn('Could not hydrate active tool executions:', error)
     }
 
+    sessionListeners = unlisteners
     return unlisteners
   },
 }))

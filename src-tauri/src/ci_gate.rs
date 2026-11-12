@@ -7093,4 +7093,39 @@ fn effect() { ToolEffect::Execute }"#;
             "drei <Text> needs a CDN font fetch and a blob worker, both blocked by the CSP: {offenders:?}. Use CityLabel (a DOM overlay)."
         );
     }
+
+    /// `TG-P6-06` (P6-06, P6-07) — a chat turn's event listeners are owned by
+    /// the store, never by the Chat tab. The tab unmounts when another tab is
+    /// opened; listeners it owned were released with it, so a reply still
+    /// streaming stopped arriving, `agent:done` never ended it and its cost was
+    /// never recorded. `agentStore.test.ts` proves the behaviour (events with no
+    /// tab mounted); this keeps the ownership from drifting back.
+    #[test]
+    fn tg_p6_06_chat_turn_listeners_are_not_owned_by_the_chat_tab() {
+        let sources = frontend_sources();
+        let find = |suffix: &str| {
+            sources
+                .iter()
+                .find(|(name, _)| name.ends_with(suffix))
+                .unwrap_or_else(|| panic!("{suffix} not found; the gate has lost its input"))
+                .1
+                .as_str()
+        };
+        let chat = find("src/tabs/Chat.tsx");
+        assert!(
+            chat.contains("setupListeners("),
+            "Chat.tsx no longer starts the session listeners through the store"
+        );
+        for banned in ["listen(", "listen<", "unlistenersRef"] {
+            assert!(
+                !chat.contains(banned),
+                "Chat.tsx contains `{banned}`: turn listeners must be registered and released by                  agentStore, not by a component that unmounts on a tab switch"
+            );
+        }
+        let store = find("src/stores/agentStore.ts");
+        assert!(
+            store.contains("releaseSessionListeners()") && store.contains("addCost("),
+            "agentStore lost the listener release or the cost recording"
+        );
+    }
 }

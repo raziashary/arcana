@@ -4,7 +4,6 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import { Send, Square, Zap } from 'lucide-react'
 import MessageBubble        from '../components/chat/MessageBubble'
 import InlinePermissionCard from '../components/chat/PermissionDialog'
@@ -14,7 +13,6 @@ import AtFilePicker, { type FileEntry } from '../components/chat/AtFilePicker'
 import { useAgentStore }    from '../stores/agentStore'
 import { useSessionStore }  from '../stores/sessionStore'
 import { useSettingsStore, PA_MODES, type PAMode } from '../stores/settingsStore'
-import { useCostStore }     from '../stores/costStore'
 import { useArcanaMdStore } from '../stores/arcanaMdStore'
 import { useWorkspaceStore } from '../stores/workspaceStore'
 import SkillsPalette from '../components/skills/SkillsPalette'
@@ -242,14 +240,6 @@ export default function ChatTab() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, pendingPermission, isStreaming])
 
-  // Ref to hold active unlisteners so they can be cleaned up on unmount
-  const unlistenersRef = useRef<(() => void)[]>([])
-
-  // Cleanup all listeners on unmount
-  useEffect(() => {
-    return () => { unlistenersRef.current.forEach(fn => fn()) }
-  }, [])
-
   // Resolve @path tokens to absolute paths relative to workspace dir.
   // Matches @word/path/file, @folder/name, @filename.ext — anything with . or /
   const resolveAtMentions = (text: string): string => {
@@ -289,17 +279,10 @@ export default function ChatTab() {
       setIsStarting(true)
       const sessionId = await ensureSession()
 
-      // Tear down any previous listeners, then register fresh ones BEFORE invoking backend
-      unlistenersRef.current.forEach(fn => fn())
-      unlistenersRef.current = await useAgentStore.getState().setupListeners(sessionId)
-
-      // Add cost store listener for agent:done event
-      const costListener = await listen<{ session_id: string; tokens_in: number; tokens_out: number; cost_usd: number }>('agent:done', ({ payload }) => {
-        if (payload.session_id === sessionId) {
-          useCostStore.getState().addCost(payload.cost_usd, payload.tokens_in, payload.tokens_out)
-        }
-      })
-      unlistenersRef.current.push(costListener)
+      // Register the session's listeners BEFORE invoking the backend. The store
+      // owns them (replacing the previous set), so they outlive this tab: a turn
+      // keeps streaming, and its cost is recorded, while another tab is open.
+      await useAgentStore.getState().setupListeners(sessionId)
 
       useAgentStore.getState().addUserMessage(text)
       useAgentStore.getState().startStreaming(sessionId)

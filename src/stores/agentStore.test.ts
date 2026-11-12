@@ -1,5 +1,38 @@
-import { describe, expect, it } from 'vitest'
-import { hydrateActiveToolCalls, type ChatMessage } from './agentStore'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  hydrateActiveToolCalls,
+  releaseSessionListeners,
+  useAgentStore,
+  type ChatMessage,
+} from './agentStore'
+import { useCostStore } from './costStore'
+
+// A stand-in for Tauri's event bus: handlers by event name, and a count of the
+// ones still registered.
+const bus = vi.hoisted(() => ({
+  handlers: new Map<string, Set<(event: { payload: unknown }) => void>>(),
+  live: 0,
+}))
+
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async (name: string, handler: (event: { payload: unknown }) => void) => {
+    const set = bus.handlers.get(name) ?? new Set()
+    set.add(handler)
+    bus.handlers.set(name, set)
+    bus.live += 1
+    return () => {
+      if (set.delete(handler)) bus.live -= 1
+    }
+  }),
+}))
+
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async () => []),
+}))
+
+function emit(name: string, payload: unknown) {
+  bus.handlers.get(name)?.forEach(handler => handler({ payload }))
+}
 
 const assistantMessage = (): ChatMessage => ({
   id: 'assistant-1',
@@ -49,5 +82,55 @@ describe('active tool execution hydration', () => {
     const hydrated = hydrateActiveToolCalls([message], [activeTool], 'session-1', new Set())
     expect(hydrated[0].toolCalls).toHaveLength(1)
     expect(hydrated[0].toolCalls[0].pending).toBe(true)
+  })
+})
+
+describe('chat listeners belong to the store, not the Chat tab', () => {
+  beforeEach(() => {
+    releaseSessionListeners()
+    bus.handlers.clear()
+    bus.live = 0
+    useAgentStore.setState({ messages: [], isStreaming: false, streamingText: '' })
+    useCostStore.setState({ costTodayUsd: 0, tokensInToday: 0, tokensOutToday: 0 })
+  })
+
+  it('keeps a reply streaming, ends it and records its cost with no Chat tab mounted', async () => {
+    // Nothing here mounts the Chat component: the user has opened another tab.
+    await useAgentStore.getState().setupListeners('session-1')
+    useAgentStore.getState().startStreaming('session-1')
+
+    emit('agent:token', { session_id: 'session-1', text: 'Hel' })
+    emit('agent:token', { session_id: 'session-1', text: 'lo' })
+    expect(useAgentStore.getState().messages.at(-1)?.content).toBe('Hello')
+    expect(useAgentStore.getState().isStreaming).toBe(true)
+
+    emit('agent:done', { session_id: 'session-1', tokens_in: 10, tokens_out: 5, cost_usd: 0.25 })
+    expect(useAgentStore.getState().isStreaming).toBe(false)
+    expect(useCostStore.getState().costTodayUsd).toBeCloseTo(0.25)
+    expect(useCostStore.getState().tokensOutToday).toBe(5)
+  })
+
+  it('ignores another session and does not double-count after a second send', async () => {
+    await useAgentStore.getState().setupListeners('session-1')
+    const registered = bus.live
+    expect(registered).toBeGreaterThan(0)
+
+    // The second send re-registers: the first set must be released, not stacked.
+    await useAgentStore.getState().setupListeners('session-1')
+    expect(bus.live).toBe(registered)
+
+    emit('agent:token', { session_id: 'other', text: 'nope' })
+    emit('agent:token', { session_id: 'session-1', text: 'once' })
+    expect(useAgentStore.getState().messages.at(-1)?.content).toBe('once')
+
+    emit('agent:done', { session_id: 'session-1', tokens_in: 1, tokens_out: 1, cost_usd: 0.1 })
+    expect(useCostStore.getState().costTodayUsd).toBeCloseTo(0.1)
+  })
+
+  it('releases every listener on request', async () => {
+    await useAgentStore.getState().setupListeners('session-1')
+    expect(bus.live).toBeGreaterThan(0)
+    releaseSessionListeners()
+    expect(bus.live).toBe(0)
   })
 })
