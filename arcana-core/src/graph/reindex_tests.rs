@@ -427,3 +427,62 @@ fn opening_a_current_graph_takes_no_backup() {
         "no backup directory appears for an up-to-date database"
     );
 }
+
+/// S5-01, end to end: the same tree indexed through different spellings of its
+/// path is one database holding one set of node and edge keys, not disjoint
+/// sets per spelling. Fixing only the database name would pass the file count
+/// and fail this.
+#[test]
+fn indexing_one_tree_through_different_spellings_gives_one_graph() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let _guard = crate::db::test_support::with_home(home.path());
+    let workspace = tempfile::tempdir().expect("workspace");
+    let root = workspace.path().join("proj");
+    std::fs::create_dir(&root).expect("workspace root");
+    write(&root, "a.py", "def foo():\n    return 1\n");
+    write(
+        &root,
+        "b.py",
+        "from .a import foo\n\n\ndef bar():\n    return foo()\n",
+    );
+
+    let plain = root.display().to_string();
+    let mut spellings = vec![
+        plain.clone(),
+        format!("{plain}{}", std::path::MAIN_SEPARATOR),
+        format!("{plain}{0}.{0}", std::path::MAIN_SEPARATOR),
+    ];
+    if cfg!(windows) {
+        spellings.push(plain.replace('\\', "/"));
+        spellings.push(plain.to_lowercase());
+        spellings.push(plain.to_uppercase());
+    }
+
+    let mut key_sets = BTreeSet::new();
+    let mut databases = BTreeSet::new();
+    let mut last_rows = (0, 0);
+    for spelling in &spellings {
+        let location = super::location::locate(spelling).expect("locate");
+        let store = GraphStore::open(&location.db_path).expect("open");
+        index(&location.root, &store);
+        let nodes: BTreeSet<String> = store
+            .get_all_nodes_for_graph(i64::MAX, 0)
+            .expect("nodes")
+            .into_iter()
+            .map(|n| n.qualified_name)
+            .collect();
+        last_rows = (nodes.len(), edge_rows(&store));
+        key_sets.insert((nodes, edges(&store)));
+        databases.insert(location.db_path);
+    }
+    assert_eq!(databases.len(), 1, "one database for {spellings:?}");
+    assert_eq!(
+        key_sets.len(),
+        1,
+        "the same node and edge keys whichever spelling indexed them"
+    );
+    // The last run's database holds exactly that one set, with no leftovers.
+    let (nodes, edge_count) = last_rows;
+    let only = key_sets.into_iter().next().expect("one set");
+    assert_eq!((nodes, edge_count), (only.0.len(), only.1.len()));
+}
