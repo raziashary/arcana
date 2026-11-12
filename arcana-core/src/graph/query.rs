@@ -104,7 +104,7 @@ pub fn query_dependents(store: &GraphStore, qualified_name: &str) -> Result<Quer
 
         for edge in &all_edges {
             if edge.target_qualified == current
-                && (edge.kind == "Calls" || edge.kind == "ImportsFrom")
+                && (edge.kind == "CALLS" || edge.kind == "IMPORTS_FROM")
             {
                 result_qnames.insert(edge.source_qualified.clone());
                 queue.push(edge.source_qualified.clone());
@@ -176,7 +176,7 @@ pub fn query_dependencies(store: &GraphStore, qualified_name: &str) -> Result<Qu
 
         for edge in &all_edges {
             if edge.source_qualified == current
-                && (edge.kind == "Calls" || edge.kind == "ImportsFrom")
+                && (edge.kind == "CALLS" || edge.kind == "IMPORTS_FROM")
             {
                 result_qnames.insert(edge.target_qualified.clone());
                 queue.push(edge.target_qualified.clone());

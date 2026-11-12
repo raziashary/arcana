@@ -142,7 +142,8 @@ pub fn surprising_connections(
             .unwrap_or_default();
 
         // Skip same-file and import edges
-        if source_file == target_file || edge.kind.contains("Import") || edge.kind == "Contains" {
+        if source_file == target_file || edge.kind.starts_with("IMPORT") || edge.kind == "CONTAINS"
+        {
             continue;
         }
 
@@ -312,7 +313,9 @@ pub fn get_impact_radius(
         // Find callers/dependents
         for edge in &all_edges {
             if edge.target_qualified == current
-                && (edge.kind == "Calls" || edge.kind == "ImportsFrom" || edge.kind == "DependsOn")
+                && (edge.kind == "CALLS"
+                    || edge.kind == "IMPORTS_FROM"
+                    || edge.kind == "DEPENDS_ON")
             {
                 let next = edge.source_qualified.clone();
                 if !affected.contains_key(&next) {
@@ -357,7 +360,7 @@ pub fn get_impact_radius(
     // Find tests
     let tests_to_run: Vec<String> = all_edges
         .iter()
-        .filter(|e| e.kind == "TestedBy" && affected.contains_key(&e.source_qualified))
+        .filter(|e| e.kind == "TESTED_BY" && affected.contains_key(&e.source_qualified))
         .map(|e| e.target_qualified.clone())
         .collect::<HashSet<_>>()
         .into_iter()
@@ -369,7 +372,7 @@ pub fn get_impact_radius(
         .filter(|n| {
             !all_edges
                 .iter()
-                .any(|e| e.kind == "TestedBy" && e.source_qualified == n.qualified_name)
+                .any(|e| e.kind == "TESTED_BY" && e.source_qualified == n.qualified_name)
         })
         .map(|n| n.qualified_name.clone())
         .collect();

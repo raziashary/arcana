@@ -39,7 +39,14 @@ pub(crate) fn build_workspace_graph(root: &Path) -> GraphLocation {
 /// Three files: an invoice renderer, a config parser, and a report that uses
 /// the renderer. Two unrelated subjects so a query can pick one.
 pub(crate) fn write_invoice_workspace(root: &Path) {
-    write(root, "invoices.py", "def render_invoice():\n    return 1\n");
+    // PEP 8 layout on purpose: two blank lines before each top-level `def`.
+    // `render_invoice` calls `format_total` in the same file (the extractor
+    // resolves calls within one file), and `report.py` imports the file.
+    write(
+        root,
+        "invoices.py",
+        "def render_invoice():\n    return format_total()\n\n\ndef format_total():\n    return 1\n",
+    );
     write(root, "settings.py", "def parse_settings():\n    return 2\n");
     write(
         root,
@@ -116,8 +123,8 @@ fn a_matching_symbol_and_its_neighbours_appear_and_a_different_query_changes_the
     );
     // A neighbour reached over an edge, named with how it is connected.
     assert!(
-        invoices.contains("print_report") || invoices.contains("report.py"),
-        "the caller of render_invoice should be pulled in:\n{invoices}"
+        invoices.contains("`format_total`"),
+        "the function render_invoice calls should be pulled in:\n{invoices}"
     );
     assert!(
         invoices.contains("source of") || invoices.contains("target of"),
@@ -299,10 +306,10 @@ fn the_block_is_bounded_deterministic_and_fast_on_a_large_graph() {
         let name = format!("handler_{i:04}");
         let qualified = format!("m{}.py::{name}", i % 50);
         nodes.push(node(&name, &qualified, &format!("m{}.py", i % 50)));
-        edges.push(edge("calls", "hub.py::handler_hub", &qualified, i as i32));
+        edges.push(edge("calls", "hub.py::handler_hub", &qualified, i));
         if i > 0 {
             let previous = format!("m{}.py::handler_{:04}", (i - 1) % 50, i - 1);
-            edges.push(edge("calls", &qualified, &previous, i as i32));
+            edges.push(edge("calls", &qualified, &previous, i));
         }
     }
     let (_store, root) = synthetic(&nodes, &edges);
@@ -334,4 +341,45 @@ fn a_query_of_only_stop_words_gives_no_block() {
     let nodes = vec![node("handler_one", "a.py::handler_one", "a.py")];
     let (_store, root) = synthetic(&nodes, &[]);
     assert!(graph_context_block(&root, "why does the thing fail?").is_empty());
+}
+
+/// The analysis helpers compared edge kinds against `"Calls"`/`"ImportsFrom"`
+/// while the extractor stores `"CALLS"`/`"IMPORTS_FROM"`, so on any real graph
+/// they found no dependents. They are run here on a graph the extractor built.
+#[test]
+fn the_analysis_helpers_follow_the_edge_kinds_the_extractor_writes() {
+    let home = tempfile::tempdir().expect("isolated home");
+    let _guard = crate::db::test_support::with_home(home.path());
+    let workspace = tempfile::tempdir().expect("workspace");
+    write_invoice_workspace(workspace.path());
+    let location = build_workspace_graph(workspace.path());
+    let store = GraphStore::open(&location.db_path).expect("open");
+    let key = |name: &str| format!("{}::{name}", location.root.join("invoices.py").display());
+
+    let dependents = super::query::query_dependents(&store, &key("format_total")).expect("query");
+    assert!(
+        dependents
+            .nodes
+            .iter()
+            .any(|n| n.qualified_name == key("render_invoice")),
+        "render_invoice calls format_total: {dependents:?}"
+    );
+    let dependencies =
+        super::query::query_dependencies(&store, &key("render_invoice")).expect("query");
+    assert!(
+        dependencies
+            .nodes
+            .iter()
+            .any(|n| n.qualified_name == key("format_total")),
+        "{dependencies:?}"
+    );
+    let impact =
+        super::analyze::get_impact_radius(&store, &key("format_total"), 3, 100).expect("impact");
+    assert!(
+        impact
+            .affected_nodes
+            .iter()
+            .any(|n| n.qualified_name == key("render_invoice")),
+        "{impact:?}"
+    );
 }

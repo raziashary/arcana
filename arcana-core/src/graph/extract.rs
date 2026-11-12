@@ -311,12 +311,14 @@ fn extract_python(
 
     // Regex patterns (compiled once)
     let class_re =
-        regex::Regex::new(r"(?m)^(\s*)class\s+([A-Za-z_][A-Za-z0-9_]*)\s*[\(:]").unwrap();
+        regex::Regex::new(r"(?m)^([ \t]*)class\s+([A-Za-z_][A-Za-z0-9_]*)\s*[\(:]").unwrap();
     let func_re =
-        regex::Regex::new(r"(?m)^(\s*)(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(").unwrap();
-    let import_re = regex::Regex::new(r"(?m)^\s*import\s+([A-Za-z_][A-Za-z0-9_.]*)").unwrap();
+        regex::Regex::new(r"(?m)^([ \t]*)(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+            .unwrap();
+    let import_re = regex::Regex::new(r"(?m)^[ \t]*import\s+([A-Za-z_][A-Za-z0-9_.]*)").unwrap();
     let from_import_re =
-        regex::Regex::new(r"(?m)^\s*from\s+([A-Za-z_.][A-Za-z0-9_.]*)\s+import\s+(.+)$").unwrap();
+        regex::Regex::new(r"(?m)^[ \t]*from\s+([A-Za-z_.][A-Za-z0-9_.]*)\s+import\s+(.+)$")
+            .unwrap();
 
     // Helper: line number from byte offset
     let line_of = |offset: usize| -> i32 {
@@ -773,7 +775,7 @@ fn extract_js_ts(path: &Path, source: &[u8], file_hash: &str) -> Result<Extracti
 
     // 5. Import statements → IMPORTS_FROM edges
     let import_re =
-        regex::Regex::new(r#"(?m)^\s*import\s+[^'"]+\s+from\s+['"]([^'"]+)['"]"#).unwrap();
+        regex::Regex::new(r#"(?m)^[ \t]*import\s+[^'"]+\s+from\s+['"]([^'"]+)['"]"#).unwrap();
     for cap in import_re.captures_iter(source_str) {
         let spec = cap.get(1).unwrap().as_str();
         let line = line_of(cap.get(0).unwrap().start());

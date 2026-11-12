@@ -114,13 +114,13 @@ pub fn score_change_risk(store: &GraphStore, changed_nodes: &[ChangedNode]) -> R
         // Count incoming edges (callers)
         let callers = all_edges
             .iter()
-            .filter(|e| e.target_qualified == node.qualified_name && e.kind == "Calls")
+            .filter(|e| e.target_qualified == node.qualified_name && e.kind == "CALLS")
             .count();
 
         // Count tests
         let tests = all_edges
             .iter()
-            .filter(|e| e.source_qualified == node.qualified_name && e.kind == "TestedBy")
+            .filter(|e| e.source_qualified == node.qualified_name && e.kind == "TESTED_BY")
             .count();
 
         // Risk = callers / (tests + 1)

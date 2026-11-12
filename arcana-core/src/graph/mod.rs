@@ -13,6 +13,8 @@ pub(crate) mod context_tests;
 pub mod detect;
 pub mod export;
 pub mod extract;
+#[cfg(test)]
+mod extract_tests;
 pub mod flows;
 pub mod incremental;
 pub mod location;

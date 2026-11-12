@@ -69,7 +69,7 @@ pub fn detect_entry_points(store: &GraphStore) -> Result<Vec<EntryPoint>> {
             downstream.insert(current.clone());
 
             for edge in &all_edges {
-                if edge.source_qualified == current && edge.kind == "Calls" {
+                if edge.source_qualified == current && edge.kind == "CALLS" {
                     queue.push_back(edge.target_qualified.clone());
                 }
             }
@@ -114,13 +114,13 @@ pub fn trace_execution_path(
         visited.insert(current.clone());
 
         for edge in &all_edges {
-            if edge.source_qualified == current && edge.kind == "Calls" {
+            if edge.source_qualified == current && edge.kind == "CALLS" {
                 path.push(edge.target_qualified.clone());
 
                 // Detect conditionals (heuristic: multiple outgoing calls)
                 let outgoing = all_edges
                     .iter()
-                    .filter(|e| e.source_qualified == current && e.kind == "Calls")
+                    .filter(|e| e.source_qualified == current && e.kind == "CALLS")
                     .count();
                 if outgoing > 1 {
                     has_conditional = true;
@@ -146,7 +146,7 @@ pub fn analyze_data_flows(store: &GraphStore, max_hops: usize) -> Result<Vec<Dat
 
     // Simple heuristic: find paths from imports to calls
     for edge in &all_edges {
-        if edge.kind == "ImportsFrom" {
+        if edge.kind == "IMPORTS_FROM" {
             let mut path = vec![edge.source_qualified.clone(), edge.target_qualified.clone()];
             let mut queue = VecDeque::new();
             queue.push_back((edge.target_qualified.clone(), 1));
