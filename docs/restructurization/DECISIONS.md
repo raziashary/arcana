@@ -200,3 +200,35 @@ following (`SHIP_PLAN.md` R2 keeps the task list, this entry records how it is b
 - **Legacy graph DBs:** a non-empty DB named by an old raw-spelling hash is copied (`VACUUM INTO`, no new rusqlite feature) to the
   canonical name; the legacy file is left alone. The one live graph DB on this machine is empty and backed up
   (`~/.arcana/backups/graph-43cee5c8d519-20261112-212330-before-r2-graph-work.db`).
+
+## D-014 · R2 graph tools and the prompt block, as built — 2026-11-12, mine within D-013's ruling
+
+Razi's ruling in D-013 was "interactive agent, working tools only". Building it changed three things the plan assumed; the plan
+bends to the code (`SHIP_PLAN.md` R2 now says what shipped).
+
+- **The 27 `graph_tools.rs` structs were not registered as they stood, and not by an oversight.** Every one loaded the whole node
+  and edge tables per call, `list_callers` was a transitive closure, and the helpers they call (`query.rs`, `analyze.rs`,
+  `flows.rs`, `changes.rs`) compared edge kinds with `"Calls"`, `"ImportsFrom"`, `"TestedBy"` while the extractor stores
+  `"CALLS"`, `"IMPORTS_FROM"`, `"TESTED_BY"` (`EdgeKind`'s `Display`). Callers, callees, impact, flows and tests therefore returned
+  nothing on any real graph. The literals are fixed (a real defect in code the Graph tab's commands also use), but the structs are
+  not the tool surface. **Decision:** eight new bounded tools in `builtin_tools/graph_query_tools.rs` (`graph_search`,
+  `graph_node`, `graph_callers`, `graph_callees`, `graph_impact`, `graph_file`, `graph_path`, `graph_overview`), one `impl Tool`
+  each, all `ToolEffect::Read`, using the indexed per-node edge lookup, with caps and a reported `truncated`. They cost 3.9 KB of
+  tool definitions per request (measured by a test, budget 5 KB). The 27 structs and `graph_prompts.rs` stay inert and unregistered:
+  deleting files is Razi's call, so they are flagged in `HARDENING_BACKLOG.md` for deletion rather than removed.
+- **Interactive only, by opt-in.** `AgentEngine::with_graph_tools()` registers them; its one production caller is the interactive
+  path in `agent_commands.rs`, and not in Delegate mode. `register_for_mode` does not include them, so fleet workers, subagents,
+  QC and headless runs are never offered tools that would answer "no graph". `TG-P5-18` pins the caller list, the published names,
+  the Read effect, and that the file can neither write the graph nor touch the filesystem.
+- **A tool never builds a graph or creates a file.** `location::find_existing` resolves the canonical path and reports none if the
+  database is absent; the tool then returns `graph_not_built` with the next step. The prompt block uses the same function and
+  opens the database read-only. A graph stored under a legacy spelling is adopted by the Graph tab (`locate`), not on read.
+- **The extractor's Python patterns were wrong on PEP 8 code.** `^(\s*)def` lets `\s` match the blank lines above the `def`, so a
+  top-level function after a blank line was labelled a "method", got no CONTAINS edge and had its `line_start` on the blank line
+  (the same for classes and `from`/`import` lines; a JS `import` pattern had it too). Fixed to `[ \t]*`, with a regression test.
+  This is why the first fixture's caller edge was missing; it would have understated every Python graph.
+- **The extractor records calls only within one file** (`extract_python`, step 6). Cross-file dependence exists only as file-level
+  `IMPORTS_FROM` edges. The tool descriptions say so, and `graph_impact` on a file name finds its importers. Cross-file call
+  resolution is a larger extractor change and goes to the backlog, not into R2.
+- **Graph block order:** `volatile_prompt` composes memory, then the graph block, then the roster; both the plain and the
+  override path call it (`TG-P5-14`, and `TG-P3-44/45` now follows the composer).

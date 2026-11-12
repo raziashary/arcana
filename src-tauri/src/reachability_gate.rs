@@ -52,10 +52,10 @@ use std::path::{Path, PathBuf};
 /// (ADR-LOG-RESTRUCT-0012).
 ///
 /// ⚠ **Compiling is not wiring.** The 27 structs in `graph_tools.rs` still do
-/// not implement `Tool` and nothing registers them, so the agent has no graph
-/// tools. This gate proves the code is *built*, never that a capability
-/// *exists* — that is P3 (BUG-GRAPH). A green gate here must not be read as a
-/// working feature.
+/// not implement `Tool` and nothing registers them; the interactive agent's graph
+/// tools are the eight in `graph_query_tools.rs` (D-014, `TG-P5-18`). This gate
+/// proves the code is *built*, never that a capability *exists*. A green gate
+/// here must not be read as a working feature.
 const KNOWN_UNREACHABLE: &[(&str, &str)] = &[];
 
 /// Walk `src/`, returning every `.rs` file relative to it.

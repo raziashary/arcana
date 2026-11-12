@@ -334,7 +334,7 @@ fn render(conn: &Connection, root: &Path, picks: &[Pick]) -> Result<String, Stri
 }
 
 /// A repository path relative to the workspace root when it is under it.
-fn relative(root: &Path, path: &str) -> String {
+pub(crate) fn relative(root: &Path, path: &str) -> String {
     Path::new(path)
         .strip_prefix(root)
         .map(|p| p.to_string_lossy().replace('\\', "/"))

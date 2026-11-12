@@ -1,4 +1,10 @@
-// Graph MCP tools — all 22 graph analysis and navigation tools
+// INERT (D-014): none of these 27 structs implements Tool and nothing registers them. They
+// load the whole graph per call, and several lean on helpers that compared edge kinds against the
+// wrong strings (fixed in R2, the whole-table scans are not). The registered graph tools are in
+// graph_query_tools.rs. Delete this file with graph_prompts.rs once Razi approves
+// (HARDENING_BACKLOG G).
+//
+// Graph MCP tools — the original 27 graph analysis and navigation tool structs
 
 use crate::errors::Result;
 use crate::graph::analyze::{

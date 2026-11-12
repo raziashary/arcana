@@ -71,8 +71,9 @@ typed start/finish events, the execution registry exposes the active snapshot,
 and the desktop chat store merges that snapshot with events during reconnect.
 The Python orchestrator/memory sidecars are absent after P8; the PD0 Node
 reference was retired under ADR-0043. The graph implementation is in
-`arcana-core/src/graph`, with its eventual context read path still part of the
-open P5 proof work.
+`arcana-core/src/graph`. Its prompt read path is `graph/context.rs` (composed by
+`ContextBuilder::volatile_prompt`), and the interactive agent's eight query tools
+are `agent/builtin_tools/graph_query_tools.rs` (R2, D-014).
 
 `CoreRuntimeOptions` carries host prompt availability into `RecipeRunner`,
 `AgentEngine`, and `ToolExecutor`. The desktop has a live permission responder;

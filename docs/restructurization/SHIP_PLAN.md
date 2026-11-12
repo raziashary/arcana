@@ -118,8 +118,8 @@ Goal: the graph is compiled, correct, and read when the agent selects context.
 |---|---|---|
 | `P5-01..03` v1 | One normalised graph DB path (four spellings produce four databases today); migrate existing DBs | Live-DB check, `S5-01` |
 | `P5-04..07` v1 | Stop `INSERT OR REPLACE` cascade-deleting edges; real upsert; edge-conservation test; backup on the destructive ladder step | `S5-02` |
-| `P5-14..17` v1 | Graph is read during context selection, scoped by graph distance, bounded; a recalled node appears in the outbound prompt bytes | `S5-05` |
-| `P5-18..19` v1 | The 27 `graph_tools.rs` structs implement `Tool` and are registered; descriptions written to the `P3-20` standard (this absorbs `P5-21`) | `S5-04` |
+| `P5-14..17` v1 | Graph is read during context selection, scoped by graph distance, bounded; a recalled node appears in the outbound prompt bytes. **Built:** `graph/context.rs`, one volatile-half composer for both prompt paths; proof is the engine test that captures `CompletionRequest.system`, plus `TG-P5-14` | `S5-05` |
+| `P5-18..19` v1 | **Changed by D-014:** eight new read-only tools (`graph_query_tools.rs`) are registered for the interactive engine only, descriptions to the `P3-20` standard, definition bytes measured (3.9 KB). The 27 `graph_tools.rs` structs are inert and unregistered (broken edge-kind comparisons, whole-table scans); deleting them is Razi's call (`HARDENING_BACKLOG.md` G). This absorbs `P5-21` | `S5-04`, `TG-P5-18` |
 | `P5-08..13` | Incremental re-cluster, rename, convergence: **defer; re-index in full on change** unless full re-index is too slow on a real repo | If kept: `S5-03` |
 | `P5-20` | Bookkeeping only; dropped | — |
 

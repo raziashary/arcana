@@ -64,3 +64,26 @@ interaction-grammar gate, production updater key and signed updates (`P9-03/04/1
 
 The AutoDesign programme (`PD0`–`PD6`, design-only parts of `P4-G` and `P6`) was withdrawn on 2026-09-23.
 History: [`archive/development/HISTORICAL_DESIGN_PROGRAMME.md`](archive/development/HISTORICAL_DESIGN_PROGRAMME.md).
+
+## G. Graph leftovers from R2 (2026-11-12, see D-013 and D-014)
+
+- **Inert code awaiting Razi's deletion call:** `arcana-core/src/agent/builtin_tools/graph_tools.rs` (27 unregistered structs) and
+  `graph_prompts.rs` (five prompts that tell the model to call those tools by name). Superseded by `graph_query_tools.rs`. They
+  compile, nothing registers them, and they carry the old whole-table scans. Delete both, and drop their `mod` lines, once
+  approved; the four ideas in them that did not ship are the next item.
+- **Four tool ideas parked until their producers are fixed:** `detect_graph_changes` (runs `git` in the process directory, not the
+  workspace), `get_graph_diff` (nothing writes snapshots), `get_graph_report` (reads a placeholder file), `get_flow_criticality`
+  (call chains labelled as flows). `query.rs`, `flows.rs`, `changes.rs` and `analyze.rs` now compare the right edge-kind strings
+  but still load the whole graph per call; rewrite on the per-node edge lookup before any tool depends on them again.
+- **Cross-file calls are not extracted.** The extractor emits `CALLS` only between functions of one file (a regex scan; the
+  other languages rely on the same approach and have not been checked for the blank-line defect fixed for Python and JS imports
+  in D-014). Cross-file dependence is file-level `IMPORTS_FROM` only, so `graph_callers` and `graph_impact` on a function stop at
+  the file edge. Fixing this means name resolution across imports, a real extractor change.
+- **Extractor fidelity:** the Python extractor sets `line_end` equal to `line_start` (the regex finds only the first line), so
+  `graph_file` and the node details show one-line spans for Python; the other languages have not been checked.
+- **Name resolution cost:** `graph_*` tools resolve a simple name through the 200 best search hits; a very common name in a huge
+  graph can miss an exact match that ranks lower. Add an exact-name lookup on `nodes(name)` if it shows up.
+- **Test flake:** `graph::build::observability_tests::production_graph_build_emits_correlated_operation_outcomes` fails in about
+  one parallel module run in three and passes alone. It is the thread-local `with_default` callsite-interest race already noted
+  in section B for `src-tauri`; `arcana-core` needs the same process-wide default (`capture_default`).
+- **`P5-08..13`** (true incremental update) stays deferred; `update_graph` is a full re-index (D-013).

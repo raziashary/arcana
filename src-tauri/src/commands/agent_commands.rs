@@ -254,6 +254,16 @@ pub async fn send_message(
         .with_session_manager(session_mgr_clone.clone())
         .with_workspace_egress_consent();
 
+        // P5-18. The code-graph query tools belong to the interactive
+        // assistant only (the graph is built here, for this user's workspace),
+        // and not to Delegate mode, which holds no file or execution tools by
+        // design. `TG-P5-18` pins this as the one production caller.
+        let engine = if resolved_pa_mode == arcana_core::agent::PAMode::Delegate {
+            engine
+        } else {
+            engine.with_graph_tools()
+        };
+
         // ── P3-02/P3-03 · the turn is contained, and the flag always clears ──
         //
         // `is_running` was cleared *after* the await. A panic inside the turn

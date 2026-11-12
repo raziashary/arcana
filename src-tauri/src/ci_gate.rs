@@ -4002,6 +4002,129 @@ fn effect() { ToolEffect::Execute }"#;
         );
     }
 
+    /// `TG-P5-18` (P5-18, P5-19) — the graph tools are read-only, are exactly
+    /// the published set, and only the interactive engine is given them.
+    ///
+    /// Every request an engine makes carries its tool definitions, and a graph
+    /// is built by the desktop host for the user's own workspace; a fleet worker
+    /// (a different worktree), a subagent or a headless run would be offered
+    /// tools that answer "no graph". So `with_graph_tools` has one production
+    /// caller, the interactive path in `agent_commands.rs`, and the tools file
+    /// can neither write the graph nor touch the filesystem.
+    #[test]
+    fn tg_p5_18_graph_tools_are_read_only_published_and_interactive_only() {
+        let rust_code = |path: &std::path::Path| {
+            read_source(path)
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let tools_path =
+            repo_root().join("arcana-core/src/agent/builtin_tools/graph_query_tools.rs");
+        let tools = rust_code(&tools_path);
+
+        // The names the file declares are exactly the published list.
+        let published: Vec<String> = tools
+            .split("pub const GRAPH_TOOL_NAMES")
+            .nth(1)
+            .and_then(|rest| rest.split("];").next())
+            .map(|list| {
+                list.split('"')
+                    .skip(1)
+                    .step_by(2)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let declared: Vec<String> = tools
+            .split("fn name(&self) -> &str {")
+            .skip(1)
+            .filter_map(|rest| rest.split('"').nth(1).map(str::to_string))
+            .collect();
+        assert_eq!(published.len(), 8, "published list: {published:?}");
+        let mut a = published.clone();
+        let mut b = declared.clone();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b, "declared tool names differ from GRAPH_TOOL_NAMES");
+        assert_eq!(tools.matches("impl Tool for").count(), published.len());
+        assert_eq!(
+            tools.matches("ToolEffect::Read").count(),
+            published.len(),
+            "every tool must declare the Read effect, and none another"
+        );
+        for banned in [
+            "ToolEffect::Write",
+            "ToolEffect::Execute",
+            "ToolEffect::Network",
+        ] {
+            assert!(!tools.contains(banned), "a graph tool declares {banned}");
+        }
+
+        // Read-only, and no filesystem access of its own.
+        for banned in [
+            "INSERT ",
+            "UPDATE ",
+            "DELETE ",
+            "CREATE ",
+            "upsert_",
+            "delete_",
+            "rebuild_fts",
+            "reindex(",
+            "GraphBuilder",
+            "std::fs",
+            "tokio::fs",
+            "Path::new",
+            "PathBuf::from",
+            "Command::new",
+        ] {
+            assert!(
+                !tools.contains(banned),
+                "graph_query_tools.rs contains `{banned}`: graph tools must only read the graph"
+            );
+        }
+
+        // One production caller of with_graph_tools: the interactive path.
+        let mut callers = Vec::new();
+        for crate_dir in [
+            "arcana-core/src",
+            "src-tauri/src",
+            "src-cli/src",
+            "src-shared/src",
+        ] {
+            let mut files = Vec::new();
+            collect_rs(&repo_root().join(crate_dir), &mut files);
+            for file in files {
+                let code = rust_code(&file);
+                let production = code.split("\n#[cfg(test)]\nmod ").next().unwrap_or("");
+                if production.contains(".with_graph_tools(") {
+                    callers.push(
+                        file.strip_prefix(repo_root())
+                            .unwrap_or(&file)
+                            .display()
+                            .to_string()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            callers,
+            vec!["src-tauri/src/commands/agent_commands.rs".to_string()],
+            "with_graph_tools may be called only by the interactive engine setup"
+        );
+
+        // And the shared registry does not hand them to every agent.
+        let registry_mod =
+            rust_code(&repo_root().join("arcana-core/src/agent/builtin_tools/mod.rs"));
+        assert!(
+            !registry_mod.contains("graph_query_tools::register")
+                && !registry_mod.contains("GraphSearchTool"),
+            "register_for_mode must not register the graph tools"
+        );
+    }
+
     // ── TG-P3-33 · the supply-chain surface is opt-in and pinned ──────────────
 
     /// The embedding dependency cannot enter a build by accident.

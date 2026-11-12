@@ -1,3 +1,8 @@
+// INERT (D-014): nothing calls these prompts, and they tell the model to call tools by names
+// (detect_graph_changes, get_impact_radius, ...) that are not registered. The registered graph
+// tools are in graph_query_tools.rs. Delete with graph_tools.rs once Razi approves
+// (HARDENING_BACKLOG G).
+//
 // Graph MCP prompts — 5 workflow prompts for code analysis and review
 
 use serde_json::json;

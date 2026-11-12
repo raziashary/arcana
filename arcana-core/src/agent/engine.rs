@@ -229,6 +229,19 @@ impl AgentEngine {
         self
     }
 
+    /// Give this engine the code-graph query tools (`P5-18`).
+    ///
+    /// Opt-in, like [`with_procedural_recall`](Self::with_procedural_recall): the
+    /// graph is built by the desktop host for the user's own workspace, so only
+    /// the interactive engine asks for these. Fleet workers, subagents and
+    /// headless runs never get them, and every request an engine makes carries
+    /// its tool definitions, so a tool that cannot work for a caller is not
+    /// offered to it.
+    pub fn with_graph_tools(mut self) -> Self {
+        builtin_tools::graph_query_tools::register(&mut self.registry);
+        self
+    }
+
     /// Remove tools from this engine's registry (`W9`). Like
     /// [`with_tool_subset`](Self::with_tool_subset) it can only narrow access.
     pub fn without_tools(mut self, names: &[&str]) -> Self {

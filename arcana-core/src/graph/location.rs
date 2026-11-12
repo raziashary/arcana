@@ -82,6 +82,45 @@ pub fn find_existing(workspace_as_given: &str) -> Result<Option<GraphLocation>> 
     Ok(db_path.is_file().then_some(GraphLocation { root, db_path }))
 }
 
+/// The strings a file may be stored under in this workspace's graph, for a path
+/// as a caller wrote it (relative to the root, or absolute; either separator).
+/// Pure string work: it never touches the disk, so a path outside the
+/// workspace simply matches nothing.
+pub fn file_key_candidates(root: &Path, given: &str) -> Vec<String> {
+    let given = given.trim();
+    let path = Path::new(given);
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    };
+    // Lexical clean-up only (`.` dropped, `..` popped): the path is a key, so
+    // nothing here touches the disk and nothing can escape by being resolved.
+    let mut cleaned = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                cleaned.pop();
+            }
+            other => cleaned.push(other.as_os_str()),
+        }
+    }
+    let plain = strip_verbatim(&cleaned).display().to_string();
+    let mut out = Vec::new();
+    for form in [
+        plain.clone(),
+        plain.replace('\\', "/"),
+        plain.replace('/', "\\"),
+        given.to_string(),
+    ] {
+        if !form.is_empty() && !out.contains(&form) {
+            out.push(form);
+        }
+    }
+    out
+}
+
 /// Every spelling an older build could have hashed for this workspace: the
 /// string as given, its slash and trailing-separator variants, and the
 /// resolved forms.
