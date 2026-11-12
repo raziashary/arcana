@@ -58,6 +58,10 @@ pub struct GraphStats {
     pub last_updated: Option<String>,
 }
 
+/// An edge's identity: `(kind, source, target, file_path, line)`. The same five
+/// columns carry the unique index from schema v7.
+pub type EdgeKey = (String, String, String, String, i32);
+
 pub struct GraphStore {
     db_path: PathBuf,
 }
@@ -110,12 +114,33 @@ impl GraphStore {
             std::fs::create_dir_all(parent)?;
         }
 
+        let existed = db_path.exists();
         let mut conn = crate::db::open_tuned(db_path)?;
 
         // Enable WAL mode for concurrent access
         conn.execute_batch("PRAGMA journal_mode=WAL")?;
 
         conn.execute_batch("PRAGMA foreign_keys=ON")?;
+
+        // A rung of the ladder (v7 removes duplicate edges) can destroy rows, and
+        // the ladder only has a connection, so the backup is taken here: any
+        // database that already exists and is below the head gets one first.
+        if existed {
+            let version = super::migrations::get_schema_version(&conn)?;
+            if (1..super::migrations::SCHEMA_HEAD).contains(&version) {
+                let backup = crate::db::migrate::backup_before_migration(
+                    db_path,
+                    &format!("graph-migration-v{}", super::migrations::SCHEMA_HEAD),
+                )?;
+                tracing::info!(
+                    target: "arcana::telemetry",
+                    event_type = "graph_migration_backup",
+                    from_version = version,
+                    bytes = backup.bytes,
+                    "Backed up a graph database before migrating it"
+                );
+            }
+        }
 
         // Run migrations
         run_migrations(&mut conn)?;
@@ -167,11 +192,27 @@ impl GraphStore {
         conn.execute_batch("BEGIN IMMEDIATE")?;
 
         let result = conn.execute(
-            "INSERT OR REPLACE INTO nodes (
+            "INSERT INTO nodes (
                 kind, name, qualified_name, file_path, line_start, line_end,
                 language, parent_name, params, return_type, modifiers, is_test,
                 file_hash, agent_author, task_id, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(qualified_name) DO UPDATE SET
+                kind = excluded.kind,
+                name = excluded.name,
+                file_path = excluded.file_path,
+                line_start = excluded.line_start,
+                line_end = excluded.line_end,
+                language = excluded.language,
+                parent_name = excluded.parent_name,
+                params = excluded.params,
+                return_type = excluded.return_type,
+                modifiers = excluded.modifiers,
+                is_test = excluded.is_test,
+                file_hash = excluded.file_hash,
+                agent_author = COALESCE(excluded.agent_author, nodes.agent_author),
+                task_id = COALESCE(excluded.task_id, nodes.task_id),
+                updated_at = excluded.updated_at",
             params![
                 &node.kind,
                 &node.name,
@@ -194,7 +235,13 @@ impl GraphStore {
 
         match result {
             Ok(_) => {
-                let rowid = conn.last_insert_rowid();
+                // `last_insert_rowid` is not refreshed when the statement took
+                // the update path, so the id is read back by identity.
+                let rowid: i64 = conn.query_row(
+                    "SELECT id FROM nodes WHERE qualified_name = ?",
+                    params![&node.qualified_name],
+                    |row| row.get(0),
+                )?;
                 conn.execute_batch("COMMIT")?;
                 operation.with_result_count(1).succeed();
                 Ok(rowid)
@@ -222,11 +269,27 @@ impl GraphStore {
         conn.execute_batch("BEGIN IMMEDIATE")?;
 
         let mut stmt = conn.prepare(
-            "INSERT OR REPLACE INTO nodes (
+            "INSERT INTO nodes (
                 kind, name, qualified_name, file_path, line_start, line_end,
                 language, parent_name, params, return_type, modifiers, is_test,
                 file_hash, agent_author, task_id, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(qualified_name) DO UPDATE SET
+                kind = excluded.kind,
+                name = excluded.name,
+                file_path = excluded.file_path,
+                line_start = excluded.line_start,
+                line_end = excluded.line_end,
+                language = excluded.language,
+                parent_name = excluded.parent_name,
+                params = excluded.params,
+                return_type = excluded.return_type,
+                modifiers = excluded.modifiers,
+                is_test = excluded.is_test,
+                file_hash = excluded.file_hash,
+                agent_author = COALESCE(excluded.agent_author, nodes.agent_author),
+                task_id = COALESCE(excluded.task_id, nodes.task_id),
+                updated_at = excluded.updated_at",
         )?;
 
         for node in nodes {
@@ -270,10 +333,18 @@ impl GraphStore {
         conn.execute_batch("BEGIN IMMEDIATE")?;
 
         let mut stmt = conn.prepare(
-            "INSERT OR REPLACE INTO edges (
+            "INSERT INTO edges (
                 kind, source_qualified, target_qualified, file_path, line,
                 confidence, confidence_tier, weight, relation, agent_author, task_id, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(kind, source_qualified, target_qualified, file_path, line) DO UPDATE SET
+                confidence = excluded.confidence,
+                confidence_tier = excluded.confidence_tier,
+                weight = excluded.weight,
+                relation = excluded.relation,
+                agent_author = COALESCE(excluded.agent_author, edges.agent_author),
+                task_id = COALESCE(excluded.task_id, edges.task_id),
+                updated_at = excluded.updated_at",
         )?;
 
         for edge in edges {
@@ -313,10 +384,18 @@ impl GraphStore {
         conn.execute_batch("BEGIN IMMEDIATE")?;
 
         let result = conn.execute(
-            "INSERT OR REPLACE INTO edges (
+            "INSERT INTO edges (
                 kind, source_qualified, target_qualified, file_path, line,
                 confidence, confidence_tier, weight, relation, agent_author, task_id, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(kind, source_qualified, target_qualified, file_path, line) DO UPDATE SET
+                confidence = excluded.confidence,
+                confidence_tier = excluded.confidence_tier,
+                weight = excluded.weight,
+                relation = excluded.relation,
+                agent_author = COALESCE(excluded.agent_author, edges.agent_author),
+                task_id = COALESCE(excluded.task_id, edges.task_id),
+                updated_at = excluded.updated_at",
             params![
                 &edge.kind,
                 &edge.source_qualified,
@@ -335,7 +414,19 @@ impl GraphStore {
 
         match result {
             Ok(_) => {
-                let rowid = conn.last_insert_rowid();
+                let rowid: i64 = conn.query_row(
+                    "SELECT id FROM edges
+                     WHERE kind = ? AND source_qualified = ? AND target_qualified = ?
+                       AND file_path = ? AND line = ?",
+                    params![
+                        &edge.kind,
+                        &edge.source_qualified,
+                        &edge.target_qualified,
+                        &edge.file_path,
+                        edge.line
+                    ],
+                    |row| row.get(0),
+                )?;
                 conn.execute_batch("COMMIT")?;
                 operation.with_result_count(1).succeed();
                 Ok(rowid)
@@ -343,6 +434,109 @@ impl GraphStore {
             Err(e) => {
                 let _ = conn.execute_batch("ROLLBACK");
                 Err(e.into())
+            }
+        }
+    }
+
+    /// Remove what a full re-index no longer produces (P5-04..06).
+    ///
+    /// Called after the new extraction has been upserted. Nothing is removed
+    /// merely because it was not rewritten: a row is stale only when it is not in
+    /// the new set **and** its file either no longer exists in the workspace or
+    /// was extracted successfully this time. A file whose extraction failed keeps
+    /// what it had, so one parse error cannot wipe part of the graph.
+    ///
+    /// Returns `(nodes_removed, edges_removed)`; edges removed include those the
+    /// foreign keys cascade away with their nodes.
+    pub fn prune_stale(
+        &self,
+        keep_nodes: &std::collections::HashSet<String>,
+        keep_edges: &std::collections::HashSet<EdgeKey>,
+        extracted_files: &std::collections::HashSet<String>,
+        workspace_files: &std::collections::HashSet<String>,
+    ) -> Result<(usize, usize)> {
+        let operation = OperationTimer::start("graph_stale_prune").with_database("graph");
+        let conn = self.get_conn()?;
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        let outcome = (|| -> Result<(usize, usize)> {
+            let edges_before: i64 =
+                conn.query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))?;
+            let is_stale_file =
+                |file: &str| extracted_files.contains(file) || !workspace_files.contains(file);
+
+            let stale_nodes: Vec<i64> = {
+                let mut stmt = conn.prepare("SELECT id, qualified_name, file_path FROM nodes")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?;
+                let mut ids = Vec::new();
+                for row in rows {
+                    let (id, qualified, file) = row?;
+                    if !keep_nodes.contains(&qualified) && is_stale_file(&file) {
+                        ids.push(id);
+                    }
+                }
+                ids
+            };
+            {
+                let mut delete = conn.prepare("DELETE FROM nodes WHERE id = ?")?;
+                for id in &stale_nodes {
+                    delete.execute(params![id])?;
+                }
+            }
+
+            let stale_edges: Vec<i64> = {
+                let mut stmt = conn.prepare(
+                    "SELECT id, kind, source_qualified, target_qualified, file_path, line FROM edges",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        (
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, String>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, i32>(5)?,
+                        ),
+                    ))
+                })?;
+                let mut ids = Vec::new();
+                for row in rows {
+                    let (id, key) = row?;
+                    if !keep_edges.contains(&key) && is_stale_file(&key.3) {
+                        ids.push(id);
+                    }
+                }
+                ids
+            };
+            {
+                let mut delete = conn.prepare("DELETE FROM edges WHERE id = ?")?;
+                for id in &stale_edges {
+                    delete.execute(params![id])?;
+                }
+            }
+
+            let edges_after: i64 =
+                conn.query_row("SELECT COUNT(*) FROM edges", [], |row| row.get(0))?;
+            Ok((
+                stale_nodes.len(),
+                (edges_before - edges_after).max(0) as usize,
+            ))
+        })();
+        match outcome {
+            Ok(counts) => {
+                conn.execute_batch("COMMIT")?;
+                operation.with_result_count(counts.0 + counts.1).succeed();
+                Ok(counts)
+            }
+            Err(error) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(error)
             }
         }
     }
@@ -1001,7 +1195,10 @@ mod timestamp_tests {
 
         let (observed, events) = crate::observability::timing::capture_json_events(|| {
             let store = GraphStore::open(&path).expect("production graph opener");
-            assert_eq!(store.schema_version().expect("schema version"), 6);
+            assert_eq!(
+                store.schema_version().expect("schema version"),
+                super::super::migrations::SCHEMA_HEAD
+            );
             store
                 .upsert_node(&first, Some("private-agent-marker"), Some(42))
                 .expect("insert node");

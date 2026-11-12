@@ -4,6 +4,9 @@ use super::schema::*;
 use crate::errors::Result;
 use rusqlite::Connection;
 
+/// The schema version a current build leaves a database at.
+pub const SCHEMA_HEAD: u32 = 7;
+
 pub fn get_schema_version(conn: &Connection) -> Result<u32> {
     let version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     Ok(version)
@@ -43,6 +46,11 @@ pub fn run_migrations(conn: &mut Connection) -> Result<()> {
         tracing::info!("[Migrations] Running migration_v6...");
         migration_v6(conn)?;
         tracing::info!("[Migrations] ✅ migration_v6 complete");
+    }
+    if current < 7 {
+        tracing::info!("[Migrations] Running migration_v7...");
+        migration_v7(conn)?;
+        tracing::info!("[Migrations] ✅ migration_v7 complete");
     }
 
     tracing::info!("[Migrations] All migrations complete");
@@ -233,6 +241,37 @@ fn migration_v6(conn: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+/// v7 — an edge is identified by what it is, so re-running a build cannot
+/// duplicate it (P5-04..06).
+///
+/// Until now `edges` had no uniqueness at all, so the writers' `INSERT OR REPLACE`
+/// replaced nothing and every re-index appended a second copy of every edge,
+/// while the same statement on `nodes` deleted the old row and, through the
+/// `ON DELETE CASCADE` foreign keys, every edge that touched it.
+///
+/// ⚠ **Destructive step:** duplicate rows are removed (the newest of each group
+/// survives) before the unique index can exist. `GraphStore::open` takes a
+/// backup of any existing database below v7 before this runs; the ladder here
+/// only has a connection and cannot take one itself.
+fn migration_v7(conn: &mut Connection) -> Result<()> {
+    let tx = conn.transaction()?;
+
+    tx.execute_batch(
+        "DELETE FROM edges
+         WHERE id NOT IN (
+             SELECT MAX(id) FROM edges
+             GROUP BY kind, source_qualified, target_qualified, file_path, line
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_identity
+             ON edges(kind, source_qualified, target_qualified, file_path, line);",
+    )?;
+
+    tx.execute("PRAGMA user_version = 7", [])?;
+    tx.commit()?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,7 +290,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().expect("mem");
         run_migrations(&mut conn).expect("migrations");
 
-        assert_eq!(get_schema_version(&conn).unwrap(), 6);
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_HEAD);
         let nodes = columns(&conn, "nodes");
         for c in ["agent_author", "task_id", "worker_locked", "worktree"] {
             assert!(nodes.iter().any(|x| x == c), "nodes is missing {c}");
@@ -276,7 +315,8 @@ mod tests {
                  id INTEGER PRIMARY KEY, kind TEXT, name TEXT, qualified_name TEXT
              );
              CREATE TABLE edges (
-                 id INTEGER PRIMARY KEY, kind TEXT, source_qualified TEXT
+                 id INTEGER PRIMARY KEY, kind TEXT, source_qualified TEXT,
+                 target_qualified TEXT, file_path TEXT, line INTEGER
              );
              INSERT INTO nodes (kind, name, qualified_name) VALUES ('fn','probe','m::probe');
              PRAGMA user_version = 5;",
@@ -288,7 +328,7 @@ mod tests {
 
         run_migrations(&mut conn).expect("v6 must repair it");
 
-        assert_eq!(get_schema_version(&conn).unwrap(), 6);
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_HEAD);
         let nodes = columns(&conn, "nodes");
         for c in ["agent_author", "task_id", "worker_locked", "worktree"] {
             assert!(nodes.iter().any(|x| x == c), "nodes is still missing {c}");
@@ -317,7 +357,7 @@ mod tests {
         let before = columns(&conn, "nodes");
         run_migrations(&mut conn).expect("v6 must be a no-op here");
 
-        assert_eq!(get_schema_version(&conn).unwrap(), 6);
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_HEAD);
         assert_eq!(columns(&conn, "nodes"), before, "schema must be unchanged");
     }
 
@@ -366,7 +406,7 @@ mod tests {
         run_migrations(&mut conn).expect("first");
         let before = columns(&conn, "nodes");
         run_migrations(&mut conn).expect("second");
-        assert_eq!(get_schema_version(&conn).unwrap(), 6);
+        assert_eq!(get_schema_version(&conn).unwrap(), SCHEMA_HEAD);
         assert_eq!(columns(&conn, "nodes"), before);
     }
 }

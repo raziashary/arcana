@@ -6593,4 +6593,56 @@ fn effect() { ToolEffect::Execute }"#;
             );
         }
     }
+
+    /// `TG-P5-04` (P5-04..06) — no graph writer may use `INSERT OR REPLACE` on
+    /// `nodes` or `edges`.
+    ///
+    /// On `nodes` the statement deletes the old row, and the `ON DELETE CASCADE`
+    /// foreign keys delete every edge that touched it; on `edges` (which had no
+    /// unique constraint) it replaced nothing and duplicated every row on every
+    /// re-index. The fix is `ON CONFLICT ... DO UPDATE` against the schema-v7
+    /// identity index. This scans every graph source file but the test module,
+    /// whose control deliberately runs the old statement to show it still loses
+    /// the edge on this schema.
+    #[test]
+    fn tg_p5_04_graph_writers_never_replace_nodes_or_edges() {
+        let mut files = Vec::new();
+        collect_rs(&repo_root().join("arcana-core/src/graph"), &mut files);
+        assert!(files.len() > 10, "the graph module was not found");
+        let mut checked = 0;
+        for path in files {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name == "reindex_tests.rs" {
+                continue;
+            }
+            checked += 1;
+            let source = uncommented(&read_source(&path));
+            let flat = source
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_uppercase();
+            for table in ["NODES", "EDGES"] {
+                let banned = format!("INSERT OR REPLACE INTO {table}");
+                assert!(
+                    !flat.contains(&banned),
+                    "{} uses `{}`; use `ON CONFLICT ... DO UPDATE` so a re-index \
+                     cannot cascade-delete edges (P5-04)",
+                    path.display(),
+                    banned.to_lowercase()
+                );
+            }
+        }
+        assert!(checked > 10, "too few graph files were scanned: {checked}");
+
+        // The positive half: the writers do use the upsert form.
+        let store = uncommented(&read_source(
+            &repo_root().join("arcana-core/src/graph/store.rs"),
+        ));
+        assert!(
+            store.contains("ON CONFLICT(qualified_name) DO UPDATE")
+                && store.contains("ON CONFLICT(kind, source_qualified, target_qualified, file_path, line) DO UPDATE"),
+            "store.rs lost its node or edge upsert"
+        );
+    }
 }

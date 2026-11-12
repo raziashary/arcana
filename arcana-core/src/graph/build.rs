@@ -2,7 +2,7 @@
 
 use super::extract::{ConfidenceTier, EdgeKind, ExtractionResult, NodeKind};
 use super::schema::{EdgeInfo as SchemaEdgeInfo, NodeInfo as SchemaNodeInfo};
-use super::store::GraphStore;
+use super::store::{EdgeKey, GraphStore};
 use crate::errors::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -11,6 +11,10 @@ use std::collections::HashSet;
 pub struct BuildStats {
     pub nodes_upserted: usize,
     pub edges_upserted: usize,
+    /// Rows a full re-index removed because the workspace no longer has them
+    /// (zero for `build`, which never prunes).
+    pub nodes_pruned: usize,
+    pub edges_pruned: usize,
     pub files_parsed: usize,
     pub elapsed_ms: u64,
 }
@@ -30,6 +34,37 @@ pub fn build(
     agent_author: Option<&str>,
     task_id: Option<i64>,
 ) -> Result<BuildStats> {
+    build_inner(extractions, None, store, agent_author, task_id)
+}
+
+/// A full re-index of a workspace: upsert everything the extraction produced
+/// without disturbing what it did not touch, then remove what the workspace no
+/// longer has (`GraphStore::prune_stale`). `workspace_files` is every code file
+/// the detector found, so a deleted file is pruned and a file whose extraction
+/// failed (present here, absent from `extractions`) keeps its rows.
+pub fn reindex(
+    extractions: Vec<ExtractionResult>,
+    workspace_files: &HashSet<String>,
+    store: &GraphStore,
+    agent_author: Option<&str>,
+    task_id: Option<i64>,
+) -> Result<BuildStats> {
+    build_inner(
+        extractions,
+        Some(workspace_files),
+        store,
+        agent_author,
+        task_id,
+    )
+}
+
+fn build_inner(
+    extractions: Vec<ExtractionResult>,
+    workspace_files: Option<&HashSet<String>>,
+    store: &GraphStore,
+    agent_author: Option<&str>,
+    task_id: Option<i64>,
+) -> Result<BuildStats> {
     let start = std::time::Instant::now();
     let files_parsed = extractions.len();
     let mut operation = crate::observability::timing::OperationTimer::start("graph_build")
@@ -44,6 +79,13 @@ pub fn build(
         all_nodes.extend(result.nodes);
         all_edges.extend(result.edges);
     }
+
+    // The files this run actually extracted: a file node's path, for every
+    // extraction that succeeded. Failed extractions are not in `extractions`.
+    let extracted_files: HashSet<String> = all_nodes
+        .iter()
+        .map(|node| node.file_path.clone())
+        .collect();
 
     // Deduplicate nodes
     deduplicate_nodes(&mut all_nodes);
@@ -114,6 +156,27 @@ pub fn build(
     edge_write.succeed();
     tracing::info!("[GraphBuild] Upserted {} edges", edges_upserted);
 
+    // Remove what this re-index no longer produces, so a deleted file or symbol
+    // stops being cited. Only a full re-index prunes; `build` never does.
+    let (nodes_pruned, edges_pruned) = match workspace_files {
+        Some(workspace_files) => {
+            let keep_edges: HashSet<EdgeKey> = schema_edges
+                .iter()
+                .map(|edge| {
+                    (
+                        edge.kind.clone(),
+                        edge.source_qualified.clone(),
+                        edge.target_qualified.clone(),
+                        edge.file_path.clone(),
+                        edge.line,
+                    )
+                })
+                .collect();
+            store.prune_stale(&node_ids, &keep_edges, &extracted_files, workspace_files)?
+        }
+        None => (0, 0),
+    };
+
     // Rebuild FTS5 index
     tracing::info!("[GraphBuild] Rebuilding FTS5 index...");
     let mut fts_rebuild = crate::observability::timing::OperationTimer::start("graph_fts_rebuild")
@@ -140,6 +203,8 @@ pub fn build(
     Ok(BuildStats {
         nodes_upserted,
         edges_upserted,
+        nodes_pruned,
+        edges_pruned,
         files_parsed,
         elapsed_ms,
     })

@@ -16,6 +16,10 @@ use tauri::{AppHandle, Emitter};
 pub struct BuildStats {
     pub nodes_extracted: usize,
     pub edges_extracted: usize,
+    /// Rows the re-index removed because the workspace no longer has them.
+    pub nodes_pruned: usize,
+    pub edges_pruned: usize,
+    pub files_parsed: usize,
     pub communities_detected: usize,
     pub elapsed_ms: u64,
 }
@@ -196,7 +200,18 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
             },
         );
         let _ = app.emit("graph:updated", ());
+        // An empty workspace still prunes: every file the graph knew is gone.
+        let pruned = crate::graph::build::reindex(
+            Vec::new(),
+            &std::collections::HashSet::new(),
+            &store,
+            None,
+            None,
+        )?;
         return Ok(BuildStats {
+            nodes_pruned: pruned.nodes_pruned,
+            edges_pruned: pruned.edges_pruned,
+            files_parsed: 0,
             nodes_extracted: 0,
             edges_extracted: 0,
             communities_detected: 0,
@@ -275,8 +290,15 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
         },
     );
     let build_start = std::time::Instant::now();
+    // A re-index: the upserts keep what they do not touch, and what the
+    // workspace no longer has is pruned (D-013). `workspace_files` is what the
+    // detector found, so a file that failed to extract keeps its rows.
+    let workspace_files: std::collections::HashSet<String> = code_files
+        .iter()
+        .map(|path| path.to_string_lossy().to_string())
+        .collect();
     let build_stats = graph_phase(&graph_run_id, "build", || {
-        crate::graph::build::build(extraction_results, &store, None, None)
+        crate::graph::build::reindex(extraction_results, &workspace_files, &store, None, None)
     })?;
     tracing::info!(
         target: "arcana::telemetry",
@@ -375,6 +397,9 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     );
 
     Ok(BuildStats {
+        nodes_pruned: build_stats.nodes_pruned,
+        edges_pruned: build_stats.edges_pruned,
+        files_parsed: build_stats.files_parsed,
         nodes_extracted: build_stats.nodes_upserted,
         edges_extracted: build_stats.edges_upserted,
         communities_detected: communities.len(),
@@ -382,106 +407,24 @@ pub async fn build_graph(app: AppHandle, repo_path: Option<String>) -> Result<Bu
     })
 }
 
+/// Refresh the graph after the workspace changed.
+///
+/// This is a full re-index (D-013, the plan's "re-index in full on change"):
+/// extraction is cheap next to a wrong graph, the upserts keep every row they do
+/// not touch, and files or symbols the workspace no longer has are pruned. The
+/// git `HEAD~1` path it replaced deleted a changed file's nodes, and the foreign
+/// keys cascaded away the edges from unchanged files that pointed into them.
 #[tauri::command]
 pub async fn update_graph(app: AppHandle, repo_path: Option<String>) -> Result<UpdateStats> {
-    let start = std::time::Instant::now();
-    let _ = app.emit(
-        "graph:build_progress",
-        BuildProgressPayload {
-            phase: "init".to_string(),
-            message: "Checking workspace...".to_string(),
-            percent: 5,
-        },
-    );
-
-    // Validate repo_path — must be provided and not "."
-    let repo_path = repo_path
-        .and_then(|p| if p.is_empty() || p == "." { None } else { Some(p) })
-        .ok_or_else(|| anyhow::anyhow!(
-            "❌ Workspace directory not set or invalid. Please go to Settings → Workspace → Pick Directory"
-        ))?;
-
-    // Verify the path exists
-    let repo_dir = Path::new(&repo_path);
-    if !repo_dir.exists() || !repo_dir.is_dir() {
-        return Err(anyhow::anyhow!(
-            "❌ Workspace directory does not exist or is invalid: {}",
-            repo_path
-        )
-        .into());
-    }
-
-    let _ = app.emit(
-        "graph:build_progress",
-        BuildProgressPayload {
-            phase: "detecting".to_string(),
-            message: "Finding changed files...".to_string(),
-            percent: 15,
-        },
-    );
-
-    let db_path = repo_db_path(&repo_path)?;
-    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
-    let store = GraphStore::open(&db_path)?;
-
-    // Perform incremental update
-    let changed_files = crate::graph::incremental::get_git_changed_files(repo_dir, "HEAD~1")?;
-
-    if changed_files.is_empty() {
-        tracing::info!("[UpdateGraph] No changed files detected");
-        let _ = app.emit(
-            "graph:build_progress",
-            BuildProgressPayload {
-                phase: "done".to_string(),
-                message: "No changed files".to_string(),
-                percent: 100,
-            },
-        );
-        let _ = app.emit("graph:updated", ());
-        return Ok(UpdateStats {
-            files_changed: 0,
-            nodes_added: 0,
-            nodes_removed: 0,
-            edges_added: 0,
-            edges_removed: 0,
-            elapsed_ms: 0,
-        });
-    }
-
-    let _ = app.emit(
-        "graph:build_progress",
-        BuildProgressPayload {
-            phase: "building".to_string(),
-            message: format!("Updating {} changed files...", changed_files.len()),
-            percent: 40,
-        },
-    );
-
-    let stats = crate::graph::incremental::incremental_update(
-        &store,
-        &changed_files,
-        repo_dir,
-        None,
-        None,
-    )?;
-
-    let _ = app.emit(
-        "graph:build_progress",
-        BuildProgressPayload {
-            phase: "done".to_string(),
-            message: format!(
-                "Updated: {} added, {} removed",
-                stats.nodes_added + stats.edges_added,
-                stats.nodes_removed + stats.edges_removed
-            ),
-            percent: 100,
-        },
-    );
-    let _ = app.emit("graph:updated", ());
-
-    let mut stats = stats;
-    stats.elapsed_ms = start.elapsed().as_millis() as u64;
-    Ok(stats)
+    let stats = build_graph(app, repo_path).await?;
+    Ok(UpdateStats {
+        files_changed: stats.files_parsed,
+        nodes_added: stats.nodes_extracted,
+        nodes_removed: stats.nodes_pruned,
+        edges_added: stats.edges_extracted,
+        edges_removed: stats.edges_pruned,
+        elapsed_ms: stats.elapsed_ms,
+    })
 }
 
 #[cfg(test)]

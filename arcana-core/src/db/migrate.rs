@@ -127,7 +127,7 @@ fn is_destructive(sql: &str) -> bool {
 /// artifacts and makes parallel tests collide on the same second-resolution
 /// backup name. Production builds keep the canonical backup root; tests whose
 /// database is under the OS temp directory keep the backup beside that fixture.
-fn backup_before_migration(
+pub(crate) fn backup_before_migration(
     path: &std::path::Path,
     reason: &str,
 ) -> Result<crate::db::backup::Backup> {

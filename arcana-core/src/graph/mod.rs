@@ -16,6 +16,8 @@ pub mod location;
 pub mod migrations;
 pub mod query;
 pub mod registry;
+#[cfg(test)]
+mod reindex_tests;
 pub mod report;
 pub mod schema;
 pub mod store;
