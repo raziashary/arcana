@@ -46,6 +46,17 @@ fn restore(key: &str, value: Option<String>) {
     }
 }
 
+/// Keep the real data root for as long as the guard is alive.
+///
+/// For a test that must use the machine's own home (its staged Python runtime,
+/// its toolchains) rather than a sandbox. It takes the same crate-wide lock as
+/// [`with_home`], so no other test can redirect `~` underneath it; without the
+/// lock such a test passes alone and fails in the full suite, when another
+/// test's redirect (or the deletion of its sandbox) lands mid-run.
+pub fn hold_real_home() -> MutexGuard<'static, ()> {
+    lock().lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Point `~` at `dir` for the lifetime of the returned guard.
 ///
 /// Blocks until any other test holding the redirect has finished, so two tests

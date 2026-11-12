@@ -3452,6 +3452,11 @@ fn main() {
     async fn checked_in_ecosystem_corpora_run_real_intents_through_the_production_launcher() {
         use command::{CommandIntent, Toolchain};
 
+        // This test uses the machine's own home (staged Python, toolchains).
+        // Without the lock another test's home redirect lands mid-run and
+        // staging fails with "runtime files were not found" in the full suite
+        // while the test passes alone.
+        let _real_home = crate::db::test_support::hold_real_home();
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         // Python staging is a process-global cache and must not happen inside a
         // command timeout: prime it here exactly as the mixed-batch test does,

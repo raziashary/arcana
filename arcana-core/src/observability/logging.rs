@@ -688,10 +688,18 @@ mod tests {
     /// second of work at exit loses its tail (the Fleet CLI's completion event
     /// was the casualty in CI). The control half shows the loss with only the
     /// guard; the other half shows dropping `LoggingGuards` prevents it.
+    ///
+    /// The numbers leave room both ways on a loaded Windows host, where a
+    /// sleep rounds up to the 15.6 ms timer tick and a busy suite stretches it
+    /// further. The guard can write at most about one second of lines (50 at
+    /// 20 ms), well under `LINES`, so the control loses lines on any host; the
+    /// drain wait needs `LINES * per-line time` under `DRAIN_LIMIT`, which is
+    /// 3 s nominal against 10 s. A first version used 700 lines at 3 ms, which
+    /// the tick turned into roughly 11 s and the drain limit cut short.
     #[test]
     fn the_drain_wait_delivers_a_backlog_that_the_guard_alone_would_drop() {
-        const LINES: u64 = 700;
-        let delay = Duration::from_millis(3);
+        const LINES: u64 = 150;
+        let delay = Duration::from_millis(20);
         let run = |wait_for_drain: bool| -> u64 {
             let written = Arc::new(AtomicU64::new(0));
             let drain = Arc::new(QueueDrain::default());
