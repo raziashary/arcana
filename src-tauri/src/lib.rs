@@ -129,15 +129,6 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         },
         model_config_commands::{delete_model_config, get_model_config, set_model_config},
         orphan_commands::{force_release_task, get_orphaned_tasks},
-        plan_commands::{
-            claim_plan_item, create_subplan, delete_plan, get_plan, get_plan_tree, list_plans,
-            planner_compile, submit_plan_for_qc,
-        },
-        plugin_commands::{
-            generate_setup_token, get_plugin, install_plugin, install_plugin_from_yaml,
-            list_plugins, run_plugin, uninstall_plugin, update_plugin, validate_setup_token,
-            verify_plugin,
-        },
         recipe_commands::{
             create_recipe, delete_recipe, generate_recipe_yaml, list_recipe_backups, list_recipes,
             restore_recipe_backup, update_recipe,
@@ -200,15 +191,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             cancel_agent,
             respond_to_permission,
             // Plan Management
-            planner_compile,
-            get_plan,
-            list_plans,
-            get_plan_tree,
-            delete_plan,
             // Fleet Plan Commands
-            claim_plan_item,
-            create_subplan,
-            submit_plan_for_qc,
             // Sessions
             list_sessions,
             get_session_messages,
@@ -414,16 +397,6 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             search_memory,
             get_memory_stats,
             // Plugin system (Phase 5.2)
-            list_plugins,
-            get_plugin,
-            install_plugin,
-            install_plugin_from_yaml,
-            uninstall_plugin,
-            update_plugin,
-            verify_plugin,
-            run_plugin,
-            generate_setup_token,
-            validate_setup_token,
             // Routing (Ruflo Feature 1 — Semantic Task Routing)
             get_worker_affinity_stats,
             // Orphan Detection (Ruflo Feature 2 — PID-Based Orphan Detection)

@@ -2,9 +2,10 @@
 //
 // 🔴 **Why this file exists (`P8-55`).** This state lived in `sidecarStore.ts`,
 // which carried two unrelated concerns: the dead Python sidecar's lifecycle,
-// and this — the live health of external MCP servers, rendered by
-// `McpHealthPanel` and backed by the `get_mcp_health` / `force_reconnect_mcp`
-// commands that `P8-51` kept for exactly this reason.
+// and this — the live health of external MCP servers, shown in the status bar
+// and backed by the `get_mcp_health` / `force_reconnect_mcp` commands that
+// `P8-51` kept for exactly this reason. (`McpHealthPanel`, which also rendered it,
+// was never mounted and was deleted as an orphan, D-021.)
 //
 // Deleting the store wholesale, as "delete the sidecar frontend" implies,
 // would have taken a live feature with it. That is the same mistake `P8-51`
@@ -27,7 +28,7 @@ export type McpConnectionState =
  *
  * ⚠ Copied verbatim from the store this replaces rather than retyped. The
  * first version here was written from memory and was wrong in four ways —
- * two missing states and a different field set — which `McpHealthPanel`
+ * two missing states and a different field set — which the status bar
  * caught at typecheck only because it is typed against this. `L-9`.
  */
 export interface McpServerHealth {

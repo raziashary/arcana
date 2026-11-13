@@ -21,8 +21,6 @@ pub mod log_commands;
 pub mod memory_commands;
 pub mod model_config_commands;
 pub mod orphan_commands;
-pub mod plan_commands;
-pub mod plugin_commands;
 pub mod recipe_commands;
 pub mod routing_commands;
 pub mod session_commands;

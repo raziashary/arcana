@@ -97,3 +97,5 @@ History: [`archive/development/HISTORICAL_DESIGN_PROGRAMME.md`](archive/developm
 - **Live Monitor ignores turn errors:** `agentLiveStore` listens to `agent:error` but reads `agent_id` and `error_message`, while the event carries `session_id` and `message`, so `handleError` finds no agent and does nothing. Fix the payload mapping or drop the listener.
 - **Undo for destructive actions (D-017):** confirmation is the only protection in v1. Wire the checkpoint commands as undo where `git/checkpoint.rs` can reverse the action, with a proof per action. The three two-click buttons (clear tasks, clear logs, delete worker) confirm but do not say what is lost; move them to `confirmDestructive`.
 - **`P5-08..13`** (true incremental update) stays deferred; `update_graph` is a full re-index (D-013).
+- **Backend left behind by D-021:** the plan system (`src-shared`/`arcana-core` `db/plans`, plan events) and the plugin system (`arcana-core/src/plugin`) have no UI and no Tauri
+  command now. Either delete them or give them a UI after v1; until then they are compiled, unreachable from the app, and carry their tests.

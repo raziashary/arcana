@@ -357,3 +357,16 @@ and the other UI references. Asked: Plex Sans for chrome with mono for code only
 - **Docs:** `ui-anchor.md` Typography states it; `ui_improvement.md` section 1.2 carries a supersession note instead of editing its hundreds of "IBM Plex Mono" rows.
 - **Not done:** a visual pass over every tab, and per-element correction where a flipped element is really an ID or a path (those read fine in sans; any that
   should be mono can take `font-mono` back). 600 weight is not bundled, so `font-semibold` renders at 500.
+
+## D-021 · Orphan frontend code: Plan and Plugin UI deleted, Memory UI kept to be mounted — 2026-11-13, Razi
+
+D-017 defined an orphan as a non-test frontend file not imported, directly or transitively, from `src/main.tsx`. A scripted import walk found 30 candidates; five were
+fonts and test setup (false positives: they are referenced from CSS and the test config). Deleting the three built-but-unmounted clusters would also have left about 30
+backend commands uncalled, which D-017 would delete in turn, so Razi was asked per cluster and chose: **delete Plan and Plugin, keep Memory** (`memory-anchor.md` is a v1 design).
+
+- **Deleted (21 files):** `PlanView`, `PlanTreeView`, `PlanCard`, `PlanDisplay` (with their CSS) and `planStore`; `PluginManager`, `ITDashboard`, `WorkerSetupWizard` and `pluginStore`;
+  `PaModeToggle`; `McpHealthPanel` (the store behind it stays, the status bar uses it); and six city leftovers (`CityPostProcessing`, `ImpactParticles`, `RoadHoverTooltip`,
+  `useCameraFlyTo`, `cityWorker`, `roadGenerator`).
+- **Then 18 commands had no caller** and went by the D-017 rule: eight plan commands and ten plugin commands, with `plan_commands.rs` and `plugin_commands.rs`.
+  The Rust side (`db/plans`, `arcana-core/src/plugin`) is untouched and is listed in `HARDENING_BACKLOG.md`.
+- **Kept:** `MemorySidebar`, `MemoryStats` and `memoryStore` (their 12 commands stay called). They are unmounted today; mounting them is an R3 task.
