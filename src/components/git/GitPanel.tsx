@@ -75,18 +75,18 @@ export default function GitPanel({ onClose }: Props) {
       >
         <GitBranch size={12} style={{ color: 'var(--accent)' }} />
         <span
-          className="text-[10px] font-mono uppercase tracking-wider"
+          className="text-[10px] font-sans uppercase tracking-wider"
           style={{ color: 'var(--text-2)' }}
         >
           Git
         </span>
         {status?.head_branch && (
-          <span className="text-[11px] font-mono ml-2" style={{ color: 'var(--text-1)' }}>
+          <span className="text-[11px] font-sans ml-2" style={{ color: 'var(--text-1)' }}>
             {status.head_branch}
           </span>
         )}
         {status && (status.ahead > 0 || status.behind > 0) && (
-          <span className="text-[10px] font-mono ml-1" style={{ color: 'var(--text-3)' }}>
+          <span className="text-[10px] font-sans ml-1" style={{ color: 'var(--text-3)' }}>
             {status.ahead > 0 && `↑${status.ahead}`}{status.behind > 0 && `↓${status.behind}`}
           </span>
         )}
@@ -100,7 +100,7 @@ export default function GitPanel({ onClose }: Props) {
 
       {!repo && (
         <div
-          className="flex-1 flex items-center justify-center text-[11px] font-mono p-4 text-center"
+          className="flex-1 flex items-center justify-center text-[11px] font-sans p-4 text-center"
           style={{ color: error ? 'var(--danger)' : 'var(--text-3)' }}
         >
           {error ?? 'Opening repository…'}
@@ -111,7 +111,7 @@ export default function GitPanel({ onClose }: Props) {
         <>
           {/* Tab bar */}
           <div
-            className="flex border-b text-[10px] font-mono uppercase"
+            className="flex border-b text-[10px] font-sans uppercase"
             style={{ borderColor: 'var(--border-1)' }}
           >
             <TabBtn active={tab === 'changes'}  onClick={() => setTab('changes')}>Changes</TabBtn>
@@ -232,7 +232,7 @@ function ChangesTab() {
           style={{ borderColor: 'var(--border-1)', height: 240 }}
         >
           <div
-            className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono"
+            className="flex items-center gap-1 px-2 py-1 text-[10px] font-sans"
             style={{ color: 'var(--text-2)' }}
           >
             <FileDiff size={10} />
@@ -243,12 +243,12 @@ function ChangesTab() {
             </button>
           </div>
           {selectedDiff.loading && (
-            <div className="flex-1 flex items-center justify-center text-[11px] font-mono" style={{ color: 'var(--text-3)' }}>
+            <div className="flex-1 flex items-center justify-center text-[11px] font-sans" style={{ color: 'var(--text-3)' }}>
               loading…
             </div>
           )}
           {selectedDiff.error && (
-            <div className="flex-1 flex items-center justify-center text-[11px] font-mono p-4" style={{ color: 'var(--danger)' }}>
+            <div className="flex-1 flex items-center justify-center text-[11px] font-sans p-4" style={{ color: 'var(--danger)' }}>
               {selectedDiff.error}
             </div>
           )}
@@ -273,7 +273,7 @@ function ChangesTab() {
           onChange={(e) => setMessage(e.target.value)}
           placeholder="commit message"
           rows={2}
-          className="w-full text-[11px] font-mono rounded px-1.5 py-1 outline-none resize-none"
+          className="w-full text-[11px] font-sans rounded px-1.5 py-1 outline-none resize-none"
           style={{
             background:  'var(--bg-input)',
             color:       'var(--text-1)',
@@ -281,7 +281,7 @@ function ChangesTab() {
           }}
         />
         <div className="flex items-center gap-1">
-          <span className="text-[10px] font-mono" style={{ color: 'var(--text-3)' }}>
+          <span className="text-[10px] font-sans" style={{ color: 'var(--text-3)' }}>
             trailer:
           </span>
           <input
@@ -290,13 +290,13 @@ function ChangesTab() {
             placeholder="Commit trailer (Generated-by)"
             title="Commit attribution trailer appended as `Generated-by:`"
             aria-label="Commit trailer"
-            className="flex-1 text-[10px] font-mono bg-transparent outline-none"
+            className="flex-1 text-[10px] font-sans bg-transparent outline-none"
             style={{ color: 'var(--text-2)' }}
           />
           <button
             onClick={() => void onCommit()}
             disabled={!message.trim() || !hasStaged || committing}
-            className="text-[11px] font-mono px-2 py-1 rounded border flex items-center gap-1"
+            className="text-[11px] font-sans px-2 py-1 rounded border flex items-center gap-1"
             style={{
               borderColor: hasStaged ? 'var(--accent)' : 'var(--border-1)',
               color:       hasStaged ? 'var(--accent)' : 'var(--text-3)',
@@ -325,7 +325,7 @@ function ChangesSection({ label, entries, actionLabel, onBulkAction, renderRow }
   return (
     <div>
       <div
-        className="flex items-center px-2 py-1 text-[10px] font-mono uppercase tracking-wider"
+        className="flex items-center px-2 py-1 text-[10px] font-sans uppercase tracking-wider"
         style={{ color: 'var(--text-3)', background: 'var(--bg-2)' }}
       >
         <span>{label}</span>
@@ -354,7 +354,7 @@ interface ChangeRowProps {
 function ChangeRow({ entry, onDiff, primary, secondary }: ChangeRowProps) {
   return (
     <div
-      className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono hover:bg-[color:var(--bg-hover)] group"
+      className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-sans hover:bg-[color:var(--bg-hover)] group"
       style={{ color: 'var(--text-2)' }}
     >
       <span
@@ -433,7 +433,7 @@ function HistoryTab() {
   if (log.length === 0) {
     return (
       <div
-        className="flex-1 flex items-center justify-center text-[11px] font-mono"
+        className="flex-1 flex items-center justify-center text-[11px] font-sans"
         style={{ color: 'var(--text-3)' }}
       >
         no commits
@@ -449,7 +449,7 @@ function HistoryTab() {
           className="px-2 py-1.5 border-b hover:bg-[color:var(--bg-hover)]"
           style={{ borderColor: 'var(--border-1)' }}
         >
-          <div className="flex items-center gap-1.5 text-[11px] font-mono" style={{ color: 'var(--text-1)' }}>
+          <div className="flex items-center gap-1.5 text-[11px] font-sans" style={{ color: 'var(--text-1)' }}>
             <History size={10} style={{ color: 'var(--text-3)' }} />
             <span className="truncate flex-1" title={c.summary}>{c.summary}</span>
             <span className="text-[10px]" style={{ color: 'var(--text-3)' }}>

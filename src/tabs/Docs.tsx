@@ -32,8 +32,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   return (
     <div style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-1)', borderRadius: 6, margin: '12px 0' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 12px', borderBottom: '1px solid var(--border-1)' }}>
-        <span style={{ fontSize: 9, color: 'var(--text-4)', letterSpacing: '0.12em', textTransform: 'uppercase', fontFamily: 'var(--font-mono)' }}>{lang}</span>
-        <button onClick={copy} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: copied ? 'var(--accent)' : 'var(--text-4)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)', padding: '2px 4px' }}>
+        <span style={{ fontSize: 9, color: 'var(--text-4)', letterSpacing: '0.12em', textTransform: 'uppercase', fontFamily: 'var(--font-sans)' }}>{lang}</span>
+        <button onClick={copy} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: copied ? 'var(--accent)' : 'var(--text-4)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-sans)', padding: '2px 4px' }}>
           {copied ? <Check size={11} /> : <Copy size={11} />}{copied ? 'Copied' : 'Copy'}
         </button>
       </div>
@@ -47,7 +47,7 @@ function BlockRenderer({ block }: { block: Block }) {
     case 'h2':
       return <div style={{ fontSize: 14, fontWeight: 500, color: 'var(--text-secondary)', margin: '22px 0 8px', display: 'flex', alignItems: 'center', gap: 8 }}><span style={{ display: 'block', width: 3, height: 14, background: 'var(--accent)', borderRadius: 2, flexShrink: 0 }} />{block.text}</div>
     case 'h3':
-      return <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '14px 0 6px', fontFamily: 'var(--font-mono)' }}>{block.text}</div>
+      return <div style={{ fontSize: 11, fontWeight: 500, color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '14px 0 6px', fontFamily: 'var(--font-sans)' }}>{block.text}</div>
     case 'prose':
       return <p style={{ fontSize: 13, color: 'var(--text-muted)', lineHeight: 1.75, marginBottom: 12, fontFamily: 'var(--font-sans)' }}>{block.text}</p>
     case 'callout':
@@ -127,7 +127,7 @@ export default function Docs() {
   }, [])
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--bg-app)', fontFamily: 'var(--font-mono)' }}>
+    <div className="flex-1 flex flex-col overflow-hidden" style={{ background: 'var(--bg-app)', fontFamily: 'var(--font-sans)' }}>
 
       {/* ── Top bar ──────────────────────────────────────────────────────── */}
       <div style={{ background: 'var(--bg-surface)', borderBottom: '1px solid var(--border-1)', padding: '0 14px', height: 42, display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
@@ -144,7 +144,7 @@ export default function Docs() {
             onFocus={() => setShowResults(true)}
             onBlur={() => setTimeout(() => setShowResults(false), 150)}
             placeholder="Search documentation…  ⌘K"
-            style={{ width: '100%', background: 'var(--bg-card)', border: '1px solid var(--border-1)', borderRadius: 6, color: 'var(--text-primary)', fontSize: 12, fontFamily: 'var(--font-mono)', padding: '5px 10px 5px 28px', outline: 'none', boxSizing: 'border-box' }}
+            style={{ width: '100%', background: 'var(--bg-card)', border: '1px solid var(--border-1)', borderRadius: 6, color: 'var(--text-primary)', fontSize: 12, fontFamily: 'var(--font-sans)', padding: '5px 10px 5px 28px', outline: 'none', boxSizing: 'border-box' }}
           />
           {showResults && searchResults.length > 0 && (
             <div style={{ position: 'absolute', top: 34, left: 0, right: 0, background: 'var(--bg-card)', border: '1px solid var(--accent)', borderRadius: 6, zIndex: 99, padding: '4px 0', boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }}>
@@ -152,7 +152,7 @@ export default function Docs() {
                 <div key={s.id} onMouseDown={() => navTo(s.id)} style={{ padding: '7px 12px', fontSize: 12, color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-sans)' }}
                   onMouseEnter={e => (e.currentTarget.style.background = 'rgba(0,255,136,0.06)')}
                   onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
-                  <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>{ICON_MAP[s.icon] ?? '○'}</span>
+                  <span style={{ color: 'var(--accent)', fontFamily: 'var(--font-sans)' }}>{ICON_MAP[s.icon] ?? '○'}</span>
                   <span>{s.num} — {s.title}</span>
                 </div>
               ))}
@@ -178,8 +178,8 @@ export default function Docs() {
                     style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '5px 14px', fontSize: 12, color: active ? 'var(--accent)' : 'var(--text-muted)', cursor: 'pointer', borderLeft: `2px solid ${active ? 'var(--accent)' : 'transparent'}`, background: active ? 'rgba(0,255,136,0.04)' : 'transparent', transition: 'all 0.1s' }}
                     onMouseEnter={e => { if (!active) { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.background = 'var(--bg-card)' }}}
                     onMouseLeave={e => { if (!active) { e.currentTarget.style.color = 'var(--text-muted)'; e.currentTarget.style.background = 'transparent' }}}>
-                    <span style={{ fontSize: 9, color: active ? 'var(--accent)' : 'var(--text-4)', minWidth: 18, fontFamily: 'var(--font-mono)' }}>{s.num}</span>
-                    <span style={{ fontFamily: 'var(--font-mono)' }}>{ICON_MAP[s.icon] ?? '○'}</span>
+                    <span style={{ fontSize: 9, color: active ? 'var(--accent)' : 'var(--text-4)', minWidth: 18, fontFamily: 'var(--font-sans)' }}>{s.num}</span>
+                    <span style={{ fontFamily: 'var(--font-sans)' }}>{ICON_MAP[s.icon] ?? '○'}</span>
                     <span>{s.title}</span>
                   </div>
                 )
@@ -200,7 +200,7 @@ export default function Docs() {
           </div>
 
           {/* Badge */}
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.12)', borderRadius: 4, padding: '3px 9px', fontSize: 10, color: 'var(--accent)', marginBottom: 12, letterSpacing: '0.08em', fontFamily: 'var(--font-mono)' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, background: 'rgba(0,255,136,0.06)', border: '1px solid rgba(0,255,136,0.12)', borderRadius: 4, padding: '3px 9px', fontSize: 10, color: 'var(--accent)', marginBottom: 12, letterSpacing: '0.08em', fontFamily: 'var(--font-sans)' }}>
             {ICON_MAP[section.icon] ?? '○'} Section {section.num}
           </div>
 
@@ -216,7 +216,7 @@ export default function Docs() {
 
         {/* On-page anchors */}
         <div style={{ width: 160, flexShrink: 0, borderLeft: '1px solid var(--border-1)', padding: '16px 12px', background: 'var(--bg-surface)', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <div style={{ fontSize: 9, letterSpacing: '0.14em', color: 'var(--text-4)', textTransform: 'uppercase', marginBottom: 8, fontWeight: 500, fontFamily: 'var(--font-mono)' }}>On this page</div>
+          <div style={{ fontSize: 9, letterSpacing: '0.14em', color: 'var(--text-4)', textTransform: 'uppercase', marginBottom: 8, fontWeight: 500, fontFamily: 'var(--font-sans)' }}>On this page</div>
           {section.anchors.map((a, i) => (
             <div key={i} style={{ fontSize: 11, color: i === 0 ? 'var(--accent)' : 'var(--text-4)', cursor: 'pointer', padding: '3px 0 3px 10px', borderLeft: `1px solid ${i === 0 ? 'var(--accent)' : 'transparent'}`, transition: 'all 0.1s', fontFamily: 'var(--font-sans)' }}
               onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-secondary)'; e.currentTarget.style.borderLeftColor = 'var(--border-2)' }}
@@ -229,17 +229,17 @@ export default function Docs() {
 
       {/* ── Footer ───────────────────────────────────────────────────────── */}
       <div style={{ background: 'var(--bg-surface)', borderTop: '1px solid var(--border-1)', padding: '0 16px', height: 36, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-        <span style={{ fontSize: 10, color: 'var(--text-4)', letterSpacing: '0.1em', fontFamily: 'var(--font-mono)' }}>ARCANA DOCS</span>
+        <span style={{ fontSize: 10, color: 'var(--text-4)', letterSpacing: '0.1em', fontFamily: 'var(--font-sans)' }}>ARCANA DOCS</span>
         <div style={{ display: 'flex', gap: 4 }}>
           {prev && (
-            <button onClick={() => navTo(prev.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--text-4)', cursor: 'pointer', padding: '4px 10px', borderRadius: 4, background: 'none', border: 'none', fontFamily: 'var(--font-mono)', transition: 'all 0.1s' }}
+            <button onClick={() => navTo(prev.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--text-4)', cursor: 'pointer', padding: '4px 10px', borderRadius: 4, background: 'none', border: 'none', fontFamily: 'var(--font-sans)', transition: 'all 0.1s' }}
               onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'rgba(0,255,136,0.06)' }}
               onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-4)'; e.currentTarget.style.background = 'none' }}>
               <ArrowLeft size={12} /> {prev.title}
             </button>
           )}
           {next && (
-            <button onClick={() => navTo(next.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--text-4)', cursor: 'pointer', padding: '4px 10px', borderRadius: 4, background: 'none', border: 'none', fontFamily: 'var(--font-mono)', transition: 'all 0.1s' }}
+            <button onClick={() => navTo(next.id)} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: 'var(--text-4)', cursor: 'pointer', padding: '4px 10px', borderRadius: 4, background: 'none', border: 'none', fontFamily: 'var(--font-sans)', transition: 'all 0.1s' }}
               onMouseEnter={e => { e.currentTarget.style.color = 'var(--accent)'; e.currentTarget.style.background = 'rgba(0,255,136,0.06)' }}
               onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-4)'; e.currentTarget.style.background = 'none' }}>
               {next.title} <ArrowRight size={12} />

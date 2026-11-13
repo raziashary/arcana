@@ -77,7 +77,7 @@ export default function WorkerCreateModal({ onClose, onCreated }: WorkerCreateMo
         overflowY: 'auto',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <h3 style={{ fontFamily: 'monospace', fontSize: 13, color: 'var(--text-1)', margin: 0 }}>
+          <h3 style={{ fontFamily: 'var(--font-sans)', fontSize: 13, color: 'var(--text-1)', margin: 0 }}>
             New Worker
           </h3>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-3)', cursor: 'pointer', fontSize: 16 }}>
@@ -141,7 +141,7 @@ export default function WorkerCreateModal({ onClose, onCreated }: WorkerCreateMo
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                 {repos.map(r => (
                   <span key={r} style={{
-                    fontFamily: 'monospace', fontSize: 10,
+                    fontFamily: 'var(--font-sans)', fontSize: 10,
                     padding: '2px 8px', borderRadius: 3,
                     background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)',
                     color: 'var(--text-2)',
@@ -172,7 +172,7 @@ export default function WorkerCreateModal({ onClose, onCreated }: WorkerCreateMo
           </Field>
 
           {error && (
-            <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--danger)', marginBottom: 12 }}>
+            <div style={{ fontFamily: 'var(--font-sans)', fontSize: 11, color: 'var(--danger)', marginBottom: 12 }}>
               {error}
             </div>
           )}
@@ -197,7 +197,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   return (
     <div style={{ marginBottom: 14 }}>
       <label style={{
-        display: 'block', fontFamily: 'monospace', fontSize: 10,
+        display: 'block', fontFamily: 'var(--font-sans)', fontSize: 10,
         color: 'var(--text-3)', textTransform: 'uppercase',
         letterSpacing: 1, marginBottom: 4,
       }}>
@@ -211,25 +211,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 // ─── Style helpers ─────────────────────────────────────────────────────────────
 
 const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '6px 8px', fontFamily: 'monospace', fontSize: 12,
+  width: '100%', padding: '6px 8px', fontFamily: 'var(--font-sans)', fontSize: 12,
   background: 'var(--bg-2)', border: '1px solid var(--border)',
   borderRadius: 4, color: 'var(--text-1)', outline: 'none', boxSizing: 'border-box',
 }
 
 const addBtnStyle: React.CSSProperties = {
-  padding: '6px 12px', fontFamily: 'monospace', fontSize: 11,
+  padding: '6px 12px', fontFamily: 'var(--font-sans)', fontSize: 11,
   border: '1px solid var(--border)', borderRadius: 4,
   background: 'transparent', color: 'var(--text-2)', cursor: 'pointer',
 }
 
 const cancelBtnStyle: React.CSSProperties = {
-  padding: '6px 14px', fontFamily: 'monospace', fontSize: 11,
+  padding: '6px 14px', fontFamily: 'var(--font-sans)', fontSize: 11,
   border: '1px solid var(--border)', borderRadius: 4,
   background: 'transparent', color: 'var(--text-2)', cursor: 'pointer',
 }
 
 const submitBtnStyle: React.CSSProperties = {
-  padding: '6px 14px', fontFamily: 'monospace', fontSize: 11,
+  padding: '6px 14px', fontFamily: 'var(--font-sans)', fontSize: 11,
   border: '1px solid var(--accent)', borderRadius: 4,
   background: 'transparent', color: 'var(--accent)', cursor: 'pointer',
 }

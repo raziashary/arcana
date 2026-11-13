@@ -32,7 +32,7 @@ function PhaseProgressBar({ done, total }: { done: number; total: number }) {
           }}
         />
       </div>
-      <span style={{ fontSize: 9, color: 'var(--text-4)', fontFamily: 'monospace', minWidth: 28 }}>
+      <span style={{ fontSize: 9, color: 'var(--text-4)', fontFamily: 'var(--font-sans)', minWidth: 28 }}>
         {done}/{total}
       </span>
     </div>
@@ -48,7 +48,7 @@ function PhaseBadge({ label, color }: { label: string; color: string }) {
         borderRadius: 3,
         background: `${color}22`,
         color,
-        fontFamily: 'monospace',
+        fontFamily: 'var(--font-sans)',
         textTransform: 'uppercase',
         letterSpacing: '0.06em',
         border: `1px solid ${color}44`,
@@ -102,7 +102,7 @@ function PhaseRow({ summary }: { summary: PhaseSummary }) {
           style={{
             fontSize: 10,
             color: summary.is_unlocked ? 'var(--text-1)' : 'var(--text-3)',
-            fontFamily: 'monospace',
+            fontFamily: 'var(--font-sans)',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
@@ -124,7 +124,7 @@ function PhaseRow({ summary }: { summary: PhaseSummary }) {
           display: 'flex',
           gap: 4,
           fontSize: 9,
-          fontFamily: 'monospace',
+          fontFamily: 'var(--font-sans)',
           color: 'var(--text-4)',
           justifyContent: 'flex-end',
         }}
@@ -235,7 +235,7 @@ export function EpicPhaseView({ epic }: EpicPhaseViewProps) {
             flex:         1,
             fontSize:     11,
             color:        'var(--text-1)',
-            fontFamily:   'monospace',
+            fontFamily: 'var(--font-sans)',
             overflow:     'hidden',
             textOverflow: 'ellipsis',
             whiteSpace:   'nowrap',
@@ -263,7 +263,7 @@ export function EpicPhaseView({ epic }: EpicPhaseViewProps) {
                 }}
               />
             </div>
-            <span style={{ fontSize: 9, color: 'var(--text-4)', fontFamily: 'monospace' }}>
+            <span style={{ fontSize: 9, color: 'var(--text-4)', fontFamily: 'var(--font-sans)' }}>
               {pct}%
             </span>
           </div>
@@ -326,7 +326,7 @@ export function EpicsSection({ tasks }: { tasks: Task[] }) {
               color: 'var(--purple)',
               padding: '1px 6px',
               borderRadius: 4,
-              fontFamily: 'monospace',
+              fontFamily: 'var(--font-sans)',
             }}
           >
             {epics.length}

@@ -39,7 +39,7 @@ export default function UpdateSettings() {
     <div className="space-y-5">
       {/* Section header */}
       <div>
-        <div className="font-mono text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+        <div className="font-sans text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
           Updates
         </div>
         <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
@@ -54,7 +54,7 @@ export default function UpdateSettings() {
           <span className="text-xs font-medium" style={{ color: 'var(--text-2)' }}>
             Current version
           </span>
-          <span className="font-mono text-sm font-bold" style={{ color: 'var(--text-1)' }}>
+          <span className="font-sans text-sm font-bold" style={{ color: 'var(--text-1)' }}>
             {VERSION}
           </span>
         </div>
@@ -233,7 +233,7 @@ export default function UpdateSettings() {
                   <div key={i} className="rounded-lg border p-3 text-xs"
                     style={{ background: 'var(--bg-2)', borderColor: 'var(--border-1)' }}>
                     <div className="flex items-center justify-between">
-                      <span className="font-mono font-semibold" style={{ color: 'var(--text-1)' }}>
+                      <span className="font-sans font-semibold" style={{ color: 'var(--text-1)' }}>
                         v{record.version}
                       </span>
                       <span style={{ color: 'var(--text-3)' }}>

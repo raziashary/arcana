@@ -57,7 +57,7 @@ export function WorkspaceMismatchBanner() {
         border:     '1px solid rgba(255, 203, 139, 0.35)',
         color:      'var(--warning)',
         padding:    '8px 14px',
-        fontFamily: 'var(--font-mono)',
+        fontFamily: 'var(--font-sans)',
         fontSize:   '11px',
         display:    'flex',
         alignItems: 'center',
@@ -141,7 +141,7 @@ export function StrayFilesBanner() {
         border:     '1px solid rgba(255, 99, 99, 0.35)',
         color:      'var(--danger)',
         padding:    '8px 14px',
-        fontFamily: 'var(--font-mono)',
+        fontFamily: 'var(--font-sans)',
         fontSize:   '11px',
       }}
     >

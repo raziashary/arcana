@@ -111,8 +111,13 @@ All components in AutoDev derive from a single shared token set. Every value bel
 
 | Token | Value | Usage |
 |---|---|---|
-| `--font-mono` | `'IBM Plex Mono', monospace` | Code, agent names, tool calls, metrics, all labels |
-| `--font-sans` | `'IBM Plex Sans', sans-serif` | Prose, message text, descriptions |
+| `--font-mono` | `'IBM Plex Mono', monospace` | Code, tool calls and output, logs, file paths, IDs, diffs |
+| `--font-sans` | `'IBM Plex Sans', sans-serif` | Everything else: chrome, tabs, labels, buttons, prose, descriptions |
+
+> **Superseded in part (D-020, 2026-11-13):** the specs below name `IBM Plex Mono` for chrome, labels and metrics. The shipped app uses
+> IBM Plex Sans there, at weight 400 (text) and 500 (tabs, buttons, labels), after Claude Code's desktop UI; Plex Mono is kept for code,
+> tool calls and output, logs, paths, IDs and the IDE tab. Read a row's "IBM Plex Mono" as "IBM Plex Sans" unless the row is one of those.
+> `docs/restructurization/reference/ui-anchor.md` (Typography) is the live statement.
 | `--radius` | `2px` | **All** border radius — sharp, industrial, no soft rounding |
 
 ### 1.3 Typography Scale

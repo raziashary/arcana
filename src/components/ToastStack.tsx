@@ -27,7 +27,7 @@ function ToastItem({ toast }: { toast: Toast }) {
         <p className="text-sm font-semibold text-[color:var(--text-primary)]">{toast.title}</p>
         <p className="text-xs text-[color:var(--text-muted)]">{toast.message}</p>
         {toast.workerSlug && (
-          <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-[color:var(--purple)]">
+          <p className="mt-1 text-[10px] font-sans uppercase tracking-wider text-[color:var(--purple)]">
             {toast.workerSlug}
           </p>
         )}

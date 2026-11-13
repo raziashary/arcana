@@ -42,13 +42,13 @@ export default function BranchManager() {
           onChange={(e) => setNewName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void onCreate() }}
           placeholder="new-branch-name"
-          className="flex-1 text-[11px] font-mono bg-transparent outline-none"
+          className="flex-1 text-[11px] font-sans bg-transparent outline-none"
           style={{ color: 'var(--text-1)' }}
         />
         <button
           onClick={() => void onCreate()}
           disabled={creating || !newName.trim()}
-          className="text-[10px] font-mono px-1.5 py-0.5 rounded border"
+          className="text-[10px] font-sans px-1.5 py-0.5 rounded border"
           style={{ borderColor: 'var(--border-1)', color: 'var(--text-2)' }}
         >
           Create + Checkout
@@ -98,7 +98,7 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   return (
     <div>
       <div
-        className="px-2 py-1 text-[10px] font-mono uppercase tracking-wider"
+        className="px-2 py-1 text-[10px] font-sans uppercase tracking-wider"
         style={{ color: 'var(--text-3)', background: 'var(--bg-2)' }}
       >
         {label}
@@ -121,7 +121,7 @@ interface BranchRowProps {
 function BranchRow({ name, isHead, upstream, ahead, behind, onCheckout, onDelete }: BranchRowProps) {
   return (
     <div
-      className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono hover:bg-[color:var(--bg-hover)] group"
+      className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-sans hover:bg-[color:var(--bg-hover)] group"
       style={{ color: isHead ? 'var(--accent)' : 'var(--text-2)' }}
     >
       {isHead

@@ -13,7 +13,7 @@ function RecipeCard({ recipe, onEdit }: { recipe: Recipe; onEdit: (r: Recipe) =>
 
   return (
     <div
-      className="rounded font-mono text-xs"
+      className="rounded font-sans text-xs"
       style={{
         background: 'var(--bg-surface)',
         border:     '1px solid var(--border-2)',
@@ -175,7 +175,7 @@ export default function RecipesTab() {
     >
       {/* Toolbar */}
       <div
-        className="flex items-center gap-2 px-4 py-2 shrink-0 font-mono text-xs"
+        className="flex items-center gap-2 px-4 py-2 shrink-0 font-sans text-xs"
         style={{ borderBottom: '1px solid var(--border-1)', background: 'var(--bg-surface)' }}
       >
         <span style={{ color: 'var(--text-2)' }}>Recipes</span>
@@ -220,7 +220,7 @@ export default function RecipesTab() {
         {systemRecipes.length > 0 && (
           <div className="mb-4">
             <div
-              className="font-mono text-xs mb-2 px-1"
+              className="font-sans text-xs mb-2 px-1"
               style={{ color: 'var(--text-4)', letterSpacing: '0.05em' }}
             >
               SYSTEM RECIPES
@@ -234,7 +234,7 @@ export default function RecipesTab() {
         {userRecipes.length > 0 && (
           <div className="mb-4">
             <div
-              className="font-mono text-xs mb-2 px-1"
+              className="font-sans text-xs mb-2 px-1"
               style={{ color: 'var(--text-4)', letterSpacing: '0.05em' }}
             >
               USER RECIPES
@@ -247,7 +247,7 @@ export default function RecipesTab() {
 
         {!isLoading && recipes.length === 0 && (
           <div
-            className="flex flex-col items-center justify-center h-full font-mono text-xs"
+            className="flex flex-col items-center justify-center h-full font-sans text-xs"
             style={{ color: 'var(--text-4)' }}
           >
             No recipes found in ~/.arcana/recipes/

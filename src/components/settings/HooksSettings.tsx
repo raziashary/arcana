@@ -182,7 +182,7 @@ export default function HooksSettings() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="font-mono text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+          <div className="font-sans text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
             Hooks
           </div>
           <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
@@ -193,7 +193,7 @@ export default function HooksSettings() {
           <button
             title="Learn about hooks"
             onClick={() => setShowInfo(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-sans"
             style={{ background: 'var(--bg-2)', color: 'var(--text-2)', border: '1px solid var(--border)' }}
           >
             <HelpCircle size={12} />
@@ -202,7 +202,7 @@ export default function HooksSettings() {
           <button
             title="Browse pre-built hook templates"
             onClick={() => setShowTemplates(f => !f)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-sans"
             style={{
               background: showTemplates ? 'var(--accent-muted)' : 'var(--bg-2)',
               color:      showTemplates ? 'var(--accent)'       : 'var(--text-2)',
@@ -215,7 +215,7 @@ export default function HooksSettings() {
           <button
             title="View execution logs"
             onClick={() => setShowLogs(l => !l)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-sans"
             style={{ background: 'var(--bg-2)', color: 'var(--text-2)', border: '1px solid var(--border)' }}
           >
             <ScrollText size={12} />
@@ -224,7 +224,7 @@ export default function HooksSettings() {
           <button
             title="Add hook"
             onClick={() => setShowAddForm(f => !f)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-sans"
             style={{ background: 'var(--accent)', color: 'var(--bg-app)' }}
           >
             <Plus size={12} />
@@ -270,7 +270,7 @@ export default function HooksSettings() {
       {/* Hook list */}
       {store.hooks.length === 0 ? (
         <div
-          className="rounded-lg p-6 text-center text-xs font-mono"
+          className="rounded-lg p-6 text-center text-xs font-sans"
           style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--text-3)' }}
         >
           No hooks configured. Add one or browse Templates to get started.
@@ -338,7 +338,7 @@ function HookTemplateGallery({
       style={{ background: 'var(--bg-2)', border: '1px solid var(--accent-border)' }}
     >
       <div className="flex items-center justify-between">
-        <span className="font-mono text-xs font-semibold" style={{ color: 'var(--accent)' }}>
+        <span className="font-sans text-xs font-semibold" style={{ color: 'var(--accent)' }}>
           Template Gallery — {HOOK_TEMPLATES.length} pre-built hooks
         </span>
         {/* Category filter pills */}
@@ -347,7 +347,7 @@ function HookTemplateGallery({
             <button
               key={cat}
               onClick={() => setFilter(cat)}
-              className="px-2.5 py-0.5 rounded-full text-xs font-mono capitalize"
+              className="px-2.5 py-0.5 rounded-full text-xs font-sans capitalize"
               style={{
                 background: filter === cat ? 'var(--accent)'       : 'var(--bg-panel)',
                 color:      filter === cat ? 'var(--bg-app)'             : 'var(--text-3)',
@@ -374,12 +374,12 @@ function HookTemplateGallery({
               <Icon size={14} style={{ color: meta.color, marginTop: 2, flexShrink: 0 }} />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-xs font-mono font-semibold" style={{ color: 'var(--text-1)' }}>
+                  <span className="text-xs font-sans font-semibold" style={{ color: 'var(--text-1)' }}>
                     {tpl.name}
                   </span>
                   <span
                     className="text-xs px-1.5 rounded"
-                    style={{ background: 'var(--bg-selected)', color: 'var(--accent)', fontFamily: 'monospace', fontSize: '10px' }}
+                    style={{ background: 'var(--bg-selected)', color: 'var(--accent)', fontFamily: 'var(--font-sans)', fontSize: '10px' }}
                   >
                     {tpl.hook_type}
                   </span>
@@ -394,7 +394,7 @@ function HookTemplateGallery({
                   setInstalling(tpl.id)
                   try { await onInstall(tpl) } finally { setInstalling(null) }
                 }}
-                className="shrink-0 text-xs px-2.5 py-1 rounded font-mono disabled:opacity-40"
+                className="shrink-0 text-xs px-2.5 py-1 rounded font-sans disabled:opacity-40"
                 style={{
                   background: installed ? 'var(--bg-selected)' : 'var(--accent)',
                   color:      installed ? 'var(--success)'     : 'var(--bg-app)',
@@ -464,7 +464,7 @@ function HookTestModal({ hook, onClose }: { hook: HookConfig; onClose: () => voi
     color: 'var(--text-1)', borderRadius: '4px', padding: '5px 8px',
     fontSize: '11px', width: '100%', fontFamily: 'monospace',
   }
-  const lbl = { color: 'var(--text-3)', fontSize: '10px', fontFamily: 'monospace' }
+  const lbl = { color: 'var(--text-3)', fontSize: '10px', fontFamily: 'var(--font-sans)' }
 
   return (
     /* Backdrop */
@@ -483,7 +483,7 @@ function HookTestModal({ hook, onClose }: { hook: HookConfig; onClose: () => voi
           style={{ borderBottom: '1px solid var(--border)' }}
         >
           <div>
-            <div className="font-mono text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+            <div className="font-sans text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
               Test: {hook.name}
             </div>
             <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
@@ -498,7 +498,7 @@ function HookTestModal({ hook, onClose }: { hook: HookConfig; onClose: () => voi
         {/* Form */}
         <div className="px-5 py-4 space-y-3">
           {/* Hook meta — read-only */}
-          <div className="flex items-center gap-2 text-xs font-mono">
+          <div className="flex items-center gap-2 text-xs font-sans">
             <span style={{ color: 'var(--text-3)' }}>Event:</span>
             <span
               className="px-1.5 rounded"
@@ -563,7 +563,7 @@ function HookTestModal({ hook, onClose }: { hook: HookConfig; onClose: () => voi
           </div>
 
           {/* is_error toggle */}
-          <label className="flex items-center gap-2 cursor-pointer text-xs font-mono" style={{ color: 'var(--text-2)' }}>
+          <label className="flex items-center gap-2 cursor-pointer text-xs font-sans" style={{ color: 'var(--text-2)' }}>
             <input
               type="checkbox"
               checked={isError}
@@ -576,7 +576,7 @@ function HookTestModal({ hook, onClose }: { hook: HookConfig; onClose: () => voi
           {/* Result */}
           {result && (
             <div
-              className="rounded p-3 flex items-start gap-2 text-xs font-mono"
+              className="rounded p-3 flex items-start gap-2 text-xs font-sans"
               style={{
                 background: result.outcome === 'executed'
                   ? 'rgba(173,219,103,0.08)'
@@ -628,7 +628,7 @@ function HookTestModal({ hook, onClose }: { hook: HookConfig; onClose: () => voi
         >
           <button
             onClick={onClose}
-            className="px-3 py-1.5 rounded text-xs font-mono"
+            className="px-3 py-1.5 rounded text-xs font-sans"
             style={{ background: 'var(--bg-panel)', color: 'var(--text-2)', border: '1px solid var(--border)' }}
           >
             Close
@@ -636,7 +636,7 @@ function HookTestModal({ hook, onClose }: { hook: HookConfig; onClose: () => voi
           <button
             onClick={runTest}
             disabled={running}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-mono font-semibold disabled:opacity-50"
+            className="flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-sans font-semibold disabled:opacity-50"
             style={{ background: 'var(--accent)', color: 'var(--bg-app)' }}
           >
             <Play size={11} />
@@ -703,12 +703,12 @@ function HookRow({
         {/* Info */}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-mono font-semibold" style={{ color: 'var(--text-1)' }}>
+            <span className="text-xs font-sans font-semibold" style={{ color: 'var(--text-1)' }}>
               {hook.name}
             </span>
             <span
               className="text-xs px-1.5 rounded"
-              style={{ background: 'var(--bg-selected)', color: 'var(--accent)', fontFamily: 'monospace' }}
+              style={{ background: 'var(--bg-selected)', color: 'var(--accent)', fontFamily: 'var(--font-sans)' }}
             >
               {hook.hook_type}
             </span>
@@ -753,7 +753,7 @@ function HookRow({
       {/* Expanded detail */}
       {expanded && (
         <div
-          className="px-4 pb-4 pt-0 text-xs font-mono space-y-2"
+          className="px-4 pb-4 pt-0 text-xs font-sans space-y-2"
           style={{ borderTop: '1px solid var(--border)', color: 'var(--text-3)' }}
         >
           <div className="pt-3">
@@ -802,7 +802,7 @@ function HookRow({
                 background:  'var(--bg-surface)',
                 border:      '1px solid var(--border-2)',
                 color:       'var(--text-1)',
-                fontFamily:  'monospace',
+                fontFamily: 'var(--font-sans)',
                 fontSize:    '11px',
               }}
             />
@@ -885,16 +885,16 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
   const inputStyle = {
     background: 'var(--bg-input)', border: '1px solid var(--border)',
     color: 'var(--text-1)', borderRadius: '4px', padding: '6px 10px',
-    fontSize: '12px', width: '100%', fontFamily: 'monospace',
+    fontSize: '12px', width: '100%', fontFamily: 'var(--font-sans)',
   }
-  const labelStyle = { color: 'var(--text-3)', fontSize: '11px', fontFamily: 'monospace' }
+  const labelStyle = { color: 'var(--text-3)', fontSize: '11px', fontFamily: 'var(--font-sans)' }
 
   return (
     <div
       className="rounded-lg p-4 space-y-4"
       style={{ background: 'var(--bg-2)', border: '1px solid var(--accent)' }}
     >
-      <div className="font-mono text-xs font-semibold" style={{ color: 'var(--accent)' }}>
+      <div className="font-sans text-xs font-semibold" style={{ color: 'var(--accent)' }}>
         New Hook
       </div>
 
@@ -985,7 +985,7 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
       <div className="flex justify-end gap-2">
         <button
           onClick={onCancel}
-          className="px-3 py-1.5 rounded text-xs font-mono"
+          className="px-3 py-1.5 rounded text-xs font-sans"
           style={{ background: 'var(--bg-panel)', color: 'var(--text-2)', border: '1px solid var(--border)' }}
         >
           Cancel
@@ -993,7 +993,7 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
         <button
           onClick={handleSave}
           disabled={saving}
-          className="px-4 py-1.5 rounded text-xs font-mono font-semibold"
+          className="px-4 py-1.5 rounded text-xs font-sans font-semibold"
           style={{ background: 'var(--accent)', color: 'var(--bg-app)', opacity: saving ? 0.6 : 1 }}
         >
           {saving ? 'Saving…' : 'Save Hook'}

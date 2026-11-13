@@ -113,7 +113,7 @@ function WorkerRow({
       <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <StatusDot status={worker.status} />
-          <span style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-1)' }}>
+          <span style={{ fontFamily: 'var(--font-sans)', fontSize: 12, color: 'var(--text-1)' }}>
             {worker.name}
           </span>
           {worker.is_system_defined && (
@@ -125,7 +125,7 @@ function WorkerRow({
           )}
         </div>
       </td>
-      <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-3)', fontFamily: 'monospace' }}>
+      <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-3)', fontFamily: 'var(--font-sans)' }}>
         {worker.slug}
       </td>
       <td style={{ padding: '8px 10px', fontSize: 11, color: 'var(--text-3)' }}>
@@ -139,7 +139,7 @@ function WorkerRow({
             onChange={e => void handleModelChange(e.target.value)}
             disabled={savingModel}
             style={{
-              fontFamily: 'monospace', fontSize: 10,
+              fontFamily: 'var(--font-sans)', fontSize: 10,
               background: 'var(--bg-2)', border: '1px solid var(--border)',
               color: savingModel ? 'var(--text-3)' : 'var(--accent)',
               borderRadius: 3, padding: '2px 4px',
@@ -182,7 +182,7 @@ function WorkerRow({
           onChange={e => handleBindRecipe(e.target.value)}
           disabled={binding}
           style={{
-            fontFamily: 'monospace', fontSize: 10,
+            fontFamily: 'var(--font-sans)', fontSize: 10,
             background: 'var(--bg-2)', border: '1px solid var(--border)',
             color: worker.recipe_id ? 'var(--accent)' : 'var(--text-3)',
             borderRadius: 3, padding: '2px 4px', cursor: 'pointer', width: '100%',
@@ -230,7 +230,7 @@ function btnStyle(color: string): React.CSSProperties {
   return {
     padding:      '2px 8px',
     fontSize:     11,
-    fontFamily:   'monospace',
+    fontFamily: 'var(--font-sans)',
     border:       `1px solid ${color}`,
     borderRadius: 3,
     background:   'transparent',
@@ -292,7 +292,7 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
 
   if (store.isLoading) {
     return (
-      <div style={{ fontFamily: 'monospace', fontSize: 12, color: 'var(--text-3)', padding: 16 }}>
+      <div style={{ fontFamily: 'var(--font-sans)', fontSize: 12, color: 'var(--text-3)', padding: 16 }}>
         Loading workers…
       </div>
     )
@@ -301,13 +301,13 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-        <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-3)' }}>
+        <span style={{ fontFamily: 'var(--font-sans)', fontSize: 11, color: 'var(--text-3)' }}>
           {store.workers.length} agents registered
         </span>
         <button
           onClick={onAddWorker}
           style={{
-            fontFamily: 'monospace', fontSize: 11,
+            fontFamily: 'var(--font-sans)', fontSize: 11,
             padding: '3px 10px', borderRadius: 4,
             border: '1px solid var(--accent)', background: 'transparent',
             color: 'var(--accent)', cursor: 'pointer',
@@ -324,7 +324,7 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
               {['Name', 'Slug', 'Type', 'Model', 'Status', 'Recipe', 'Actions'].map(h => (
                 <th key={h} style={{
                   textAlign: 'left', padding: '6px 10px',
-                  fontFamily: 'monospace', fontSize: 10,
+                  fontFamily: 'var(--font-sans)', fontSize: 10,
                   color: 'var(--text-3)', textTransform: 'uppercase',
                   letterSpacing: 1, fontWeight: 'normal',
                 }}>
@@ -366,7 +366,7 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
             style={{
               padding: '10px 14px',
               borderRadius: 4,
-              fontFamily: 'monospace',
+              fontFamily: 'var(--font-sans)',
               fontSize: 11,
               maxWidth: 320,
               boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
@@ -391,7 +391,7 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
 
       {confirm !== null && (
         <div style={{
-          marginTop: 8, fontFamily: 'monospace', fontSize: 11,
+          marginTop: 8, fontFamily: 'var(--font-sans)', fontSize: 11,
           color: 'var(--danger)', padding: '6px 10px', border: '1px solid color-mix(in srgb, var(--danger) 31%, transparent)',
           borderRadius: 4, background: 'rgba(255,99,99,0.06)',
         }}>
@@ -400,7 +400,7 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
       )}
 
       {store.error && (
-        <div style={{ marginTop: 8, fontFamily: 'monospace', fontSize: 11, color: 'var(--danger)' }}>
+        <div style={{ marginTop: 8, fontFamily: 'var(--font-sans)', fontSize: 11, color: 'var(--danger)' }}>
           Error: {store.error}
         </div>
       )}

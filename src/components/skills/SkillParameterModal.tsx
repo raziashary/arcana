@@ -74,7 +74,7 @@ export default function SkillParameterModal({ skill, onExecute, onClose }: Props
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
           <div>
-            <div className="font-mono text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+            <div className="font-sans text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
               /{skill.name}
             </div>
             <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
@@ -119,7 +119,7 @@ export default function SkillParameterModal({ skill, onExecute, onClose }: Props
         >
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded text-xs font-mono"
+            className="px-4 py-2 rounded text-xs font-sans"
             style={{ background: 'var(--bg-2)', color: 'var(--text-2)' }}
           >
             Cancel
@@ -127,7 +127,7 @@ export default function SkillParameterModal({ skill, onExecute, onClose }: Props
           <button
             onClick={handleExecute}
             disabled={executing}
-            className="flex items-center gap-2 px-4 py-2 rounded text-xs font-mono font-semibold"
+            className="flex items-center gap-2 px-4 py-2 rounded text-xs font-sans font-semibold"
             style={{ background: 'var(--accent)', color: 'var(--bg-app)', opacity: executing ? 0.6 : 1 }}
           >
             <Play size={13} />
@@ -149,7 +149,7 @@ function ParamField({
   error?:   string
   onChange: (v: unknown) => void
 }) {
-  const labelStyle = { color: 'var(--text-2)', fontSize: '11px', fontFamily: 'monospace' }
+  const labelStyle = { color: 'var(--text-2)', fontSize: '11px', fontFamily: 'var(--font-sans)' }
   const inputStyle = {
     background:  'var(--bg-input)',
     border:      `1px solid ${error ? 'var(--danger)' : 'var(--border)'}`,
@@ -159,7 +159,7 @@ function ParamField({
     fontSize:    '12px',
     width:       '100%',
     outline:     'none',
-    fontFamily:  'monospace',
+    fontFamily: 'var(--font-sans)',
   }
 
   return (

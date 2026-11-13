@@ -128,14 +128,14 @@ export default function SkillsPalette({ onInsert }: Props) {
             value={query}
             onChange={e => handleSearch(e.target.value)}
             placeholder="Search skills… (e.g. feature, debug, fleet) — Cmd/Ctrl+Shift+S"
-            className="flex-1 bg-transparent outline-none font-mono text-sm"
+            className="flex-1 bg-transparent outline-none font-sans text-sm"
             style={{ color: 'var(--text-1)' }}
           />
           <button title="Create new skill" onClick={() => setShowCreator(true)} className="p-1 hover:opacity-70">
             <Plus size={14} style={{ color: 'var(--accent)' }} />
           </button>
           <kbd
-            className="text-xs px-1.5 py-0.5 rounded font-mono"
+            className="text-xs px-1.5 py-0.5 rounded font-sans"
             style={{ background: 'var(--bg-2)', color: 'var(--text-3)', border: '1px solid var(--border)' }}
           >
             ESC
@@ -202,9 +202,9 @@ export default function SkillsPalette({ onInsert }: Props) {
           className="px-4 py-2 text-xs flex items-center gap-4"
           style={{ borderTop: '1px solid var(--border)', color: 'var(--text-3)' }}
         >
-          <span><kbd className="font-mono">↑↓</kbd> Navigate</span>
-          <span><kbd className="font-mono">↵</kbd> Select</span>
-          <span><kbd className="font-mono">⌘⇧S</kbd> Toggle</span>
+          <span><kbd className="font-sans">↑↓</kbd> Navigate</span>
+          <span><kbd className="font-sans">↵</kbd> Select</span>
+          <span><kbd className="font-sans">⌘⇧S</kbd> Toggle</span>
           <span className="ml-auto">{Object.values(store.byCategory).flat().length} skills loaded</span>
         </div>
       </div>
@@ -238,7 +238,7 @@ function CategoryBtn({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-2 px-3 py-2 text-xs font-mono transition-colors"
+      className="w-full flex items-center gap-2 px-3 py-2 text-xs font-sans transition-colors"
       style={{
         background: active ? 'var(--bg-selected)' : 'transparent',
         color:      active ? 'var(--accent)' : 'var(--text-3)',
@@ -267,7 +267,7 @@ function SkillRow({ skill, needsSetup, onClick }: {
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="font-mono text-xs font-semibold" style={{ color: 'var(--accent)' }}>
+          <span className="font-sans text-xs font-semibold" style={{ color: 'var(--accent)' }}>
             /{skill.name}
           </span>
           {skill.is_builtin && (

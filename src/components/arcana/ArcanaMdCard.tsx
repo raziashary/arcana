@@ -55,7 +55,7 @@ export default function ArcanaMdCard() {
 
   return (
     <>
-      <div className="font-mono" style={{ fontSize: '10px' }}>
+      <div className="font-sans" style={{ fontSize: '10px' }}>
         {/* Section header */}
         <div
           className="flex items-center gap-1.5 mb-1.5"

@@ -96,7 +96,7 @@ export function QcRoiPanel() {
         border:        '1px solid var(--border-1)',
         borderRadius:  3,
         padding:       '12px 14px',
-        fontFamily:    'var(--font-mono)',
+        fontFamily:    'var(--font-sans)',
         fontSize:      '11px',
         color:         'var(--text-1)',
       }}

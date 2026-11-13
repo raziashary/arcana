@@ -68,7 +68,7 @@ export default function Sidebar() {
           ))}
           {allSkills.length > 5 && (
             <div
-              className="font-mono"
+              className="font-sans"
               style={{ fontSize: '10px', color: 'var(--text-4)', paddingLeft: '10px', marginTop: '1px' }}
             >
               +{allSkills.length - 5} more
@@ -89,7 +89,7 @@ export default function Sidebar() {
       {/* ── SESSION ──────────────────────────────────────── */}
       <Section title="SESSION">
         <div
-          className="font-mono"
+          className="font-sans"
           style={{ fontSize: '11px', lineHeight: '1.7', color: 'var(--text-3)' }}
         >
           {totalTokens > 0 ? (
@@ -119,7 +119,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <div>
       <div
-        className="font-mono mb-1"
+        className="font-sans mb-1"
         style={{
           fontSize:      '9px',
           color:         'var(--text-4)',
@@ -138,7 +138,7 @@ function Dot({ label, active, error }: { label: string; active: boolean; error?:
   const dotColor = error ? 'var(--danger)' : active ? 'var(--accent)' : 'var(--dot-dim)'
   return (
     <div
-      className="flex items-center gap-1.5 font-mono"
+      className="flex items-center gap-1.5 font-sans"
       style={{
         fontSize: '11px',
         color:    active ? 'var(--text-2)' : 'var(--text-4)',

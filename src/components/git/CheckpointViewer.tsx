@@ -37,7 +37,7 @@ export default function CheckpointViewer({ filePath }: Props) {
   if (checkpoints.length === 0) {
     return (
       <div
-        className="flex-1 flex items-center justify-center p-4 text-[11px] font-mono text-center"
+        className="flex-1 flex items-center justify-center p-4 text-[11px] font-sans text-center"
         style={{ color: 'var(--text-3)' }}
       >
         no checkpoints yet — they are created automatically before every agent edit
@@ -50,7 +50,7 @@ export default function CheckpointViewer({ filePath }: Props) {
       {groups.map(([file, list]) => (
         <div key={file}>
           <div
-            className="sticky top-0 px-2 py-1 text-[10px] font-mono"
+            className="sticky top-0 px-2 py-1 text-[10px] font-sans"
             style={{ color: 'var(--text-2)', background: 'var(--bg-2)' }}
             title={file}
           >
@@ -60,7 +60,7 @@ export default function CheckpointViewer({ filePath }: Props) {
           {list.map((c) => (
             <div
               key={c.id}
-              className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono hover:bg-[color:var(--bg-hover)] group"
+              className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-sans hover:bg-[color:var(--bg-hover)] group"
               style={{ color: 'var(--text-2)' }}
             >
               <Clock size={10} style={{ color: 'var(--text-3)' }} />

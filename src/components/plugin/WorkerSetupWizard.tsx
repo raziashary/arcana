@@ -99,7 +99,7 @@ const s: Record<string, React.CSSProperties> = {
     borderRadius: 8,
     padding:      14,
     fontSize:     12,
-    fontFamily:   'var(--font-mono)',
+    fontFamily:   'var(--font-sans)',
     color:        'var(--text-1)',
     overflowX:    'auto',
     whiteSpace:   'pre-wrap',

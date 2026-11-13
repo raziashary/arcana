@@ -49,7 +49,7 @@ export default function RunningToolsPill() {
 
   return (
     <div
-      className="flex items-center gap-2 self-start rounded-sm font-mono my-1 px-2.5 py-1 anim-fade-in"
+      className="flex items-center gap-2 self-start rounded-sm font-sans my-1 px-2.5 py-1 anim-fade-in"
       style={{
         background: 'var(--bg-surface)',
         border:     '1px solid var(--border-1)',

@@ -73,7 +73,12 @@ Shadow is deliberately soft: `0 6px 22px rgba(46,76,117,0.07), 0 1px 2px rgba(46
 **Shipped (D-016, 2026-11-13): IBM Plex, bundled.** Two faces, SIL OFL, files in `src/assets/fonts/` (Latin subset, 400 and 500), declared with
 `@font-face` in `src/styles/globals.css`; no font is fetched at runtime and both CSPs allow `font-src 'self'` only (`TG-P6-03`). The app's
 `--font-sans` is IBM Plex Sans and `--font-mono` is IBM Plex Mono: Plex Sans for interface text, Plex Mono **only** for technical values
-(JSON, IDs, timestamps, logs, code). The Urbanist/Manrope/Roboto Mono table this section used to hold was never implemented; the shipped code is the
+(JSON, IDs, timestamps, logs, code).
+**D-020 (2026-11-13) moved the chrome to Plex Sans** after Claude Code's desktop UI: tabs, title and status bars, sidebar, settings, git, MCP,
+skills, workers, dashboard and the chat empty state are sans; weight 400 for text, 500 for tabs, buttons, labels and headings (`globals.css`
+sets `button`, `label`, `[role=tab]` and `h1`-`h4` to 500), line height 1.5, letter spacing -0.003em, `font-synthesis-weight: none` so a 600 is never
+faked from the two bundled weights. Mono stays in the tool-call and output components, diff and hook-log viewers, the IDE tab, Logs, the Graph
+tab and city, the recipe and slash-command editors, and the Docs code blocks. The Urbanist/Manrope/Roboto Mono table this section used to hold was never implemented; the shipped code is the
 anchor, so it was replaced. Rules that still hold: no thin weights in dense UI; never use website display sizes inside the tool.
 
 ## Shape — one locked rule

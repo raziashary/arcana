@@ -20,7 +20,7 @@
 
 .widget-header h3 {
   margin: 0;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.12em;
@@ -29,7 +29,7 @@
 }
 
 .widget-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 10px;
   color: var(--text-4);
   text-transform: uppercase;
@@ -44,7 +44,7 @@
 
 /* Metric Value */
 .metric-value {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 26px;
   font-weight: 700;
   color: var(--accent);
@@ -56,7 +56,7 @@
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .trend-icon {
@@ -92,7 +92,7 @@
 }
 
 .projection-label {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 10px;
   color: var(--text-4);
   text-transform: uppercase;
@@ -100,7 +100,7 @@
 }
 
 .projection-value {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 16px;
   font-weight: 600;
   color: var(--gold);
@@ -120,7 +120,7 @@
   display: flex;
   justify-content: space-between;
   font-size: 11px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .breakdown-item .label {
@@ -138,7 +138,7 @@
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   margin-top: 4px;
 }
 
@@ -171,7 +171,7 @@
   display: flex;
   justify-content: space-between;
   font-size: 11px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .info-item .label {
@@ -197,7 +197,7 @@
   display: flex;
   justify-content: space-between;
   font-size: 11px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .stat-item .label {
@@ -227,7 +227,7 @@
   align-items: center;
   gap: 8px;
   font-size: 11px;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
 }
 
 .model-name {
@@ -282,7 +282,7 @@
 }
 
 .worker-name {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 600;
   color: var(--text-1);
@@ -295,7 +295,7 @@
 }
 
 .worker-stats .stat {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 10px;
   color: var(--text-4);
 }
@@ -306,7 +306,7 @@
   color: var(--danger);
   padding: 2px 6px;
   border-radius: var(--radius);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 10px;
   font-weight: 600;
 }
@@ -341,7 +341,7 @@
 }
 
 .failure-provider {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
   font-weight: 600;
   color: var(--text-1);
@@ -356,13 +356,13 @@
 }
 
 .failure-time {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 9px;
   color: var(--text-4);
 }
 
 .resolved-badge {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 9px;
   color: var(--accent);
   font-weight: 600;
@@ -372,7 +372,7 @@
   text-align: center;
   padding: 16px;
   color: var(--text-4);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
 }
 
@@ -385,7 +385,7 @@
 .failure-stats .stat {
   display: flex;
   justify-content: space-between;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
 }
 
@@ -400,7 +400,7 @@
 
 /* Empty state placeholder — used when a widget has no data yet */
 .no-data-placeholder {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: 11px;
   color: var(--text-4);
   text-align: center;

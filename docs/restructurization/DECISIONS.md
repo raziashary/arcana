@@ -343,3 +343,17 @@ Night Owl blues in `tailwind.config.js` and most of the dashboard (`#011627`, `#
 - **Not implemented, recorded in `ui-anchor.md`:** the pastel gradient shell, glass surfaces, the 7px shape rule and the motion table. The anchor's colours are shipped; its other sections remain intent.
 - **Verified:** the shell, Arcana, Settings and Logs tabs were rendered under a mock IPC layer and read as a coherent light UI (the Dashboard crashed under the mock's empty data, not from the change). The city
   scene keeps its dark palette unchanged. Not verified: every tab and state, the code viewer, the graph against real data, and a contrast audit of each component. An independent design review is queued for the end of R3.
+
+## D-020 · Chrome and prose move to IBM Plex Sans; mono is for code only; the empty state says Arcana — 2026-11-13, Razi
+
+Razi asked for the old "Oh My AIRS" heading to read "Arcana" and for a sleeker, Claude-Code-like type treatment, based on `docs/development/ui-specific/`
+and the other UI references. Asked: Plex Sans for chrome with mono for code only (no download), or a new Inter bundle. Razi chose **Plex Sans, no new font**.
+
+- **Why a flip and not a new face:** the audit found 307 `font-mono` classes, 90 inline `var(--font-mono)` and 192 `'monospace'` literals; the app spoke in mono
+  almost everywhere, which is what read as heavy. Plex Sans is already bundled (D-016), so `TG-P6-03` and the CSP are untouched.
+- **What changed:** 338 mono uses in 37 non-code files became sans (a script with an explicit keep-list); code, tool output, logs, the IDE tab, the
+  Graph tab and the city stay mono. Base text gets line height 1.5, letter spacing -0.003em and medium weight on buttons, labels, tabs and headings.
+  The Chat empty state reads "Arcana" (32px, weight 500, ink colour, not the accent).
+- **Docs:** `ui-anchor.md` Typography states it; `ui_improvement.md` section 1.2 carries a supersession note instead of editing its hundreds of "IBM Plex Mono" rows.
+- **Not done:** a visual pass over every tab, and per-element correction where a flipped element is really an ID or a path (those read fine in sans; any that
+  should be mono can take `font-mono` back). 600 weight is not bundled, so `font-semibold` renders at 500.

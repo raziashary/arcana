@@ -93,7 +93,7 @@ function ServerRow({ health, onReconnect }: {
       <span
         style={{
           flex: 1, color: 'var(--text-2)',
-          fontFamily: 'monospace', overflow: 'hidden',
+          fontFamily: 'var(--font-sans)', overflow: 'hidden',
           textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}
       >
@@ -104,7 +104,7 @@ function ServerRow({ health, onReconnect }: {
       <span
         style={{
           fontSize: 10, color: stateColor(health.state),
-          fontFamily: 'monospace', flexShrink: 0,
+          fontFamily: 'var(--font-sans)', flexShrink: 0,
         }}
       >
         {stateLabel(health)}
@@ -124,7 +124,7 @@ function ServerRow({ health, onReconnect }: {
             borderRadius: 2,
             color:      'var(--danger)',
             fontSize:   9,
-            fontFamily: 'monospace',
+            fontFamily: 'var(--font-sans)',
             cursor:     reconnecting ? 'default' : 'pointer',
             flexShrink: 0,
           }}
@@ -140,7 +140,7 @@ function ServerRow({ health, onReconnect }: {
           style={{
             fontSize: 9, padding: '1px 5px', borderRadius: 2,
             background: 'rgba(255,203,139,0.12)', color: 'var(--warning)',
-            border: '1px solid rgba(255,203,139,0.25)', fontFamily: 'monospace',
+            border: '1px solid rgba(255,203,139,0.25)', fontFamily: 'var(--font-sans)',
           }}
         >
           needs restart
@@ -196,7 +196,7 @@ export function McpHealthPanel() {
             color:         'var(--text-4)',
             letterSpacing: '0.1em',
             textTransform: 'uppercase',
-            fontFamily:    'monospace',
+            fontFamily: 'var(--font-sans)',
           }}
         >
           External MCP Servers

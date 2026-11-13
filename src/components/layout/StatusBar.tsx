@@ -45,7 +45,7 @@ export default function StatusBar() {
         background: 'var(--bg-surface)',
         borderTop:  '1px solid var(--border-1)',
         fontSize:   '10px',
-        fontFamily: 'var(--font-mono)',
+        fontFamily: 'var(--font-sans)',
         padding:    '0 12px',
       }}
     >

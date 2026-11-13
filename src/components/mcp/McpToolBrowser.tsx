@@ -64,7 +64,7 @@ export default function McpToolBrowser() {
       style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
+        <div className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>
           Built-in tools available to Arcana agents{' '}
           <span style={{ color: 'var(--text-3)' }}>
             ({tools.length} total, called in-process)
@@ -74,7 +74,7 @@ export default function McpToolBrowser() {
           type="button"
           onClick={() => { void load() }}
           disabled={loading}
-          className="flex items-center gap-1.5 font-mono px-2 py-1 rounded-sm"
+          className="flex items-center gap-1.5 font-sans px-2 py-1 rounded-sm"
           style={{
             fontSize:   '11px',
             background: 'var(--bg-code)',
@@ -103,19 +103,19 @@ export default function McpToolBrowser() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Filter by tool name or description…"
-          className="flex-1 bg-transparent outline-none font-mono"
+          className="flex-1 bg-transparent outline-none font-sans"
           style={{ fontSize: '12px', color: 'var(--text-1)' }}
         />
       </div>
 
       {error && (
-        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
+        <div className="font-sans text-xs" style={{ color: 'var(--danger)' }}>
           {error}
         </div>
       )}
 
       {filtered.length === 0 && !loading && !error && (
-        <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+        <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
           {query ? 'No tools match the filter.' : 'No tools registered.'}
         </div>
       )}
@@ -145,11 +145,11 @@ export default function McpToolBrowser() {
                 </div>
                 <Wrench size={12} style={{ color: 'var(--accent)', marginTop: 2 }} />
                 <div className="flex-1 min-w-0">
-                  <div className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
+                  <div className="font-sans text-xs" style={{ color: 'var(--text-1)' }}>
                     {tool.name}
                   </div>
                   <div
-                    className="font-mono"
+                    className="font-sans"
                     style={{ fontSize: '11px', color: 'var(--text-3)', marginTop: 2 }}
                   >
                     {tool.description}
@@ -159,7 +159,7 @@ export default function McpToolBrowser() {
 
               {isOpen && (
                 <pre
-                  className="font-mono"
+                  className="font-sans"
                   style={{
                     fontSize:   '10.5px',
                     color:      'var(--text-2)',

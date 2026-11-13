@@ -131,12 +131,12 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
     >
       {/* Left: PA label + mode dropdown */}
       <div className="flex items-center gap-2">
-        <span className="font-mono" style={{ fontSize: '10px', color: 'var(--text-4)', letterSpacing: '0.08em' }}>PA</span>
+        <span className="font-sans" style={{ fontSize: '10px', color: 'var(--text-4)', letterSpacing: '0.08em' }}>PA</span>
 
         <div ref={dropRef} style={{ position: 'relative' }}>
           <button
             onClick={() => setDropdownOpen(o => !o)}
-            className="flex items-center gap-1 font-mono cursor-pointer"
+            className="flex items-center gap-1 font-sans cursor-pointer"
             style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-2)', borderRadius: '2px', padding: '3px 8px', fontSize: '11px', color: 'var(--text-1)' }}
           >
             <span>{currentMode.icon}</span>
@@ -152,7 +152,7 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
                 <button
                   key={m.value}
                   onClick={() => { setPAMode(m.value as PAMode); setDropdownOpen(false) }}
-                  className="flex items-start gap-2 w-full font-mono cursor-pointer"
+                  className="flex items-start gap-2 w-full font-sans cursor-pointer"
                   style={{ background: paMode === m.value ? 'var(--accent-muted)' : 'transparent', border: 'none', borderBottom: i < PA_MODES.length - 1 ? '1px solid var(--border-1)' : 'none', padding: '8px 12px', fontSize: '11px', color: paMode === m.value ? 'var(--accent)' : 'var(--text-1)', textAlign: 'left' }}
                 >
                   <span style={{ fontSize: '14px', lineHeight: 1 }}>{m.icon}</span>
@@ -168,7 +168,7 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
       </div>
 
       {/* Right: live stats */}
-      <div className="flex items-center gap-2 font-mono" style={{ fontSize: '10px', color: 'var(--text-3)' }}>
+      <div className="flex items-center gap-2 font-sans" style={{ fontSize: '10px', color: 'var(--text-3)' }}>
         {allSkills.length > 0 && (
           <>
             <span style={{ color: 'var(--text-4)' }}>&#183;</span>
@@ -185,7 +185,7 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
             <input
               value={localDir}
               onChange={e => setLocalDir(e.target.value)}
-              className="font-mono"
+              className="font-sans"
               style={{ background: 'transparent', border: 'none', outline: 'none', color: 'var(--text-4)', fontSize: '10px', width: '120px' }}
               placeholder="cwd…"
             />
@@ -432,10 +432,13 @@ export default function ChatTab() {
       {sessionStore.sessions.length === 0 ? (
         <div className="flex flex-col flex-1 items-center justify-center" style={{ color: 'var(--text-2)' }}>
           <div className="text-center">
-            <h1 className="font-mono text-4xl mb-4" style={{ color: 'var(--accent)', letterSpacing: '0.05em' }}>
-              Oh My AIRS
+            <h1
+              className="font-sans mb-2"
+              style={{ color: 'var(--text-1)', fontSize: '32px', fontWeight: 500, letterSpacing: '-0.02em', lineHeight: 1.15 }}
+            >
+              Arcana
             </h1>
-            <p className="text-sm" style={{ color: 'var(--text-3)' }}>
+            <p style={{ color: 'var(--text-3)', fontSize: '14px', lineHeight: 1.5 }}>
               Create a new session to get started
             </p>
           </div>
@@ -453,8 +456,8 @@ export default function ChatTab() {
             className="flex flex-col items-center justify-center h-full gap-3"
             style={{ color: 'var(--text-3)' }}
           >
-            <div className="font-mono text-xs" style={{ letterSpacing: '0.08em' }}>
-              ARCANA — PA MODE
+            <div className="font-sans text-xs" style={{ letterSpacing: '0.04em', fontWeight: 500 }}>
+              Arcana · PA mode
             </div>
             <div className="text-sm" style={{ color: 'var(--text-4)' }}>
               Send a message to start a session
@@ -554,7 +557,7 @@ export default function ChatTab() {
           <button
             title="Open skills palette (⌘⇧S)"
             onClick={() => skillStore.openPalette()}
-            className="shrink-0 font-mono text-xs px-2 py-2 rounded-sm cursor-pointer"
+            className="shrink-0 font-sans text-xs px-2 py-2 rounded-sm cursor-pointer"
             style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', color: 'var(--text-3)' }}
           >
             <Zap size={13} />
@@ -564,7 +567,7 @@ export default function ChatTab() {
             <button
               onClick={handleCancel}
               aria-label="Cancel"
-              className="shrink-0 font-mono text-xs px-3 py-2 rounded-sm cursor-pointer"
+              className="shrink-0 font-sans text-xs px-3 py-2 rounded-sm cursor-pointer"
               style={{
                 background: 'var(--danger-muted)',
                 border:     '1px solid rgba(255,68,68,0.25)',
@@ -578,7 +581,7 @@ export default function ChatTab() {
               onClick={handleSend}
               aria-label="Send"
               disabled={!input.trim() || isStarting}
-              className="shrink-0 font-mono text-xs px-3 py-2 rounded-sm cursor-pointer disabled:opacity-40"
+              className="shrink-0 font-sans text-xs px-3 py-2 rounded-sm cursor-pointer disabled:opacity-40"
               style={{
                 background: 'var(--accent)',
                 border:     '1px solid var(--accent)',
@@ -592,7 +595,7 @@ export default function ChatTab() {
 
         {/* Input meta row */}
         <div
-          className="flex justify-between mt-1.5 font-mono"
+          className="flex justify-between mt-1.5 font-sans"
           style={{ fontSize: '10px', color: 'var(--text-4)' }}
         >
           <span>⏎ send · ⇧⏎ newline</span>

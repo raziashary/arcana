@@ -139,7 +139,17 @@ html, body, #root {
   color: var(--text-1);
   font-family: var(--font-sans);
   font-size: 13px;
+  line-height: 1.5;
+  letter-spacing: -0.003em;
+  font-weight: 400;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-synthesis-weight: none; /* only 400 and 500 are bundled; never fake a 600 */
+}
+
+/* Medium for the chrome's interactive text; the sans reads sleeker with a firmer stroke. */
+button, [role="tab"], label, h1, h2, h3, h4 {
+  font-weight: 500;
 }
 
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */

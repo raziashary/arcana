@@ -36,19 +36,19 @@ export default function StashManager() {
             value={msg}
             onChange={(e) => setMsg(e.target.value)}
             placeholder="stash message (optional)"
-            className="flex-1 text-[11px] font-mono bg-transparent outline-none"
+            className="flex-1 text-[11px] font-sans bg-transparent outline-none"
             style={{ color: 'var(--text-1)' }}
           />
           <button
             onClick={() => void onPush()}
             disabled={saving}
-            className="text-[10px] font-mono px-1.5 py-0.5 rounded border"
+            className="text-[10px] font-sans px-1.5 py-0.5 rounded border"
             style={{ borderColor: 'var(--border-1)', color: 'var(--text-2)' }}
           >
             Stash
           </button>
         </div>
-        <label className="flex items-center gap-1 text-[10px] font-mono" style={{ color: 'var(--text-3)' }}>
+        <label className="flex items-center gap-1 text-[10px] font-sans" style={{ color: 'var(--text-3)' }}>
           <input
             type="checkbox"
             checked={withUntracked}
@@ -61,7 +61,7 @@ export default function StashManager() {
       <div className="flex-1 overflow-y-auto">
         {stashes.length === 0 && (
           <div
-            className="px-3 py-4 text-[11px] font-mono text-center"
+            className="px-3 py-4 text-[11px] font-sans text-center"
             style={{ color: 'var(--text-3)' }}
           >
             no stashes
@@ -70,7 +70,7 @@ export default function StashManager() {
         {stashes.map((s) => (
           <div
             key={s.oid}
-            className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono hover:bg-[color:var(--bg-hover)] group"
+            className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-sans hover:bg-[color:var(--bg-hover)] group"
             style={{ color: 'var(--text-2)' }}
           >
             <span

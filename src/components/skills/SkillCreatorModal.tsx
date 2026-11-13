@@ -57,7 +57,7 @@ export default function SkillCreatorModal({ onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
           <div>
-            <div className="font-mono text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+            <div className="font-sans text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
               Create Skill
             </div>
             <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
@@ -88,7 +88,7 @@ export default function SkillCreatorModal({ onClose }: Props) {
               placeholder="e.g., my-custom-workflow"
               value={name}
               onChange={e => setName(e.target.value)}
-              className="w-full mt-1 px-3 py-2 rounded text-xs font-mono"
+              className="w-full mt-1 px-3 py-2 rounded text-xs font-sans"
               style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text-1)' }}
             />
             <div className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
@@ -106,7 +106,7 @@ export default function SkillCreatorModal({ onClose }: Props) {
               placeholder="What does this skill do?"
               value={description}
               onChange={e => setDescription(e.target.value)}
-              className="w-full mt-1 px-3 py-2 rounded text-xs font-mono"
+              className="w-full mt-1 px-3 py-2 rounded text-xs font-sans"
               style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text-1)' }}
             />
           </div>
@@ -120,7 +120,7 @@ export default function SkillCreatorModal({ onClose }: Props) {
               title="Select category"
               value={category}
               onChange={e => setCategory(e.target.value as any)}
-              className="w-full mt-1 px-3 py-2 rounded text-xs font-mono"
+              className="w-full mt-1 px-3 py-2 rounded text-xs font-sans"
               style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text-1)' }}
             >
               <option value="custom">Custom</option>
@@ -140,7 +140,7 @@ export default function SkillCreatorModal({ onClose }: Props) {
               placeholder="Markdown template with parameter substitution. Example: ---&#10;name: my-skill&#10;description: My custom skill&#10;parameters:&#10;  - name: target&#10;    type: string&#10;    required: true&#10;---&#10;&#10;## Steps&#10;1. Analyze the target&#10;2. Execute plan&#10;3. Report results"
               value={template}
               onChange={e => setTemplate(e.target.value)}
-              className="w-full mt-1 px-3 py-2 rounded text-xs font-mono"
+              className="w-full mt-1 px-3 py-2 rounded text-xs font-sans"
               style={{ background: 'var(--bg-input)', border: '1px solid var(--border)', color: 'var(--text-1)', minHeight: '200px' }}
             />
             <div className="text-xs mt-1" style={{ color: 'var(--text-3)' }}>
@@ -153,7 +153,7 @@ export default function SkillCreatorModal({ onClose }: Props) {
         <div className="flex items-center justify-end gap-2 px-5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
           <button
             onClick={onClose}
-            className="px-3 py-1.5 rounded text-xs font-mono"
+            className="px-3 py-1.5 rounded text-xs font-sans"
             style={{ background: 'transparent', color: 'var(--text-2)', border: '1px solid var(--border)' }}
           >
             Cancel
@@ -161,7 +161,7 @@ export default function SkillCreatorModal({ onClose }: Props) {
           <button
             onClick={handleCreate}
             disabled={loading}
-            className="px-3 py-1.5 rounded text-xs font-mono disabled:opacity-50"
+            className="px-3 py-1.5 rounded text-xs font-sans disabled:opacity-50"
             style={{ background: 'var(--accent)', color: 'var(--bg-app)' }}
           >
             {loading ? 'Creating...' : 'Create Skill'}

@@ -37,7 +37,7 @@ export default function TabBar({ tabs, activeTab, onTabChange }: Props) {
             <button
               key={tab.id}
               onClick={() => onTabChange(tab.id)}
-              className="relative font-mono flex items-center gap-1.5 h-full px-3.5 border-none cursor-pointer transition-colors duration-150"
+              className="relative font-sans flex items-center gap-1.5 h-full px-3.5 border-none cursor-pointer transition-colors duration-150"
               style={{
                 background:    'transparent',
                 color:         isActive ? 'var(--accent)' : 'var(--text-3)',
@@ -49,7 +49,7 @@ export default function TabBar({ tabs, activeTab, onTabChange }: Props) {
               {tab.label}
               {badge !== null && (
                 <span
-                  className="font-mono rounded-full flex items-center justify-center"
+                  className="font-sans rounded-full flex items-center justify-center"
                   style={{
                     fontSize:   '9px',
                     background: 'var(--warning)',
@@ -82,7 +82,7 @@ function ActiveModelBadge() {
   if (!activeModel) return null
   return (
     <span
-      className="font-mono px-2 py-0.5"
+      className="font-sans px-2 py-0.5"
       style={{
         background:   'var(--bg-card)',
         border:       '1px solid var(--border-2)',
@@ -106,7 +106,7 @@ function CostPill() {
       : `$${cost.toFixed(2)}`
   return (
     <span
-      className="font-mono px-2 py-0.5"
+      className="font-sans px-2 py-0.5"
       style={{
         background:   'var(--bg-card)',
         border:       '1px solid var(--border-2)',

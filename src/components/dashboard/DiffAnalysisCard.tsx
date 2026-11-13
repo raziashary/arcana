@@ -159,7 +159,7 @@ export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
               </div>
               <ul style={{ margin: 0, paddingLeft: 16 }}>
                 {result.critical_files.map((f, i) => (
-                  <li key={i} style={{ fontFamily: 'monospace', color: riskColor, marginBottom: 2, fontSize: 11 }}>
+                  <li key={i} style={{ fontFamily: 'var(--font-sans)', color: riskColor, marginBottom: 2, fontSize: 11 }}>
                     {f}
                   </li>
                 ))}

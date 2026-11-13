@@ -37,7 +37,7 @@ function EmptyWidget({ label }: { label: string }) {
       borderRadius: 3,
       padding:    '14px 18px',
       color:      'var(--text-3)',
-      fontFamily: 'monospace',
+      fontFamily: 'var(--font-sans)',
       fontSize:   '11px',
       minHeight:  60,
       display:    'flex',
@@ -186,7 +186,7 @@ const Dashboard: React.FC = () => {
                 style={{
                   fontSize: '11px',
                   color: 'var(--text-3)',
-                  fontFamily: 'monospace',
+                  fontFamily: 'var(--font-sans)',
                   marginRight: 8,
                 }}
                 title={new Date(lastRefreshedAt).toISOString()}

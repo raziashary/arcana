@@ -20,7 +20,7 @@ export default function HooksInfoModal({ onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
           <div>
-            <div className="font-mono text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+            <div className="font-sans text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
               What are Hooks?
             </div>
           </div>
@@ -173,7 +173,7 @@ export default function HooksInfoModal({ onClose }: Props) {
               Example: Notify on Rust File Write
             </h3>
             <div
-              className="p-3 rounded mt-2 font-mono text-xs"
+              className="p-3 rounded mt-2 font-sans text-xs"
               style={{ background: 'var(--bg-2)', border: '1px solid var(--border)' }}
             >
               <div><strong>Name:</strong> notify-rust-write</div>
@@ -209,7 +209,7 @@ export default function HooksInfoModal({ onClose }: Props) {
         <div className="flex items-center justify-end px-5 py-3" style={{ borderTop: '1px solid var(--border)' }}>
           <button
             onClick={onClose}
-            className="px-3 py-1.5 rounded text-xs font-mono"
+            className="px-3 py-1.5 rounded text-xs font-sans"
             style={{ background: 'var(--accent)', color: 'var(--bg-app)' }}
           >
             Got it

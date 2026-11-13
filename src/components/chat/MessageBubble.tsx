@@ -103,7 +103,7 @@ export default function MessageBubble({ message, isLast, streaming }: Props) {
       {/* Cost/token badge for completed assistant messages */}
       {isAssistant && !streaming && message.tokensOut > 0 && (
         <div
-          className="font-mono"
+          className="font-sans"
           style={{ fontSize: '10px', color: 'var(--text-4)' }}
         >
           ↑{message.tokensIn.toLocaleString()} ↓{message.tokensOut.toLocaleString()} tokens

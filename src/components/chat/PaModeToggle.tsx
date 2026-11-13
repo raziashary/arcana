@@ -22,7 +22,7 @@ export default function PaModeToggle() {
         <button
           key={m.value}
           onClick={() => setPAMode(m.value as PAMode)}
-          className="font-mono flex items-center gap-1 transition-colors rounded"
+          className="font-sans flex items-center gap-1 transition-colors rounded"
           style={{
             fontSize:    '10px',
             padding:     '2px 7px',

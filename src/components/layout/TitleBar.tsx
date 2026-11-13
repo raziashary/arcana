@@ -42,7 +42,7 @@ export default function TitleBar() {
 
       {/* App title */}
       <span
-        className="font-mono text-xs"
+        className="font-sans text-xs"
         style={{ color: 'var(--text-dim)', letterSpacing: '0.05em' }}
       >
         Arcana — v1.0.0

@@ -107,7 +107,7 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
   if (workers.length === 0) {
     return (
       <div
-        className="shrink-0 border-b font-mono"
+        className="shrink-0 border-b font-sans"
         style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-1)', padding: '8px 12px' }}
       >
         <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Loading agents…</span>
@@ -117,7 +117,7 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
 
   return (
     <div
-      className="shrink-0 border-b font-mono"
+      className="shrink-0 border-b font-sans"
       style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-1)' }}
     >
       {workers.map(worker => {
@@ -199,7 +199,7 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
               {hasModeData && (
                 <span style={{
                   fontSize: '8px', color: modeBadge.color,
-                  fontWeight: 700, fontFamily: 'monospace',
+                  fontWeight: 700, fontFamily: 'var(--font-sans)',
                   letterSpacing: '0.04em', opacity: 0.9,
                 }}>
                   {modeBadge.label}
@@ -248,7 +248,7 @@ function TaskCard({
 
   return (
     <div
-      className="font-mono text-xs cursor-pointer anim-fade-in"
+      className="font-sans text-xs cursor-pointer anim-fade-in"
       style={{
         background:   'var(--bg-card)',
         border:       '1px solid var(--border-1)',
@@ -289,7 +289,7 @@ function TaskCard({
                 <span style={{
                   fontSize: 8, padding: '1px 4px', borderRadius: 2,
                   background: 'rgba(195,166,255,0.12)', color: 'var(--purple)',
-                  border: '1px solid rgba(195,166,255,0.25)', fontFamily: 'monospace',
+                  border: '1px solid rgba(195,166,255,0.25)', fontFamily: 'var(--font-sans)',
                 }}>
                   epic #{task.epic_id}
                 </span>
@@ -298,7 +298,7 @@ function TaskCard({
                 <span style={{
                   fontSize: 8, padding: '1px 4px', borderRadius: 2,
                   background: 'rgba(130,170,255,0.12)', color: 'var(--accent)',
-                  border: '1px solid rgba(130,170,255,0.25)', fontFamily: 'monospace',
+                  border: '1px solid rgba(130,170,255,0.25)', fontFamily: 'var(--font-sans)',
                 }}>
                   {task.phase}
                 </span>
@@ -307,7 +307,7 @@ function TaskCard({
                 <span style={{
                   fontSize: 8, padding: '1px 4px', borderRadius: 2,
                   background: 'rgba(245,158,11,0.12)', color: 'var(--warning)',
-                  border: '1px solid rgba(245,158,11,0.25)', fontFamily: 'monospace',
+                  border: '1px solid rgba(245,158,11,0.25)', fontFamily: 'var(--font-sans)',
                 }}>
                   blocked
                 </span>
@@ -446,7 +446,7 @@ function KanbanColumn({
       {/* Tasks */}
       <div style={{ flex: 1, overflowY: 'auto' }}>
         {tasks.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--text-4)', fontSize: '10px', fontFamily: 'monospace' }}>
+          <div style={{ textAlign: 'center', padding: '16px 0', color: 'var(--text-4)', fontSize: '10px', fontFamily: 'var(--font-sans)' }}>
             empty
           </div>
         ) : (
@@ -547,10 +547,10 @@ function MetricsRow({
             padding:      '8px 10px',
           }}
         >
-          <div style={{ fontFamily: 'monospace', fontSize: '9px', color: 'var(--text-4)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+          <div style={{ fontFamily: 'var(--font-sans)', fontSize: '9px', color: 'var(--text-4)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
             {m.label}
           </div>
-          <div style={{ fontFamily: 'monospace', fontSize: '16px', color: m.color, marginTop: 2 }}>
+          <div style={{ fontFamily: 'var(--font-sans)', fontSize: '16px', color: m.color, marginTop: 2 }}>
             {m.value}
           </div>
         </div>
@@ -636,7 +636,7 @@ function WorkerRequestsWidget({
               color: 'var(--danger)',
               padding: '1px 6px',
               borderRadius: 4,
-              fontFamily: 'monospace',
+              fontFamily: 'var(--font-sans)',
             }}
           >
             {requests.length}
@@ -687,14 +687,14 @@ function WorkerRequestsWidget({
                   onClick={() => setOpenRequestId(isOpen ? null : req.id)}
                 >
                   <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <span style={{ color: typeColor(req.request_type), fontWeight: 700, fontFamily: 'monospace', fontSize: '9px' }}>
+                    <span style={{ color: typeColor(req.request_type), fontWeight: 700, fontFamily: 'var(--font-sans)', fontSize: '9px' }}>
                       {typeLabel(req.request_type).toUpperCase()}
                     </span>
                     <span style={{ color: 'var(--text-2)' }}>
                       {req.worker_slug}
                     </span>
                     {req.task_id != null && (
-                      <span style={{ color: 'var(--text-4)', fontFamily: 'monospace', fontSize: '9px' }}>
+                      <span style={{ color: 'var(--text-4)', fontFamily: 'var(--font-sans)', fontSize: '9px' }}>
                         #{req.task_id}
                       </span>
                     )}
@@ -724,7 +724,7 @@ function WorkerRequestsWidget({
                         when the row is open. Falls back to the raw string
                         when parsing fails so we never hide data from the user. */}
                     <div
-                      className="font-mono"
+                      className="font-sans"
                       style={{
                         color:        'var(--text-3)',
                         fontSize:     '10px',
@@ -756,7 +756,7 @@ function WorkerRequestsWidget({
                           padding: '2px 8px',
                           color: 'var(--aqua)',
                           fontSize: '9px',
-                          fontFamily: 'monospace',
+                          fontFamily: 'var(--font-sans)',
                           cursor: pendingId === req.id ? 'wait' : 'pointer',
                           opacity: pendingId === req.id ? 0.6 : 1,
                         }}
@@ -773,7 +773,7 @@ function WorkerRequestsWidget({
                           padding: '2px 8px',
                           color: 'var(--danger)',
                           fontSize: '9px',
-                          fontFamily: 'monospace',
+                          fontFamily: 'var(--font-sans)',
                           cursor: pendingId === req.id ? 'wait' : 'pointer',
                           opacity: pendingId === req.id ? 0.6 : 1,
                         }}
@@ -787,7 +787,7 @@ function WorkerRequestsWidget({
                         context they need to retry. */}
                     {rowError?.id === req.id && (
                       <div
-                        className="font-mono"
+                        className="font-sans"
                         style={{
                           color:      'var(--danger)',
                           fontSize:   '10px',
@@ -921,7 +921,7 @@ function ObservabilityTabs(props: {
           padding:    '6px 12px',
           background: 'var(--bg-surface)',
           borderBottom: '1px solid var(--border-1)',
-          fontFamily: 'var(--font-mono)',
+          fontFamily: 'var(--font-sans)',
           fontSize:   '10px',
           overflowX:  'auto',
         }}
@@ -1131,7 +1131,7 @@ export default function ArcanaTab() {
 <div className="flex gap-2">
           <div className="flex items-center gap-2">
             {lastRefreshed && (
-              <span style={{ fontSize: '9px', color: 'var(--text-4)', fontFamily: 'monospace' }}>
+              <span style={{ fontSize: '9px', color: 'var(--text-4)', fontFamily: 'var(--font-sans)' }}>
                 ↺ {formatLastRefreshed(lastRefreshed)}
               </span>
             )}
@@ -1205,7 +1205,7 @@ export default function ArcanaTab() {
               style={{
                 fontSize:   '10px',
                 color:      'var(--danger)',
-                fontFamily: 'monospace',
+                fontFamily: 'var(--font-sans)',
                 maxWidth:   320,
                 overflow:   'hidden',
                 textOverflow: 'ellipsis',
@@ -1253,7 +1253,7 @@ export default function ArcanaTab() {
               padding:      '3px 8px',
               color:        clearConfirm ? 'var(--danger)' : 'var(--text-2)',
               fontSize:     '10px',
-              fontFamily:   'monospace',
+              fontFamily: 'var(--font-sans)',
               cursor:       clearBusy ? 'wait' : 'pointer',
               opacity:      clearBusy ? 0.6 : 1,
             }}

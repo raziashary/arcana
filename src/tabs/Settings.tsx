@@ -64,7 +64,7 @@ export default function SettingsTab() {
         <SectionHeader title="Providers" />
 
         {store.isLoadingProviders ? (
-          <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+          <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
             Loading…
           </div>
         ) : (
@@ -183,21 +183,21 @@ export function WorkspaceEgressConsentCard() {
 
   return (
     <div className="rounded-sm p-4 space-y-3" style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}>
-      <div className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>Workspace egress consent</div>
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+      <div className="font-sans text-xs" style={{ color: 'var(--text-1)' }}>Workspace egress consent</div>
+      <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
         Allow Arcana-mediated requests to send workspace content to a provider or the configured GitHub MCP connector. Consent is saved per workspace and destination and can be revoked here. Shell commands use separate operating-system network controls.
       </div>
       {!ws.workspaceDir ? (
-        <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>Select a workspace to manage consent.</div>
+        <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>Select a workspace to manage consent.</div>
       ) : <>
       {settings.providers.filter(provider => provider.has_key).map(provider => (
         <div key={provider.id} className="flex items-center justify-between gap-3">
-          <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>{provider.name}</span>
+          <span className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>{provider.name}</span>
           <button
             onClick={() => change(provider.id, !grants[provider.id])}
             disabled={busy === provider.id}
             aria-label={`${grants[provider.id] ? 'Revoke consent for' : 'Allow egress for'} ${provider.name}`}
-            className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+            className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
             style={{ background: grants[provider.id] ? 'transparent' : 'var(--bg-2)', border: '1px solid var(--border-1)', color: grants[provider.id] ? 'var(--danger)' : 'var(--accent)' }}
           >
             {busy === provider.id ? 'Saving…' : grants[provider.id] ? 'Revoke consent' : 'Allow egress'}
@@ -205,12 +205,12 @@ export function WorkspaceEgressConsentCard() {
         </div>
       ))}
       <div className="flex items-center justify-between gap-3">
-        <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>GitHub MCP connector</span>
+        <span className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>GitHub MCP connector</span>
         <button
           onClick={() => change('mcp:github-mcp', !grants['mcp:github-mcp'])}
           disabled={busy === 'mcp:github-mcp'}
           aria-label={`${grants['mcp:github-mcp'] ? 'Revoke consent for' : 'Allow egress for'} GitHub MCP connector`}
-          className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+          className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
           style={{ background: grants['mcp:github-mcp'] ? 'transparent' : 'var(--bg-2)', border: '1px solid var(--border-1)', color: grants['mcp:github-mcp'] ? 'var(--danger)' : 'var(--accent)' }}
         >
           {busy === 'mcp:github-mcp' ? 'Saving…' : grants['mcp:github-mcp'] ? 'Revoke consent' : 'Allow egress'}
@@ -220,12 +220,12 @@ export function WorkspaceEgressConsentCard() {
         const destination = `hook:${hook.id}`
         return (
           <div key={destination} className="flex items-center justify-between gap-3">
-            <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>HTTP hook: {hook.name}</span>
+            <span className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>HTTP hook: {hook.name}</span>
             <button
               onClick={() => change(destination, !grants[destination])}
               disabled={busy === destination}
               aria-label={`${grants[destination] ? 'Revoke consent for' : 'Allow egress for'} HTTP hook ${hook.name}`}
-              className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+              className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
               style={{ background: grants[destination] ? 'transparent' : 'var(--bg-2)', border: '1px solid var(--border-1)', color: grants[destination] ? 'var(--danger)' : 'var(--accent)' }}
             >
               {busy === destination ? 'Saving…' : grants[destination] ? 'Revoke consent' : 'Allow egress'}
@@ -234,7 +234,7 @@ export function WorkspaceEgressConsentCard() {
         )
       })}
       </>}
-      {error && <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</div>}
+      {error && <div className="font-sans text-xs" style={{ color: 'var(--danger)' }}>{error}</div>}
     </div>
   )
 }
@@ -261,12 +261,12 @@ function WorkspaceCard() {
             className="w-1.5 h-1.5 rounded-full shrink-0"
             style={{ background: ws.workspaceDir ? 'var(--aqua)' : 'var(--border-primary)' }}
           />
-          <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
+          <span className="font-sans text-xs" style={{ color: 'var(--text-1)' }}>
             Workspace Folder
           </span>
           {ws.workspaceDir && (
             <span
-              className="font-mono px-1.5 py-0.5"
+              className="font-sans px-1.5 py-0.5"
               style={{
                 fontSize: '10px', background: 'var(--accent-muted)',
                 border: '1px solid var(--accent-border)', color: 'var(--accent)', borderRadius: '2px',
@@ -280,7 +280,7 @@ function WorkspaceCard() {
           <button
             onClick={() => ws.pickWorkspaceDir()}
             disabled={ws.isSaving}
-            className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1"
+            className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1"
             style={{ background: 'var(--bg-2)', border: '1px solid var(--border-1)', color: 'var(--text-1)' }}
           >
             <FolderOpen size={11} />
@@ -289,7 +289,7 @@ function WorkspaceCard() {
           {ws.workspaceDir && (
             <button
               onClick={() => ws.clearWorkspaceDir()}
-              className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer"
+              className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer"
               style={{ background: 'transparent', border: '1px solid color-mix(in srgb, var(--danger) 19%, transparent)', color: 'var(--danger)' }}
               aria-label="Clear workspace"
             >
@@ -301,26 +301,26 @@ function WorkspaceCard() {
 
       {displayPath ? (
         <div
-          className="font-mono text-xs px-2 py-1.5 rounded-sm truncate"
+          className="font-sans text-xs px-2 py-1.5 rounded-sm truncate"
           style={{ background: 'var(--bg-2)', color: 'var(--text-2)', border: '1px solid var(--border-1)' }}
           title={ws.workspaceDir}
         >
           {displayPath}
         </div>
       ) : (
-        <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+        <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
           No workspace selected. All agents will use their default directory.
         </div>
       )}
 
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+      <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
         All agents (PA, Supervisor, Workers) will operate inside this folder.
         Use <span style={{ color: 'var(--accent)' }}>@path/to/file</span> in chat
         to reference files relative to this workspace.
       </div>
 
       {ws.error && (
-        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
+        <div className="font-sans text-xs" style={{ color: 'var(--danger)' }}>
           {ws.error}
         </div>
       )}
@@ -380,14 +380,14 @@ export function PythonFallbackCard() {
       style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
     >
       <div className="flex items-center justify-between gap-3">
-        <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
+        <span className="font-sans text-xs" style={{ color: 'var(--text-1)' }}>
           Python fallback (Windows)
         </span>
         <div className="flex gap-2">
           <button
             onClick={choose}
             disabled={busy}
-            className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1"
+            className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1"
             style={{ background: 'var(--bg-2)', border: '1px solid var(--border-1)', color: 'var(--text-1)' }}
           >
             <FolderOpen size={11} />
@@ -397,7 +397,7 @@ export function PythonFallbackCard() {
             <button
               onClick={clear}
               disabled={busy}
-              className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+              className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
               style={{ background: 'transparent', border: '1px solid color-mix(in srgb, var(--danger) 19%, transparent)', color: 'var(--danger)' }}
               aria-label="Clear Python fallback"
             >
@@ -407,18 +407,18 @@ export function PythonFallbackCard() {
         </div>
       </div>
       <div
-        className="font-mono text-xs px-2 py-1.5 rounded-sm truncate"
+        className="font-sans text-xs px-2 py-1.5 rounded-sm truncate"
         style={{ background: 'var(--bg-2)', color: 'var(--text-2)', border: '1px solid var(--border-1)' }}
         title={path ?? undefined}
       >
         {path ?? 'No fallback selected'}
       </div>
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+      <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
         Arcana stages its preferred signed Python first. This signed interpreter is
         used only if staging fails and only when it is inside your user-owned
         Local AppData Python installation.
       </div>
-      {error && <div role="alert" className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</div>}
+      {error && <div role="alert" className="font-sans text-xs" style={{ color: 'var(--danger)' }}>{error}</div>}
     </div>
   )
 }
@@ -478,11 +478,11 @@ function VaultBackendCard() {
     >
       {backend && (
         <>
-          <div className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
+          <div className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>
             {backend.label}
           </div>
           <div
-            className="font-mono text-xs"
+            className="font-sans text-xs"
             style={{ color: backend.is_os_keychain ? 'var(--text-3)' : 'var(--warning)' }}
           >
             {backend.note}
@@ -492,16 +492,16 @@ function VaultBackendCard() {
 
       {orphans.length > 0 && (
         <div className="space-y-2">
-          <div className="font-mono text-xs" style={{ color: 'var(--warning)' }}>
+          <div className="font-sans text-xs" style={{ color: 'var(--warning)' }}>
             {orphans.length} key{orphans.length === 1 ? '' : 's'} stored for a provider Arcana
             no longer supports. These sit in your credential store until removed.
           </div>
           {orphans.map(o => (
             <div key={o.key} className="flex items-center gap-3">
-              <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>{o.label}</span>
+              <span className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>{o.label}</span>
               <button
                 onClick={() => handleDelete(o.key)}
-                className="font-mono text-xs px-2 py-0.5 rounded-sm"
+                className="font-sans text-xs px-2 py-0.5 rounded-sm"
                 style={{ background: 'var(--bg-2)', border: '1px solid var(--border-2)', color: 'var(--text-2)' }}
               >
                 Delete
@@ -512,7 +512,7 @@ function VaultBackendCard() {
       )}
 
       {error && (
-        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</div>
+        <div className="font-sans text-xs" style={{ color: 'var(--danger)' }}>{error}</div>
       )}
     </div>
   )
@@ -572,14 +572,14 @@ function DailyCapCard() {
       className="rounded-sm p-4 space-y-4"
       style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
     >
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+      <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
         Stops every provider call once the day&rsquo;s spend reaches this figure, and pauses
         the fleet. Spend is counted across restarts, so closing the app does not reset it.
         <span style={{ color: 'var(--text-2)' }}> Off by default.</span>
       </div>
 
       <div className="flex items-center gap-4">
-        <label className="flex items-center gap-2 font-mono" style={labelStyle}>
+        <label className="flex items-center gap-2 font-sans" style={labelStyle}>
           <input
             type="checkbox"
             checked={enabled}
@@ -589,7 +589,7 @@ function DailyCapCard() {
         </label>
 
         <div>
-          <div className="font-mono mb-1" style={labelStyle}>LIMIT (USD)</div>
+          <div className="font-sans mb-1" style={labelStyle}>LIMIT (USD)</div>
           <input
             type="number" min={0.01} step={0.01}
             value={limit}
@@ -598,7 +598,7 @@ function DailyCapCard() {
             style={{
               background: 'var(--bg-2)', border: '1px solid var(--border-2)',
               color: 'var(--text-1)', borderRadius: '2px', padding: '3px 6px',
-              fontFamily: 'monospace', fontSize: '11px', width: 90,
+              fontFamily: 'var(--font-sans)', fontSize: '11px', width: 90,
               opacity: enabled ? 1 : 0.5,
             }}
             title="Daily spend ceiling in USD"
@@ -610,13 +610,13 @@ function DailyCapCard() {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="font-mono text-xs px-3 py-1 rounded-sm"
+          className="font-sans text-xs px-3 py-1 rounded-sm"
           style={{ background: 'var(--accent)', color: 'var(--bg-1)' }}
         >
           {saving ? 'Saving…' : 'Save ceiling'}
         </button>
-        {saved && <span className="font-mono text-xs" style={{ color: 'var(--accent)' }}>Saved</span>}
-        {error && <span className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</span>}
+        {saved && <span className="font-sans text-xs" style={{ color: 'var(--accent)' }}>Saved</span>}
+        {error && <span className="font-sans text-xs" style={{ color: 'var(--danger)' }}>{error}</span>}
       </div>
     </div>
   )
@@ -669,7 +669,7 @@ function DefaultWorkerBudgetCard() {
   const inputStyle = {
     background: 'var(--bg-2)', border: '1px solid var(--border-2)',
     color: 'var(--text-1)', borderRadius: '2px', padding: '3px 6px',
-    fontFamily: 'monospace', fontSize: '11px', width: 90,
+    fontFamily: 'var(--font-sans)', fontSize: '11px', width: 90,
   } as const
 
   return (
@@ -677,7 +677,7 @@ function DefaultWorkerBudgetCard() {
       className="rounded-sm p-4 space-y-4"
       style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
     >
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+      <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
         Applied when Supervisor assigns a task without an explicit budget.
         Stored in <span style={{ color: 'var(--accent)' }}>runtime_config.json</span> — available to the Rust engine.
       </div>
@@ -685,7 +685,7 @@ function DefaultWorkerBudgetCard() {
       <div className="grid grid-cols-2 gap-4">
         {/* Max Tokens */}
         <div>
-          <div className="font-mono mb-1" style={labelStyle}>MAX TOKENS PER TASK</div>
+          <div className="font-sans mb-1" style={labelStyle}>MAX TOKENS PER TASK</div>
           <input
             type="number" min={1000} max={1_000_000} step={1000}
             value={tokens}
@@ -693,14 +693,14 @@ function DefaultWorkerBudgetCard() {
             style={inputStyle}
             title="Max tokens per task"
           />
-          <div className="font-mono mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
+          <div className="font-sans mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
             ceiling: 1,000,000
           </div>
         </div>
 
         {/* Max USD */}
         <div>
-          <div className="font-mono mb-1" style={labelStyle}>MAX USD PER TASK</div>
+          <div className="font-sans mb-1" style={labelStyle}>MAX USD PER TASK</div>
           <input
             type="number" min={0.01} max={100} step={0.01}
             value={usd}
@@ -708,14 +708,14 @@ function DefaultWorkerBudgetCard() {
             style={inputStyle}
             title="Max USD per task"
           />
-          <div className="font-mono mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
+          <div className="font-sans mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
             ceiling: $100.00
           </div>
         </div>
 
         {/* Max Turns */}
         <div>
-          <div className="font-mono mb-1" style={labelStyle}>MAX TURNS</div>
+          <div className="font-sans mb-1" style={labelStyle}>MAX TURNS</div>
           <input
             type="number" min={1} max={100} step={1}
             value={turns}
@@ -723,14 +723,14 @@ function DefaultWorkerBudgetCard() {
             style={inputStyle}
             title="Max agent turns per task"
           />
-          <div className="font-mono mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
+          <div className="font-sans mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
             ceiling: 100
           </div>
         </div>
 
         {/* Warn % */}
         <div>
-          <div className="font-mono mb-1" style={labelStyle}>
+          <div className="font-sans mb-1" style={labelStyle}>
             WARN AT &nbsp;<span style={{ color: 'var(--warning)' }}>{warnPct}%</span>
           </div>
           <input
@@ -744,14 +744,14 @@ function DefaultWorkerBudgetCard() {
       </div>
 
       {error && (
-        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</div>
+        <div className="font-sans text-xs" style={{ color: 'var(--danger)' }}>{error}</div>
       )}
 
       <div className="flex justify-end">
         <button
           onClick={handleSave}
           disabled={saving}
-          className="font-mono text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
+          className="font-sans text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
           style={{ background: 'var(--accent-muted)', border: '1px solid var(--accent-border)', color: 'var(--accent)' }}
         >
           {saving ? 'Saving…' : saved ? 'Saved!' : <><Save size={11} /> Save</>}
@@ -825,12 +825,12 @@ function GitHubPATCard() {
             className="w-1.5 h-1.5 rounded-full shrink-0"
             style={{ background: hasPat ? 'var(--aqua)' : 'var(--border-primary)' }}
           />
-          <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
+          <span className="font-sans text-xs" style={{ color: 'var(--text-1)' }}>
             GitHub Personal Access Token
           </span>
           {hasPat && (
             <span
-              className="font-mono px-1.5 py-0.5"
+              className="font-sans px-1.5 py-0.5"
               style={{
                 fontSize: '10px', background: 'var(--accent-muted)',
                 border: '1px solid var(--accent-border)', color: 'var(--accent)', borderRadius: '2px',
@@ -843,7 +843,7 @@ function GitHubPATCard() {
         {hasPat && (
           <button
             onClick={handleRemove}
-            className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer"
+            className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer"
             style={{ background: 'transparent', border: '1px solid color-mix(in srgb, var(--danger) 19%, transparent)', color: 'var(--danger)' }}
           >
             Remove
@@ -851,12 +851,12 @@ function GitHubPATCard() {
         )}
       </div>
 
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+      <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
         Required for workers to create pull requests. Stored securely in your OS keychain.
       </div>
 
       {status && (
-        <div className="font-mono text-xs" style={{ color: status.startsWith('Error') ? 'var(--danger)' : 'var(--accent)' }}>
+        <div className="font-sans text-xs" style={{ color: status.startsWith('Error') ? 'var(--danger)' : 'var(--accent)' }}>
           {status}
         </div>
       )}
@@ -870,7 +870,7 @@ function GitHubPATCard() {
               value={pat}
               onChange={e => setPat(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSave()}
-              className="flex-1 font-mono text-xs px-3 py-1.5 rounded-sm"
+              className="flex-1 font-sans text-xs px-3 py-1.5 rounded-sm"
               style={{
                 background: 'var(--bg-surface)', border: '1px solid var(--border-2)',
                 color: 'var(--text-1)', paddingRight: '32px',
@@ -887,7 +887,7 @@ function GitHubPATCard() {
           <button
             onClick={handleSave}
             disabled={saving || !pat.trim()}
-            className="font-mono text-xs px-3 py-1.5 rounded-sm cursor-pointer disabled:opacity-40"
+            className="font-sans text-xs px-3 py-1.5 rounded-sm cursor-pointer disabled:opacity-40"
             style={{ background: 'var(--accent-muted)', border: '1px solid var(--accent-border)', color: 'var(--accent)' }}
           >
             {saving ? 'Saving…' : 'Save'}
@@ -949,10 +949,10 @@ function GitHubMCPCard() {
             className="w-1.5 h-1.5 rounded-full shrink-0"
             style={{ background: cfg.enabled ? 'var(--aqua)' : 'var(--border-primary)' }}
           />
-          <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>GitHub MCP Server</span>
+          <span className="font-sans text-xs" style={{ color: 'var(--text-1)' }}>GitHub MCP Server</span>
           {cfg.enabled && (
             <span
-              className="font-mono px-1.5 py-0.5"
+              className="font-sans px-1.5 py-0.5"
               style={{ fontSize: '10px', background: 'var(--accent-muted)', border: '1px solid var(--accent-border)', color: 'var(--accent)', borderRadius: '2px' }}
             >
               ENABLED
@@ -961,7 +961,7 @@ function GitHubMCPCard() {
         </div>
         <button
           onClick={() => setCfg(c => ({ ...c, enabled: !c.enabled }))}
-          className="font-mono text-xs px-3 py-1 rounded-sm cursor-pointer"
+          className="font-sans text-xs px-3 py-1 rounded-sm cursor-pointer"
           style={{
             background: cfg.enabled ? 'var(--accent-muted)' : 'var(--bg-surface)',
             border: `1px solid ${cfg.enabled ? 'var(--accent-border)' : 'var(--border-2)'}`,
@@ -972,44 +972,44 @@ function GitHubMCPCard() {
         </button>
       </div>
 
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+      <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
         Enables Arcana to discover and call tools from this Streamable HTTP endpoint. Calls require
         this workspace’s GitHub MCP egress consent and the active Network permission policy. Remote
         tool metadata and results are treated as untrusted input. The stdio marker is not supported.
       </div>
 
       <div className="space-y-2">
-        <div className="font-mono text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Streamable HTTP endpoint</div>
+        <div className="font-sans text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Streamable HTTP endpoint</div>
         <input
           type="url"
           placeholder="https://api.githubcopilot.com/mcp/"
           value={cfg.server_url ?? ''}
           onChange={e => setCfg(c => ({ ...c, server_url: e.target.value || null }))}
-          className="w-full font-mono text-xs px-3 py-1.5 rounded-sm"
+          className="w-full font-sans text-xs px-3 py-1.5 rounded-sm"
           style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-2)', color: 'var(--text-1)' }}
         />
       </div>
 
       <div className="space-y-2">
-        <div className="font-mono text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>GitHub Org / Username</div>
+        <div className="font-sans text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>GitHub Org / Username</div>
         <input
           type="text"
           placeholder="Organization (leave empty for all accessible repos)"
           value={orgInput}
           onChange={e => setOrgInput(e.target.value)}
-          className="w-full font-mono text-xs px-3 py-1.5 rounded-sm"
+          className="w-full font-sans text-xs px-3 py-1.5 rounded-sm"
           style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-2)', color: 'var(--text-1)' }}
         />
       </div>
 
       <div className="space-y-2">
-        <div className="font-mono text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Allowed Repos (one per line, empty = all)</div>
+        <div className="font-sans text-xs" style={{ color: 'var(--text-3)', fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Allowed Repos (one per line, empty = all)</div>
         <textarea
           placeholder="arcana&#10;my-other-repo"
           value={repoInput}
           onChange={e => setRepoInput(e.target.value)}
           rows={3}
-          className="w-full font-mono text-xs px-3 py-1.5 rounded-sm resize-none"
+          className="w-full font-sans text-xs px-3 py-1.5 rounded-sm resize-none"
           style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-2)', color: 'var(--text-1)' }}
         />
       </div>
@@ -1017,7 +1017,7 @@ function GitHubMCPCard() {
       <button
         onClick={handleSave}
         disabled={saving}
-        className="font-mono text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
+        className="font-sans text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
         style={{ background: 'var(--accent-muted)', border: '1px solid var(--accent-border)', color: 'var(--accent)' }}
       >
         {saving ? 'Saving…' : saved ? 'Saved!' : <><Save size={11} /> Save Config</>}
@@ -1082,7 +1082,7 @@ function BrowserTestingCard() {
           style={{ background: 'rgba(255,203,139,0.08)', border: '1px solid rgba(255,203,139,0.2)' }}
         >
           <AlertTriangle size={13} style={{ color: 'var(--warning)', flexShrink: 0 }} />
-          <span className="font-mono text-xs" style={{ color: 'var(--warning)' }}>
+          <span className="font-sans text-xs" style={{ color: 'var(--warning)' }}>
             Browser testing requires Playwright. Click Install to set it up.
           </span>
         </div>
@@ -1092,21 +1092,21 @@ function BrowserTestingCard() {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Globe size={13} style={{ color: 'var(--text-3)' }} />
-          <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
+          <span className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>
             Playwright
           </span>
           {avail ? (
             avail.playwright_installed ? (
-              <span className="font-mono text-xs" style={{ color: 'var(--aqua)' }}>
+              <span className="font-sans text-xs" style={{ color: 'var(--aqua)' }}>
                 ✓ {avail.playwright_version ?? 'installed'}
               </span>
             ) : (
-              <span className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
+              <span className="font-sans text-xs" style={{ color: 'var(--danger)' }}>
                 not installed
               </span>
             )
           ) : (
-            <span className="font-mono text-xs" style={{ color: 'var(--text-4)' }}>
+            <span className="font-sans text-xs" style={{ color: 'var(--text-4)' }}>
               {loading ? 'checking…' : '—'}
             </span>
           )}
@@ -1124,7 +1124,7 @@ function BrowserTestingCard() {
             <button
               onClick={() => void handleInstall()}
               disabled={installing || !avail?.npx_available}
-              className="font-mono px-2 py-1 rounded-sm"
+              className="font-sans px-2 py-1 rounded-sm"
               style={{
                 fontSize: '10px',
                 background: 'rgba(127,219,255,0.08)',
@@ -1142,7 +1142,7 @@ function BrowserTestingCard() {
 
       {/* Install error */}
       {installErr && (
-        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
+        <div className="font-sans text-xs" style={{ color: 'var(--danger)' }}>
           {installErr}
         </div>
       )}
@@ -1159,13 +1159,13 @@ function BrowserTestingCard() {
                   display: 'inline-block',
                 }}
               />
-              <span className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+              <span className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
                 {b.name}
               </span>
               {!b.installed && (
                 <button
                   onClick={() => invoke('install_playwright_browsers', { browser: b.name })}
-                  className="font-mono"
+                  className="font-sans"
                   style={{
                     fontSize: '9px', padding: '1px 5px', borderRadius: 2,
                     background: 'var(--accent-muted)', border: '1px solid var(--border-1)',
@@ -1182,7 +1182,7 @@ function BrowserTestingCard() {
 
       {/* Staging URL */}
       <div className="space-y-1">
-        <label className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+        <label className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
           Staging URL
         </label>
         <input
@@ -1190,7 +1190,7 @@ function BrowserTestingCard() {
           value={stagingUrl}
           onChange={e => setStagingUrl(e.target.value)}
           placeholder="http://localhost:3000"
-          className="w-full font-mono rounded-sm px-2 py-1"
+          className="w-full font-sans rounded-sm px-2 py-1"
           style={{
             fontSize: '11px',
             background: 'var(--bg-code)',
@@ -1199,14 +1199,14 @@ function BrowserTestingCard() {
             outline: 'none',
           }}
         />
-        <div className="font-mono text-xs" style={{ color: 'var(--text-4)' }}>
+        <div className="font-sans text-xs" style={{ color: 'var(--text-4)' }}>
           QC Agent navigates here for visual regression screenshots on high-risk frontend PRs.
         </div>
       </div>
 
       {/* Enable toggle */}
       <div className="flex items-center justify-between">
-        <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
+        <span className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>
           Enable browser testing for frontend PRs
         </span>
         <button
@@ -1242,7 +1242,7 @@ function BrowserTestingCard() {
 function SectionHeader({ title }: { title: string }) {
   return (
     <div
-      className="font-mono text-xs mb-2"
+      className="font-sans text-xs mb-2"
       style={{
         color:         'var(--text-3)',
         letterSpacing: '0.1em',
@@ -1304,12 +1304,12 @@ function SystemPromptEditor() {
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-xs" style={{ color: 'var(--text-2)' }}>
+          <span className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>
             {isUsingDefault ? 'Using default prompt' : 'Custom prompt active'}
           </span>
           {!isUsingDefault && (
             <span
-              className="font-mono px-1.5 py-0.5"
+              className="font-sans px-1.5 py-0.5"
               style={{
                 fontSize:   '10px',
                 background: 'var(--accent-muted)',
@@ -1326,7 +1326,7 @@ function SystemPromptEditor() {
           {!isUsingDefault && (
             <button
               onClick={handleClear}
-              className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer"
+              className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer"
               style={{
                 background: 'transparent',
                 border:     '1px solid var(--border-2)',
@@ -1340,7 +1340,7 @@ function SystemPromptEditor() {
             onClick={handleReset}
             disabled={!hasChanges}
             title="Revert changes"
-            className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+            className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
             style={{
               background: 'var(--bg-surface)',
               border:     '1px solid var(--border-2)',
@@ -1352,7 +1352,7 @@ function SystemPromptEditor() {
           <button
             onClick={handleSave}
             disabled={!hasChanges || saving}
-            className="font-mono text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
+            className="font-sans text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
             style={{
               background: 'var(--accent-muted)',
               border:     '1px solid var(--accent-border)',
@@ -1368,7 +1368,7 @@ function SystemPromptEditor() {
         value={draft}
         onChange={e => setDraft(e.target.value)}
         rows={12}
-        className="w-full font-mono text-xs p-3 rounded-sm resize-y"
+        className="w-full font-sans text-xs p-3 rounded-sm resize-y"
         style={{
           background: 'var(--bg-surface)',
           border:     '1px solid var(--border-2)',
@@ -1378,7 +1378,7 @@ function SystemPromptEditor() {
         placeholder="Enter custom system prompt..."
       />
 
-      <div className="font-mono text-xs" style={{ color: 'var(--text-3)' }}>
+      <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
         The system prompt defines how the AI behaves. Changes take effect on the next message.
         CLAUDE.md files in your home or project directory will still be appended.
       </div>
@@ -1478,12 +1478,12 @@ function ProviderCard({ providerId }: { providerId: string }) {
             className="w-1.5 h-1.5 rounded-full shrink-0"
             style={{ background: hasKey ? 'var(--aqua)' : 'var(--border-primary)' }}
           />
-          <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
+          <span className="font-sans text-xs" style={{ color: 'var(--text-1)' }}>
             {displayName}
           </span>
           {isActive && (
             <span
-              className="font-mono px-1.5 py-0.5"
+              className="font-sans px-1.5 py-0.5"
               style={{
                 fontSize:   '10px',
                 background: 'var(--accent-muted)',
@@ -1502,7 +1502,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
             <button
               onClick={handleTest}
               disabled={testing}
-              className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
+              className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
               style={{
                 background: 'var(--bg-surface)',
                 border:     '1px solid var(--border-2)',
@@ -1513,7 +1513,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
             </button>
             <button
               onClick={handleDeleteKey}
-              className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer"
+              className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer"
               style={{
                 background: 'transparent',
                 border:     '1px solid color-mix(in srgb, var(--danger) 19%, transparent)',
@@ -1529,7 +1529,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
       {/* Test result */}
       {testResult && (
         <div
-          className="flex items-center gap-1.5 font-mono text-xs"
+          className="flex items-center gap-1.5 font-sans text-xs"
           style={{ color: testResult.toLowerCase().includes('connected') ? 'var(--accent)' : 'var(--danger)' }}
         >
           {testResult.toLowerCase().includes('connected')
@@ -1550,7 +1550,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
               value={key}
               onChange={e => setKey(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && handleSaveKey()}
-              className="flex-1 font-mono text-xs px-3 py-1.5 rounded-sm"
+              className="flex-1 font-sans text-xs px-3 py-1.5 rounded-sm"
               style={{
                 background: 'var(--bg-surface)',
                 border:     '1px solid var(--border-2)',
@@ -1569,7 +1569,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
           <button
             onClick={handleSaveKey}
             disabled={saving || !key.trim()}
-            className="font-mono text-xs px-3 py-1.5 rounded-sm cursor-pointer disabled:opacity-40"
+            className="font-sans text-xs px-3 py-1.5 rounded-sm cursor-pointer disabled:opacity-40"
             style={{
               background: 'var(--accent-muted)',
               border:     '1px solid var(--accent-border)',
@@ -1585,7 +1585,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
       {hasKey && provider.models.length > 0 && (
         <div>
           <div
-            className="font-mono text-xs mb-1.5"
+            className="font-sans text-xs mb-1.5"
             style={{ color: 'var(--text-3)', fontSize: '10px' }}
           >
             MODEL
@@ -1597,7 +1597,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
                 <button
                   key={model.id}
                   onClick={() => handleSetActive(model.id)}
-                  className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer"
+                  className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer"
                   style={{
                     background: isSelectedModel ? 'var(--accent-muted)' : 'var(--bg-surface)',
                     border:     `1px solid ${isSelectedModel ? 'var(--accent-border)' : 'var(--border-2)'}`,
@@ -1654,7 +1654,7 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
   }
 
   const label = (txt: string) => (
-    <div className="font-mono text-xs mb-1" style={{ color: 'var(--text-3)', fontSize: '10px' }}>
+    <div className="font-sans text-xs mb-1" style={{ color: 'var(--text-3)', fontSize: '10px' }}>
       {txt}
     </div>
   )
@@ -1666,7 +1666,7 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
     >
       <div className="flex items-center gap-2" style={{ color: 'var(--text-2)' }}>
         <Brain size={12} />
-        <span className="font-mono text-xs">{modelId}</span>
+        <span className="font-sans text-xs">{modelId}</span>
       </div>
 
       {/* Temperature */}
@@ -1682,7 +1682,7 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
           />
           <button
             onClick={() => setDraft(d => ({ ...d, temperature: null }))}
-            className="font-mono text-xs px-1.5 py-0.5 rounded-sm cursor-pointer"
+            className="font-sans text-xs px-1.5 py-0.5 rounded-sm cursor-pointer"
             style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-2)', color: 'var(--text-3)' }}
           >
             reset
@@ -1703,7 +1703,7 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
           />
           <button
             onClick={() => setDraft(d => ({ ...d, top_p: null }))}
-            className="font-mono text-xs px-1.5 py-0.5 rounded-sm cursor-pointer"
+            className="font-sans text-xs px-1.5 py-0.5 rounded-sm cursor-pointer"
             style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-2)', color: 'var(--text-3)' }}
           >
             reset
@@ -1720,7 +1720,7 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
               <button
                 key={level}
                 onClick={() => setDraft(d => ({ ...d, reasoning_effort: d.reasoning_effort === level ? null : level }))}
-                className="font-mono text-xs px-3 py-1 rounded-sm cursor-pointer"
+                className="font-sans text-xs px-3 py-1 rounded-sm cursor-pointer"
                 style={{
                   background: draft.reasoning_effort === level ? 'var(--accent-muted)' : 'var(--bg-surface)',
                   border: `1px solid ${draft.reasoning_effort === level ? 'var(--accent-border)' : 'var(--border-2)'}`,
@@ -1741,7 +1741,7 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setDraft(d => ({ ...d, thinking_enabled: !d.thinking_enabled }))}
-              className="font-mono text-xs px-3 py-1 rounded-sm cursor-pointer"
+              className="font-sans text-xs px-3 py-1 rounded-sm cursor-pointer"
               style={{
                 background: draft.thinking_enabled ? 'var(--accent-muted)' : 'var(--bg-surface)',
                 border: `1px solid ${draft.thinking_enabled ? 'var(--accent-border)' : 'var(--border-2)'}`,
@@ -1752,7 +1752,7 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
             </button>
             {draft.thinking_enabled && (
               <div className="flex items-center gap-2 flex-1">
-                <span className="font-mono text-xs" style={{ color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
+                <span className="font-sans text-xs" style={{ color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
                   Budget: {(draft.thinking_budget ?? 5000).toLocaleString()} tokens
                 </span>
                 <input
@@ -1772,7 +1772,7 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
       <div className="flex gap-2 pt-1">
         <button
           onClick={handleReset}
-          className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer"
+          className="font-sans text-xs px-2 py-1 rounded-sm cursor-pointer"
           style={{ background: 'transparent', border: '1px solid var(--border-2)', color: 'var(--text-3)' }}
         >
           Reset to defaults
@@ -1780,7 +1780,7 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
         <button
           onClick={handleSave}
           disabled={saving}
-          className="font-mono text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
+          className="font-sans text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
           style={{ background: 'var(--accent-muted)', border: '1px solid var(--accent-border)', color: 'var(--accent)' }}
         >
           {saving ? 'Saving…' : saved ? 'Saved!' : <><Save size={11} /> Save</>}

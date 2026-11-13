@@ -37,7 +37,7 @@ export default function InlinePermissionCard() {
 
   return (
     <div
-      className="rounded-sm font-mono self-start max-w-4xl w-full my-1"
+      className="rounded-sm font-sans self-start max-w-4xl w-full my-1"
       style={{
         background:  'var(--bg-surface)',
         border:      '1px solid var(--warning)',
@@ -100,7 +100,7 @@ export default function InlinePermissionCard() {
       >
         <button
           onClick={() => respond('deny')}
-          className="font-mono px-3 py-1 rounded-sm cursor-pointer"
+          className="font-sans px-3 py-1 rounded-sm cursor-pointer"
           style={{
             background: 'var(--bg-card)',
             border:     '1px solid var(--border-2)',
@@ -113,7 +113,7 @@ export default function InlinePermissionCard() {
         {pendingPermission.allowAlways && (
           <button
             onClick={() => respond('allow_always')}
-            className="font-mono px-3 py-1 rounded-sm cursor-pointer"
+            className="font-sans px-3 py-1 rounded-sm cursor-pointer"
             style={{
               background: 'var(--bg-card)',
               border:     '1px solid var(--border-2)',
@@ -126,7 +126,7 @@ export default function InlinePermissionCard() {
         )}
         <button
           onClick={() => respond('allow')}
-          className="font-mono px-3 py-1 rounded-sm cursor-pointer"
+          className="font-sans px-3 py-1 rounded-sm cursor-pointer"
           style={{
             background: 'var(--accent-muted)',
             border:     '1px solid var(--accent-border)',
