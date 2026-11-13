@@ -610,6 +610,40 @@ mod tests {
         );
     }
 
+    /// `P2-21`: an enabled cap must not be bypassed by a model it cannot price.
+    /// The cap reserves the worst-case cost before the call, so a model with no
+    /// verified price (or one the provider does not list) has no figure to
+    /// reserve; it is refused before the provider is touched, and nothing is
+    /// held or spent. Without this an unpriced model would run uncapped.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_enabled_cap_refuses_a_model_it_cannot_price_before_calling_the_provider() {
+        let (_home, _home_guard) = configure_isolated_cap();
+        let provider = usage_boundary_provider(UsageBoundaryScenario::InputThenEof);
+        let wrapped =
+            CappedProvider::wrap(provider.clone(), Arc::new(Mutex::new(AppState::default())));
+        for model in ["no-such-model-9000", "gemini-3.8-flash-unpriced-variant"] {
+            let mut request = usage_boundary_request();
+            request.model = model.into();
+            assert!(
+                wrapped.stream(request).await.is_err(),
+                "{model} has no price, so the cap must refuse it"
+            );
+        }
+        assert_eq!(
+            provider.dropped.load(Ordering::SeqCst),
+            0,
+            "the provider must never be reached for a model the cap cannot price"
+        );
+        assert_eq!(
+            daily_ledger_snapshot(),
+            (0, 0, 0),
+            "nothing is held or spent"
+        );
+
+        // And the control: a priced model on the same wrapper does go through.
+        assert!(wrapped.stream(usage_boundary_request()).await.is_ok());
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn split_usage_reconciles_daily_reservation_only_after_completion() {
         use futures::StreamExt;

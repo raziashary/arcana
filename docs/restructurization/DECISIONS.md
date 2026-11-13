@@ -316,3 +316,9 @@ Asked and answered on 2026-11-13, with the instruction to carry R3 through end t
 - **The 49 uncalled commands: delete those with no caller anywhere** (no frontend, CLI or test). A command that looks like a planned v1 UI is kept and listed to Razi.
   `TG-P6-11`'s list shrinks to match.
 - **Orphaned frontend code: "orphan" means a non-test file not imported, directly or transitively, from the app entry.** Those files are deleted, and the commit body lists them.
+
+## D-018 · The daily spend cap ships off by default, and the first-run key step offers it — 2026-11-13, Razi
+
+Asked and answered on 2026-11-13 while closing `P2-21`. The cap is built, tested and fail-closed (see the `P2-21` row), and a model it cannot price is refused. v1 keeps it **off by
+default** so a stop is never a surprise, and the key-entry step of first run (`P7-01..04`) says the cap exists and offers to enable it at the $50 default. If that step is cut, this
+decision must be revisited, since a paid-key app would then ship with the cap findable only in Settings.

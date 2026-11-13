@@ -147,7 +147,7 @@ Goal: a new user reaches a working agent turn, errors are visible, nothing is lo
 | `P7-16` | Interaction-grammar doc gate: drop | — |
 | `P7-18` | Capstone walkthrough without docs: folded into `S7-01` | `S7-01` |
 | `P7-19` | Automatic recovery after process loss: backlog | — |
-| `P2-21` | Daily spend ceiling (M-42), the one open P2 task. Unpriced models are invisible to the cap, so a paid-key app should not ship without it | Test |
+| `P2-21` | Daily spend ceiling (M-42), the one open P2 task. Unpriced models are invisible to the cap, so a paid-key app should not ship without it. **Closed 2026-11-13 (D-018):** the ceiling was already built (reserve before the call, settle after, fail closed on a bad setting, wired through `provider::factory`, subagents and recipes; `s2_spend_ceilings` 9 tests). The open risk was proven shut: with the cap on, a model it cannot price is refused before the provider is reached (`an_enabled_cap_refuses_a_model_it_cannot_price_before_calling_the_provider`), and `UNPRICED` is empty. It ships off by default; the first-run key step (P7-01..04) must offer to enable it at $50 | Test = that test plus `s2_spend_ceilings` |
 
 ### R4 · Windows delivery (P9)
 
