@@ -369,4 +369,4 @@ backend commands uncalled, which D-017 would delete in turn, so Razi was asked p
   `useCameraFlyTo`, `cityWorker`, `roadGenerator`).
 - **Then 18 commands had no caller** and went by the D-017 rule: eight plan commands and ten plugin commands, with `plan_commands.rs` and `plugin_commands.rs`.
   The Rust side (`db/plans`, `arcana-core/src/plugin`) is untouched and is listed in `HARDENING_BACKLOG.md`.
-- **Kept:** `MemorySidebar`, `MemoryStats` and `memoryStore` (their 12 commands stay called). They are unmounted today; mounting them is an R3 task.
+- **Kept:** `MemorySidebar`, `MemoryStats` and `memoryStore` (their 12 commands stay called). They were unmounted and had no stylesheet (69 class names, none defined); a stylesheet was written and the panel is mounted from a "Memory" button in the Chat header (2026-11-13).

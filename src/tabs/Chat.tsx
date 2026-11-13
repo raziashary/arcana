@@ -20,6 +20,7 @@ import SkillSlashPicker from '../components/skills/SkillSlashPicker'
 import SkillParameterModal from '../components/skills/SkillParameterModal'
 import { useSkillStore, type Skill, type SkillSummary } from '../stores/skillStore'
 import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
+import { MemorySidebar } from '../components/memory/MemorySidebar'
 
 // ─── Context window sizes (tokens) per model ─────────────────────────────────
 // Fallback to 200_000 for unknown models.
@@ -94,9 +95,15 @@ function ContextMeter({ modelId, messages }: { modelId: string; messages: { cont
 
 // ─── Chat header — PA mode dropdown + live stats row ────────────────────────
 
-interface ChatHeaderProps { localDir: string; setLocalDir: (d: string) => void }
+interface ChatHeaderProps {
+  localDir: string
+  setLocalDir: (d: string) => void
+  memoryOpen: boolean
+  memoryAvailable: boolean
+  onToggleMemory: () => void
+}
 
-function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
+function ChatHeader({ localDir, setLocalDir, memoryOpen, memoryAvailable, onToggleMemory }: ChatHeaderProps) {
   const paMode        = useSettingsStore(s => s.paMode)
   const setPAMode     = useSettingsStore(s => s.setPAMode)
   const byCategory    = useSkillStore(s => s.byCategory)
@@ -179,6 +186,17 @@ function ChatHeader({ localDir, setLocalDir }: ChatHeaderProps) {
         <span style={{ color: arcanaOk ? 'var(--accent)' : 'var(--danger)' }}>
           ARCANA.md {arcanaOk ? '\u2713' : '\u2717'}
         </span>
+        <span style={{ color: 'var(--text-4)' }}>&#183;</span>
+        <button
+          onClick={onToggleMemory}
+          aria-pressed={memoryOpen}
+          disabled={!memoryAvailable}
+          title={memoryAvailable ? 'Show or hide what Arcana remembers for this session' : 'Select a session to see its memory'}
+          className="cursor-pointer disabled:cursor-default disabled:opacity-40"
+          style={{ background: 'none', border: 'none', padding: 0, fontSize: '10px', color: memoryOpen ? 'var(--accent)' : 'var(--text-3)' }}
+        >
+          Memory
+        </button>
         {localDir && (
           <>
             <span style={{ color: 'var(--text-4)' }}>&#183;</span>
@@ -223,6 +241,8 @@ export default function ChatTab() {
   const [atSelectedIdx, setAtSelectedIdx] = useState(0)
   // Subagent monitor visibility
   const [showSubagents, setShowSubagents] = useState(false)
+  // Memory panel visibility
+  const [showMemory, setShowMemory] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef       = useRef<HTMLTextAreaElement>(null)
 
@@ -447,7 +467,13 @@ export default function ChatTab() {
       <div className="flex flex-col flex-1 overflow-hidden relative">
 
         {/* Chat header — PA mode dropdown + live stats */}
-        <ChatHeader localDir={localDir} setLocalDir={d => { setLocalDir(d); setWorkingDir(d) }} />
+        <ChatHeader
+          localDir={localDir}
+          setLocalDir={d => { setLocalDir(d); setWorkingDir(d) }}
+          memoryOpen={showMemory}
+          memoryAvailable={!!sessionStore.activeSessionId}
+          onToggleMemory={() => setShowMemory(o => !o)}
+        />
 
       {/* Messages list */}
       <div className="flex-1 overflow-y-auto px-3.5 py-3 flex flex-col gap-2.5">
@@ -608,6 +634,11 @@ export default function ChatTab() {
         </div>
       </div>
       </div>
+      )}
+
+      {/* Memory panel (timeline, facts, patterns, search) for the active session */}
+      {showMemory && sessionStore.activeSessionId && (
+        <MemorySidebar sessionId={sessionStore.activeSessionId} onClose={() => setShowMemory(false)} />
       )}
 
       {/* Subagent Monitor Toggle Button */}

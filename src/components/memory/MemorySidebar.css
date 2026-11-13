@@ -1,0 +1,187 @@
+/* Memory panel — Timeline, Facts, Patterns, Search. Colours are tokens only (TG-P6-04). */
+
+.memory-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  flex-shrink: 0;
+  min-height: 0;
+  background: var(--bg-surface);
+  border-left: 1px solid var(--border-primary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.memory-sidebar__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 12px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border-primary);
+}
+.memory-sidebar__title { display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13px; }
+.memory-sidebar__close {
+  display: flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  background: none; border: none; border-radius: var(--radius);
+  color: var(--text-muted); cursor: pointer;
+}
+.memory-sidebar__close:hover { background: var(--bg-2); color: var(--text-primary); }
+
+.memory-sidebar__tabs { display: flex; border-bottom: 1px solid var(--border-primary); }
+.memory-sidebar__tab {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center; gap: 5px;
+  padding: 8px 4px;
+  background: none; border: none; border-bottom: 2px solid transparent;
+  font-size: 11px; color: var(--text-muted); cursor: pointer;
+}
+.memory-sidebar__tab:hover { color: var(--text-primary); }
+.memory-sidebar__tab--active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.memory-sidebar__pane { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px; }
+
+.memory-pane__loading,
+.memory-pane__empty { padding: 16px 4px; font-size: 12px; line-height: 1.5; color: var(--text-muted); text-align: center; }
+
+/* Stats strip */
+.memory-stats { padding: 8px 12px; border-bottom: 1px solid var(--border-primary); }
+.memory-stats--loading { color: var(--text-dim); font-size: 11px; }
+.memory-stats__row { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.memory-stats__item { display: flex; align-items: center; gap: 5px; }
+.memory-stats__icon--episodic { color: var(--info); }
+.memory-stats__icon--semantic { color: var(--success); }
+.memory-stats__icon--procedural { color: var(--purple); }
+.memory-stats__icon--spin { animation: spin 1s linear infinite; }
+.memory-stats__count { font-weight: 500; font-variant-numeric: tabular-nums; }
+.memory-stats__label { font-size: 10px; color: var(--text-muted); }
+.memory-stats__footer { margin-top: 6px; font-size: 10px; color: var(--text-dim); }
+
+/* Timeline */
+.memory-timeline { display: flex; flex-direction: column; gap: 8px; }
+.memory-timeline__entry {
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-left: 3px solid var(--border-secondary);
+  border-radius: var(--radius);
+}
+.memory-timeline__entry--user { border-left-color: var(--accent); }
+.memory-timeline__entry--assistant { border-left-color: var(--info); }
+.memory-timeline__meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 10px; color: var(--text-muted); }
+.memory-timeline__role { font-weight: 500; color: var(--text-primary); }
+.memory-timeline__turn { color: var(--text-dim); }
+.memory-timeline__badge { padding: 1px 6px; border-radius: 999px; font-size: 9px; background: var(--bg-2); color: var(--text-secondary); }
+.memory-timeline__badge--summary { background: var(--accent-muted); color: var(--accent); }
+.memory-timeline__content { font-size: 12px; line-height: 1.5; color: var(--text-secondary); white-space: pre-wrap; word-break: break-word; }
+.memory-timeline__cost { display: flex; gap: 10px; margin-top: 4px; font-size: 10px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+/* Shared inputs and buttons */
+.memory-facts__add,
+.memory-procedural__add,
+.memory-search__bar { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+.memory-facts__input,
+.memory-procedural__input,
+.memory-search__input,
+.memory-fact__edit-area,
+.memory-topic__edit-area {
+  flex: 1;
+  width: 100%;
+  padding: 6px 8px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius);
+}
+.memory-fact__edit-area,
+.memory-topic__edit-area { min-height: 64px; resize: vertical; }
+.memory-facts__add-btn,
+.memory-procedural__add-btn,
+.memory-fact__save,
+.memory-topic__save {
+  display: flex; align-items: center; justify-content: center;
+  padding: 5px 10px;
+  background: var(--accent); color: var(--text-on-accent);
+  border: none; border-radius: var(--radius);
+  font-size: 11px; cursor: pointer;
+}
+.memory-fact__cancel,
+.memory-topic__cancel {
+  padding: 5px 10px;
+  background: none; color: var(--text-muted);
+  border: 1px solid var(--border-primary); border-radius: var(--radius);
+  font-size: 11px; cursor: pointer;
+}
+.memory-fact__edit-actions,
+.memory-topic__edit-actions { display: flex; gap: 6px; margin-top: 6px; }
+.memory-fact__edit,
+.memory-topic__edit { margin-top: 6px; }
+
+/* Facts */
+.memory-facts { display: flex; flex-direction: column; }
+.memory-fact,
+.memory-topic,
+.memory-result {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius);
+}
+.memory-fact__header,
+.memory-topic__header,
+.memory-result__header { display: flex; align-items: center; gap: 8px; }
+.memory-fact__category { padding: 1px 6px; border-radius: 999px; font-size: 9px; background: var(--bg-2); color: var(--text-secondary); }
+.memory-fact__confidence { font-size: 10px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.memory-fact__actions,
+.memory-topic__actions { display: flex; gap: 4px; margin-left: auto; }
+.memory-fact__actions button,
+.memory-topic__actions button {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  background: none; border: none; border-radius: var(--radius);
+  color: var(--text-muted); cursor: pointer;
+}
+.memory-fact__actions button:hover,
+.memory-topic__actions button:hover { background: var(--bg-2); color: var(--text-primary); }
+.memory-fact__text { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--text-primary); word-break: break-word; }
+.memory-fact__tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.memory-fact__tag { padding: 1px 6px; border-radius: 999px; font-size: 9px; background: var(--bg-2); color: var(--text-muted); }
+
+/* Patterns (procedural topics) */
+.memory-procedural { display: flex; flex-direction: column; }
+.memory-procedural__md-preview { margin-bottom: 10px; }
+.memory-procedural__md-summary { font-size: 11px; color: var(--text-muted); cursor: pointer; }
+.memory-topic__header { cursor: pointer; }
+.memory-topic__title { font-weight: 500; }
+.memory-topic__content,
+.memory-procedural__md-content {
+  margin-top: 6px; padding: 8px;
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5;
+  color: var(--text-secondary); background: var(--bg-code);
+  border-radius: var(--radius);
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* Search */
+.memory-search { display: flex; flex-direction: column; }
+.memory-search__bar { position: relative; }
+.memory-search__icon { position: absolute; left: 8px; color: var(--text-dim); pointer-events: none; }
+.memory-search__input { padding-left: 28px; }
+.memory-search__clear {
+  position: absolute; right: 4px;
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px;
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+}
+.memory-result__tier { padding: 1px 6px; border-radius: 999px; font-size: 9px; background: var(--bg-2); color: var(--text-secondary); }
+.memory-result__tier--episodic { color: var(--info); }
+.memory-result__tier--semantic { color: var(--success); }
+.memory-result__tier--procedural { color: var(--purple); }
+.memory-result__score { margin-left: auto; font-size: 10px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.memory-result__content { margin-top: 4px; font-size: 12px; line-height: 1.5; color: var(--text-secondary); word-break: break-word; }

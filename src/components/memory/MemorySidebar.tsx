@@ -11,6 +11,7 @@ import {
 import { useMemoryStore, SemanticFact, ProceduralMemory } from '../../stores/memoryStore';
 import { MemoryStats } from './MemoryStats';
 import { confirmDestructive } from '../../utils/confirmDestructive';
+import './MemorySidebar.css';
 
 // ─── Timeline tab ─────────────────────────────────────────────────────────────
 
