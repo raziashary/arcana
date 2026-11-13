@@ -21,6 +21,7 @@ import SkillParameterModal from '../components/skills/SkillParameterModal'
 import { useSkillStore, type Skill, type SkillSummary } from '../stores/skillStore'
 import { SubagentMonitor } from '../components/subagent/SubagentMonitor'
 import { MemorySidebar } from '../components/memory/MemorySidebar'
+import FirstRun, { isSetupComplete } from '../components/firstrun/FirstRun'
 
 // ─── Context window sizes (tokens) per model ─────────────────────────────────
 // Fallback to 200_000 for unknown models.
@@ -449,7 +450,9 @@ export default function ChatTab() {
       <SessionBar />
 
       {/* Main chat area or placeholder */}
-      {sessionStore.sessions.length === 0 ? (
+      {sessionStore.sessions.length === 0 && !isSetupComplete(settingsStore.providers, workspaceDir) ? (
+        <FirstRun />
+      ) : sessionStore.sessions.length === 0 ? (
         <div className="flex flex-col flex-1 items-center justify-center" style={{ color: 'var(--text-2)' }}>
           <div className="text-center">
             <h1

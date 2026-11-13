@@ -6979,8 +6979,7 @@ fn effect() { ToolEffect::Execute }"#;
     /// list must be edited deliberately, with a reason), and a command that
     /// gains a caller must leave the list. Deleting the entries is the owner's
     /// call (`DECISIONS.md` D-015, D-017). D-017 deleted the 43 commands with no
-    /// caller anywhere; what remains is either planned v1 UI (`has_provider_key`
-    /// for the first-run check, `get_daily_budget_summary` for the spend cap,
+    /// caller anywhere; what remains is either planned v1 UI (`get_daily_budget_summary` for the spend cap,
     /// `cmd_set_task_budget`, `force_release_task` and `get_orphaned_tasks` for
     /// the task panel) or still called from Rust (`get_task`,
     /// `read_log_file_full`, `read_structured_events_full`).
@@ -6992,7 +6991,6 @@ fn effect() { ToolEffect::Execute }"#;
             "get_daily_budget_summary",
             "get_orphaned_tasks",
             "get_task",
-            "has_provider_key",
             "read_log_file_full",
             "read_structured_events_full",
         ];

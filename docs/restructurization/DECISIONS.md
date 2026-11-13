@@ -382,3 +382,17 @@ tasks that run unlimited today) or label it.
   (empty without it). An existing `runtime_config.json` is left on disk and ignored.
 - **What bounds spend instead:** the per-task budget set with `set_task_budget`, and the daily cap (D-018).
 - **Method:** a claim in a comment that a value is "read by X" was checked by search, not trusted.
+
+## D-023 · First run: key, folder, daily limit, Start — 2026-11-13, mine (design), Razi (cap offer, D-018)
+
+Session creation fails without a workspace folder, so a key-only first run would have ended at an error toast. First run is therefore three short steps on one screen,
+shown in the Chat tab while no session exists and the setup is incomplete (no stored key or no folder): **1 key, 2 folder, 3 daily limit**, then **Start**.
+
+- **Key:** a password field with no "show" toggle; the backend checks it with the provider before storing it, and the field clears on success. Failure text names the
+  next action and is scrubbed of the key. `set_provider_key` gained `validated: bool` (false when the provider could not be reached, or for the GitHub PAT, which is not
+  checked there) so no screen claims a check that did not happen.
+- **Daily limit (D-018):** the checkbox is **ticked at $50** and editable. D-018 said the cap ships off by default and first run offers it; a ticked box the user must pass
+  through, with the sentence saying what it does, is the offer. Unticking leaves the stored setting untouched. If Razi prefers it unticked, it is one default.
+- **Deleted:** `has_provider_key` (the fifth "planned v1 UI" command), since first run reads `has_key` from the provider list; the closed vault-IPC list in `vault_commands.rs`
+  was updated deliberately. This shrinks the outbound vault surface.
+- **Proof and gaps:** see `P7-01..04` in `SHIP_PLAN.md`. The vault change is one added boolean; the end-of-R3 independent review is asked to read the key path.

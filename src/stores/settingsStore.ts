@@ -55,7 +55,8 @@ interface SettingsState {
   loadProviders:         () => Promise<void>
   setActiveProvider:     (provider: string, model: string) => Promise<void>
   testProvider:          (provider: string) => Promise<string>
-  storeProviderKey:      (provider: string, key: string) => Promise<void>
+  /** Resolves `validated: true` only when the provider confirmed the key before it was stored. */
+  storeProviderKey:      (provider: string, key: string) => Promise<{ validated: boolean }>
   deleteProviderKey:     (provider: string) => Promise<void>
   loadSystemPrompt:      () => Promise<void>
   setSystemPrompt:       (prompt: string | null) => Promise<void>
@@ -112,10 +113,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   storeProviderKey: async (provider, key) => {
     // Inbound only: set_provider_key returns a confirmation and a last-4 mask,
     // never the key. There is deliberately no command to read one back.
-    await invoke<{ ok: boolean; masked_last4: string }>(
+    const result = await invoke<{ ok: boolean; masked_last4: string; validated: boolean }>(
       'set_provider_key', { provider, apiKey: key },
     )
     await get().loadProviders()
+    return { validated: result.validated === true }
   },
 
   deleteProviderKey: async (provider) => {

@@ -55,6 +55,11 @@ pub struct VaultWriteResult {
     /// The last four characters of the stored secret. Empty when the secret is
     /// too short for a mask to reveal proportionally little.
     pub masked_last4: String,
+    /// Whether the provider confirmed the key before it was stored. `false` when it
+    /// was stored without a live check (the provider could not be reached, or the
+    /// secret is a GitHub PAT, which is not checked here). The UI must not say
+    /// "verified" unless this is `true`.
+    pub validated: bool,
 }
 
 /// Presence of one vault entry. Deliberately has no value field.
@@ -170,10 +175,13 @@ pub async fn set_provider_key(provider: String, api_key: String) -> Result<Vault
         // provider we cannot construct is a key we can never use.
         let candidate = arcana_core::provider::factory::build(&provider, trimmed.clone())?;
 
-        match super::settings_commands::check_provider_metadata_connection(candidate.as_ref(), true)
-            .await
+        let validated = match super::settings_commands::check_provider_metadata_connection(
+            candidate.as_ref(),
+            true,
+        )
+        .await
         {
-            Ok(arcana_core::provider::ProviderStatus::Connected) => {}
+            Ok(arcana_core::provider::ProviderStatus::Connected) => true,
             Ok(arcana_core::provider::ProviderStatus::Error(why)) => {
                 return Err(crate::errors::ArcanaError::Vault(format!(
                     "That key was not accepted by {provider}, so it has NOT been saved: {why}"
@@ -191,31 +199,17 @@ pub async fn set_provider_key(provider: String, api_key: String) -> Result<Vault
                 tracing::warn!(
                     "Could not reach the provider to validate the key; storing it unvalidated."
                 );
+                false
             }
-        }
+        };
 
         VaultManager::store(&provider_key(&provider), &trimmed)?;
         Ok(VaultWriteResult {
             ok: true,
             masked_last4: masked_last4(&trimmed),
+            validated,
         })
     }
-}
-
-/// Whether a key is stored for this provider. Never returns the key.
-///
-/// P2-70: goes through `VaultManager::exists`, which zeroizes the secret it
-/// had to pull in order to answer. This used to be `get(..).is_some()`, which
-/// left the plaintext key in freed heap memory on every Settings render.
-#[tauri::command]
-pub fn has_provider_key(provider: String) -> Result<bool> {
-    #[cfg(feature = "e2e-ipc-receipt")]
-    {
-        let _ = provider;
-        return Ok(false);
-    }
-    #[cfg(not(feature = "e2e-ipc-receipt"))]
-    VaultManager::exists(&provider_key(&provider))
 }
 
 #[tauri::command]
@@ -255,6 +249,7 @@ pub fn set_github_pat(pat: String) -> Result<VaultWriteResult> {
         Ok(VaultWriteResult {
             ok: true,
             masked_last4: masked_last4(trimmed),
+            validated: false,
         })
     }
 }
@@ -512,7 +507,6 @@ mod tests {
                 "delete_github_pat",
                 "delete_provider_key",
                 "has_github_pat",
-                "has_provider_key",
                 "list_vault_entries",
                 "set_github_pat",
                 "set_provider_key",

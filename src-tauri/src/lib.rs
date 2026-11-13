@@ -168,8 +168,8 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             get_update_history, install_update, skip_version, verify_data_integrity,
         },
         vault_commands::{
-            delete_github_pat, delete_provider_key, has_github_pat, has_provider_key,
-            list_vault_entries, set_github_pat, set_provider_key, vault_backend_info,
+            delete_github_pat, delete_provider_key, has_github_pat, list_vault_entries,
+            set_github_pat, set_provider_key, vault_backend_info,
         },
         worker_commands::{
             bind_worker_recipe, create_worker, delete_worker, list_workers, start_worker_recipe,
@@ -210,7 +210,6 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             set_python_user_fallback,
             // Vault
             set_provider_key,
-            has_provider_key,
             delete_provider_key,
             set_github_pat,
             has_github_pat,

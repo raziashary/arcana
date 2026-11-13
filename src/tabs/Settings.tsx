@@ -1257,6 +1257,9 @@ function ProviderCard({ providerId }: { providerId: string }) {
   const isActive      = store.activeProvider === providerId
   const displayName   = provider.name
   const hasKey        = provider.has_key
+  // "Connected" is the Test result and "verified" the save result; "saved, but" is a stored key nobody could check.
+  const testOk        = !!testResult && /connected|verified and saved/i.test(testResult)
+  const testUnchecked = !!testResult && /^Key saved, but/i.test(testResult)
   const defaultModel  = provider.models[1]?.id ?? provider.models[0]?.id ?? ''
 
   // P2-72. Three defects lived in the previous nine lines:
@@ -1278,14 +1281,17 @@ function ProviderCard({ providerId }: { providerId: string }) {
     setSaving(true)
     setTestResult(null)
     try {
-      await store.storeProviderKey(providerId, key.trim())
+      const { validated } = await store.storeProviderKey(providerId, key.trim())
 
       // Only now — the key exists and the provider accepted it.
       if (!isActive && defaultModel) {
         await store.setActiveProvider(providerId, defaultModel)
       }
       setKey('')
-      setTestResult('Key verified and saved.')
+      // Only claim a check that happened: offline, the backend stores the key unchecked.
+      setTestResult(validated
+        ? 'Key verified and saved.'
+        : `Key saved, but ${displayName} could not be reached to check it. Press Test once you are online.`)
     } catch (e) {
       // Shown, not logged. The backend's message says what the provider
       // actually rejected, which is the only useful thing the user can act on.
@@ -1387,9 +1393,9 @@ function ProviderCard({ providerId }: { providerId: string }) {
       {testResult && (
         <div
           className="flex items-center gap-1.5 font-sans text-xs"
-          style={{ color: testResult.toLowerCase().includes('connected') ? 'var(--accent)' : 'var(--danger)' }}
+          style={{ color: testOk ? 'var(--accent)' : testUnchecked ? 'var(--warning)' : 'var(--danger)' }}
         >
-          {testResult.toLowerCase().includes('connected')
+          {testOk
             ? <CheckCircle size={12} />
             : <XCircle    size={12} />
           }
