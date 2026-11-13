@@ -6,7 +6,7 @@ import { create } from 'zustand'
 import { listen, UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 import { useCostStore } from './costStore'
-import { explainTurnError } from '../utils/errorHints'
+import { explainTurnError, isCancellation } from '../utils/errorHints'
 
 export type MessageRole = 'user' | 'assistant' | 'tool'
 
@@ -320,7 +320,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       set(s => {
         const msgs = [...s.messages]
         const last = msgs[msgs.length - 1]
-        const text = explainTurnError(payload.message)
+        // Stopping a turn is not a failure: say so plainly instead of "Error: ...".
+        const text = isCancellation(payload.message) ? 'Stopped.' : explainTurnError(payload.message)
         if (last?.role === 'assistant' && !last.content) {
           msgs[msgs.length - 1] = { ...last, content: text }
         } else {

@@ -30,6 +30,17 @@ const HINTS: ReadonlyArray<{ test: RegExp; hint: string }> = [
   },
 ]
 
+/**
+ * Whether the backend ended the turn because the user stopped it. The engine
+ * reports a cancel through the same `agent:error` event as a failure, with the
+ * fixed text "The run was cancelled." (or "... before it started."), so the
+ * chat would show the user's own Stop button as a red error. A typed
+ * cancel-versus-error payload is the better fix and is recorded in the backlog.
+ */
+export function isCancellation(message: string): boolean {
+  return /^the run was cancelled\b/i.test(message.trim())
+}
+
 /** The message to show for a failed turn: the error, plus a next step when one is known. */
 export function explainTurnError(message: string): string {
   const text = message.trim() || 'The turn failed without a message.'

@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { explainTurnError } from './errorHints'
+import { explainTurnError, isCancellation } from './errorHints'
+
+describe('isCancellation', () => {
+  it('recognises the engine\'s two cancel messages and nothing else', () => {
+    expect(isCancellation('The run was cancelled.')).toBe(true)
+    expect(isCancellation('The run was cancelled before it started.')).toBe(true)
+    expect(isCancellation('  the run was cancelled. ')).toBe(true)
+    expect(isCancellation('Anthropic stream error: request was cancelled by peer')).toBe(false)
+    expect(isCancellation('API key rejected')).toBe(false)
+  })
+})
 
 describe('explainTurnError', () => {
   it.each([
@@ -16,7 +26,7 @@ describe('explainTurnError', () => {
   })
 
   it('shows an unrecognised message unchanged rather than guessing', () => {
-    expect(explainTurnError('The run was cancelled.')).toBe('Error: The run was cancelled.')
+    expect(explainTurnError('Something odd happened')).toBe('Error: Something odd happened')
   })
 
   it('never returns an empty message', () => {

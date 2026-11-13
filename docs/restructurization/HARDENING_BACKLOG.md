@@ -96,4 +96,6 @@ History: [`archive/development/HISTORICAL_DESIGN_PROGRAMME.md`](archive/developm
   files exist is unverified. Builder path, not a reader; found in review.
 - **Graph block bidi/zero-width characters** are not stripped from repository names (structure is safe; display could mislead).
 - **Dead duplicate hydration:** `src-tauri/src/commands/settings_commands.rs::hydrate_active_provider` has no caller (the live copy is `arcana-core/src/runtime.rs::hydrate_state`, which also restores the system prompt). Delete it so the two cannot drift; found while checking `P6-15..18`.
+- **Typed turn outcome:** the engine reports a user cancel through `agent:error` with the fixed text "The run was cancelled.", and the chat recognises that text (`errorHints.ts::isCancellation`). Give `agent:error` (or a new `agent:cancelled`) a typed `kind` so the UI does not match prose; the same change should cover the budget and auth classes that `explainTurnError` also matches by text.
+- **Live Monitor ignores turn errors:** `agentLiveStore` listens to `agent:error` but reads `agent_id` and `error_message`, while the event carries `session_id` and `message`, so `handleError` finds no agent and does nothing. Fix the payload mapping or drop the listener.
 - **`P5-08..13`** (true incremental update) stays deferred; `update_graph` is a full re-index (D-013).
