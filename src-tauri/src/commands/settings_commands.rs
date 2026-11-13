@@ -285,6 +285,9 @@ pub fn set_system_prompt(
     prompt: Option<String>,
     state: State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<()> {
+    // Persisted first: the custom prompt used to live only in `AppState`, so it
+    // reset on every launch. `hydrate_state` in arcana-core restores it.
+    arcana_core::runtime::store_system_prompt_override(prompt.as_deref())?;
     let mut s = state.lock_tolerant();
     s.system_prompt_override = prompt
         .map(|p| p.trim().to_string())

@@ -1054,10 +1054,31 @@ fn resolve_selection(
 const ACTIVE_PROVIDER_KEY: &str = "active_provider";
 const ACTIVE_MODEL_KEY: &str = "active_model";
 
+/// The settings key holding the user's custom system prompt (Settings → System
+/// Prompt). Absent means "use the built-in prompt".
+pub const SYSTEM_PROMPT_OVERRIDE_KEY: &str = "system_prompt_override";
+
+/// Persist the user's custom system prompt, or clear it. A blank value clears.
+/// Written before the in-memory copy changes, so a failed write cannot leave a
+/// prompt in force that the next launch silently drops.
+pub fn store_system_prompt_override(prompt: Option<&str>) -> crate::errors::Result<()> {
+    match prompt.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(prompt) => crate::db::app_settings::set(SYSTEM_PROMPT_OVERRIDE_KEY, prompt),
+        None => crate::db::app_settings::delete(SYSTEM_PROMPT_OVERRIDE_KEY).map(|_| ()),
+    }
+}
+
 fn hydrate_state(state: &Arc<Mutex<AppState>>) {
     {
         let mut state = state.lock_tolerant();
         state.hydrate_today();
+        // The custom system prompt used to live only in memory, so it reset on
+        // every launch.
+        state.system_prompt_override = crate::db::app_settings::get(SYSTEM_PROMPT_OVERRIDE_KEY)
+            .ok()
+            .flatten()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty());
     }
 
     let provider = crate::db::app_settings::get(ACTIVE_PROVIDER_KEY)
@@ -1416,6 +1437,34 @@ mod tests {
         assert_eq!(restored.cost_today_usd, 0.0);
         assert_eq!(restored.tokens_in_today, 0);
         assert_eq!(restored.tokens_out_today, 0);
+    }
+
+    #[test]
+    fn a_custom_system_prompt_survives_a_restart_and_can_be_cleared() {
+        use super::{hydrate_state, store_system_prompt_override, AppState, Arc, Mutex};
+
+        let home = tempfile::tempdir().expect("isolated Arcana home");
+        let _home = crate::db::test_support::with_home(home.path());
+
+        let fresh = Arc::new(Mutex::new(AppState::new()));
+        hydrate_state(&fresh);
+        assert_eq!(fresh.lock().unwrap().system_prompt_override, None);
+
+        store_system_prompt_override(Some("  Answer in rhyme.  ")).expect("store");
+        let restarted = Arc::new(Mutex::new(AppState::new()));
+        hydrate_state(&restarted);
+        assert_eq!(
+            restarted.lock().unwrap().system_prompt_override.as_deref(),
+            Some("Answer in rhyme."),
+            "the saved prompt must be what the next launch uses"
+        );
+
+        // Blank and None both clear it.
+        store_system_prompt_override(Some("   ")).expect("clear with blank");
+        let cleared = Arc::new(Mutex::new(AppState::new()));
+        hydrate_state(&cleared);
+        assert_eq!(cleared.lock().unwrap().system_prompt_override, None);
+        store_system_prompt_override(None).expect("clear is idempotent");
     }
 
     #[test]

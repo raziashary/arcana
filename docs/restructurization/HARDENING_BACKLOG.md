@@ -95,4 +95,5 @@ History: [`archive/development/HISTORICAL_DESIGN_PROGRAMME.md`](archive/developm
   version 0 that already holds data runs the whole ladder, including the v7 duplicate-edge delete, without one. Whether such
   files exist is unverified. Builder path, not a reader; found in review.
 - **Graph block bidi/zero-width characters** are not stripped from repository names (structure is safe; display could mislead).
+- **Dead duplicate hydration:** `src-tauri/src/commands/settings_commands.rs::hydrate_active_provider` has no caller (the live copy is `arcana-core/src/runtime.rs::hydrate_state`, which also restores the system prompt). Delete it so the two cannot drift; found while checking `P6-15..18`.
 - **`P5-08..13`** (true incremental update) stays deferred; `update_graph` is a full re-index (D-013).
