@@ -24,6 +24,8 @@ import { useWorkerStore }   from './stores/workerStore'
 import { useTaskStore }     from './stores/taskStore'
 import { useUpdateStore }   from './stores/updateStore'
 import { useWorkerChatStore } from './stores/workerChatStore'
+import { useAgentLiveStore } from './stores/agentLiveStore'
+import { useDashboardStore } from './stores/dashboardStore'
 import { UpdateToast }      from './components/update/UpdateToast'
 import { UpdateDialog }     from './components/update/UpdateDialog'
 import { ErrorBoundary }    from './components/ErrorBoundary'
@@ -56,6 +58,9 @@ export default function App() {
   const initUpdater       = useUpdateStore(s => s.init)
   const cleanupUpdater    = useUpdateStore(s => s.cleanup)
   const hydrateWorkerChat = useWorkerChatStore(s => s.hydrate)
+  const subscribeLive      = useAgentLiveStore(s => s.subscribeToEvents)
+  const startRealtime      = useDashboardStore(s => s.startRealtimeUpdates)
+  const stopRealtime       = useDashboardStore(s => s.stopRealtimeUpdates)
 
   useEffect(() => {
     loadProviders()
@@ -71,6 +76,10 @@ export default function App() {
     void hydrateWorkerChat()
     // Phase 5.3 — subscribe to auto-updater events
     void initUpdater()
+    // P6-06 — the Live Monitor and the dashboard's cost alerts accumulate from
+    // events, so their subscriptions live here, not in tabs that unmount.
+    const unsubscribeLive = subscribeLive()
+    void startRealtime()
     let cancelled = false
     let unlistenIdeNavigation: (() => void) | undefined
     void registerIdeNavigationListener().then((unlisten) => {
@@ -81,6 +90,8 @@ export default function App() {
       cancelled = true
       unlistenIdeNavigation?.()
       cleanupUpdater()
+      unsubscribeLive()
+      stopRealtime()
     }
   }, [])
 

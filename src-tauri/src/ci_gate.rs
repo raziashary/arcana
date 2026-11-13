@@ -7091,6 +7091,48 @@ fn effect() { ToolEffect::Execute }"#;
         );
     }
 
+    /// `TG-P6-07` (P6-06, P6-07) — the Live Monitor and the dashboard's cost
+    /// alerts build their state from events, so `App` subscribes them once and
+    /// the tabs that render them do not. A subscription owned by a tab is
+    /// released when the tab unmounts, and every event emitted while another tab
+    /// is open is lost. `eventOwnership.test.ts` proves the stores take events
+    /// with no tab mounted; this keeps the ownership from drifting back.
+    #[test]
+    fn tg_p6_07_event_driven_stores_are_subscribed_by_app_not_by_tabs() {
+        let sources = frontend_sources();
+        let find = |suffix: &str| {
+            sources
+                .iter()
+                .find(|(name, _)| name.ends_with(suffix))
+                .unwrap_or_else(|| panic!("{suffix} not found; the gate has lost its input"))
+                .1
+                .as_str()
+        };
+        let app = find("src/App.tsx");
+        for required in [
+            "subscribeToEvents",
+            "startRealtimeUpdates",
+            "stopRealtimeUpdates",
+        ] {
+            assert!(
+                app.contains(required),
+                "App.tsx no longer calls `{required}`: the store would stop receiving events"
+            );
+        }
+        let live_section = find("src/components/arcana/LiveMonitorSection.tsx");
+        assert!(
+            !live_section.contains("subscribeToEvents(") && !live_section.contains("subscribeToEvents,"),
+            "LiveMonitorSection subscribes to events itself; it unmounts on a tab switch and the Live Monitor would miss events"
+        );
+        let dashboard = find("src/components/dashboard/Dashboard.tsx");
+        for banned in ["startRealtimeUpdates", "stopRealtimeUpdates"] {
+            assert!(
+                !dashboard.contains(&format!("{banned}(")) && !dashboard.contains(&format!("{banned},")),
+                "Dashboard.tsx calls `{banned}`; its listeners would be released when the tab closes"
+            );
+        }
+    }
+
     /// `TG-P6-03` (P6-02) — the renderer loads no font or stylesheet from outside
     /// the app. IBM Plex is bundled (`src/assets/fonts`, SIL OFL), so neither CSP
     /// (`tauri.conf.json`, and the `<meta>` in `index.html`, which both apply) names

@@ -150,6 +150,8 @@ export interface ExportResult {
 }
 
 let realtimeUnlisteners: Array<() => void> = [];
+// True while `startRealtimeUpdates` awaits its listeners, so a second call cannot register a second set.
+let realtimeStarting = false;
 
 // Doc 02 Phase 3.1 — uniform error extraction for the per-invoke catches.
 // Tauri rejects with either a string (the Rust error chain stringified) or
@@ -363,7 +365,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   startRealtimeUpdates: async () => {
-    if (get().realtimeEnabled) return;
+    if (get().realtimeEnabled || realtimeStarting) return;
+    realtimeStarting = true;
 
     try {
       // Listen for cost update events — event name matches EVT_COST_UPDATE in events.rs
@@ -441,6 +444,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
       set({ realtimeEnabled: true });
     } catch (error) {
       console.error('Failed to start realtime updates:', error);
+    } finally {
+      realtimeStarting = false;
     }
   },
 

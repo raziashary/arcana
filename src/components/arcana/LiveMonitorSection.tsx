@@ -1,7 +1,7 @@
 // LiveMonitorSection — collapsible fleet monitor between Agent Roster and Task Board
-// Manages Tauri event subscriptions for the entire Live Monitor feature.
+// Renders the Live Monitor; `App` owns the event subscriptions (`agentLiveStore.subscribeToEvents`).
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useAgentLiveStore } from '../../stores/agentLiveStore'
 import { AgentLiveCard }     from './AgentLiveCard'
 
@@ -10,7 +10,6 @@ export function LiveMonitorSection() {
     agents,
     isMonitorCollapsed,
     setMonitorCollapsed,
-    subscribeToEvents,
     lastEventAt,
   } = useAgentLiveStore()
 
@@ -21,12 +20,8 @@ export function LiveMonitorSection() {
     return () => clearInterval(id)
   }, [])
 
-  // Subscribe to Tauri events once on mount
-  const cleanupRef = useRef<(() => void) | null>(null)
-  useEffect(() => {
-    cleanupRef.current = subscribeToEvents()
-    return () => { cleanupRef.current?.() }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // The Tauri event subscriptions belong to App (P6-06): this section unmounts
+  // when another tab opens, and events emitted meanwhile must not be lost.
 
   const agentList    = Object.values(agents)
   const secondsAgo   = Math.floor((Date.now() - lastEventAt) / 1000)

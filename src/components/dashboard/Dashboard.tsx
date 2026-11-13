@@ -65,8 +65,6 @@ const Dashboard: React.FC = () => {
     error,
     lastRefreshedAt,
     refreshDashboard,
-    startRealtimeUpdates,
-    stopRealtimeUpdates,
     setDateRange,
     exportCsv,
     exportJson,
@@ -84,8 +82,9 @@ const Dashboard: React.FC = () => {
   const [exportPath, setExportPath] = useState<string>('');
   const [showExportDialog, setShowExportDialog] = useState(false);
 
-  // Mount once: load data, start realtime listeners, and add a 60s polling
-  // fallback for work that finishes without emitting agent:done.
+  // Mount once: load data and add a 60s polling fallback for work that finishes
+  // without emitting agent:done. The realtime listeners belong to App (P6-06),
+  // so budget alerts raised while another tab is open are not lost.
   useEffect(() => {
     refreshDashboard();
     // P2-50. The ceiling that actually enforces, rather than the hardcoded 50
@@ -93,7 +92,6 @@ const Dashboard: React.FC = () => {
     // all, so CostMeter used its OWN default and the figure on screen was
     // unrelated to the cap that stops work.
     loadDailyCap();
-    startRealtimeUpdates();
 
     const interval = setInterval(() => {
       refreshDashboard();
@@ -101,7 +99,6 @@ const Dashboard: React.FC = () => {
 
     return () => {
       clearInterval(interval);
-      stopRealtimeUpdates();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
