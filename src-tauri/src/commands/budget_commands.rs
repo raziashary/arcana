@@ -8,7 +8,6 @@ use tauri::command;
 use crate::budget::{validate_budget, BudgetStatus, DailyBudgetSummary, TaskBudget};
 use crate::db::tasks::TasksDb;
 use crate::errors::Result;
-use crate::runtime_config;
 
 // ── 4.6 set_task_budget ───────────────────────────────────────────────────────
 
@@ -48,37 +47,6 @@ pub async fn get_task_budget_status(task_id: i64) -> Result<BudgetStatus> {
 pub async fn get_daily_budget_summary() -> Result<DailyBudgetSummary> {
     let db = TasksDb::open()?;
     db.get_daily_budget_summary()
-}
-
-// ── 4.8 set_default_worker_budget ────────────────────────────────────────────
-
-/// Persist default budget settings so the Rust recipe runner can read them
-/// when assigning tasks without an explicit budget override.
-/// Stored in `~/.arcana/runtime_config.json` alongside skip_sidecars.
-#[command]
-pub async fn set_default_worker_budget(
-    max_tokens: u64,
-    max_usd: f64,
-    max_turns: u32,
-    warn_pct: u8,
-) -> Result<runtime_config::RuntimeConfig> {
-    // Validate using the same ceiling rules as validate_budget
-    if let Err(code) = validate_budget(Some(max_tokens), Some(max_usd), Some(max_turns)) {
-        return Err(crate::errors::ArcanaError::Agent(code.to_string()));
-    }
-    if warn_pct > 100 {
-        return Err(crate::errors::ArcanaError::Agent(
-            "warn_pct must be 0-100".into(),
-        ));
-    }
-    let mut cfg = runtime_config::read();
-    cfg.default_worker_budget_tokens = max_tokens;
-    cfg.default_worker_budget_usd = max_usd;
-    cfg.default_worker_budget_turns = max_turns;
-    cfg.budget_warn_pct = warn_pct;
-    runtime_config::write(&cfg)
-        .map_err(|e| crate::errors::ArcanaError::Agent(format!("Config write failed: {e}")))?;
-    Ok(cfg)
 }
 
 // ── P2-50 · the daily spend ceiling, exposed to the UI ────────────────────────

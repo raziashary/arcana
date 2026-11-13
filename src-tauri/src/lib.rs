@@ -17,7 +17,6 @@ pub mod observability;
 pub mod platform;
 pub mod provider;
 pub mod recipes;
-pub mod runtime_config;
 pub mod session;
 
 pub mod skills;
@@ -84,7 +83,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         browser_commands::{check_playwright_available, install_playwright_browsers},
         budget_commands::{
             cmd_set_task_budget, get_daily_budget_summary, get_daily_cap, get_task_budget_status,
-            set_daily_cap, set_default_worker_budget,
+            set_daily_cap,
         },
 
         egress_consent_commands::{
@@ -147,7 +146,6 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             execute_skill, get_skill, reload_skills, search_skills, skills_by_category,
             validate_skill_parameters,
         },
-        startup_commands::get_runtime_config,
         subagent_commands::{
             abort_subagent, execute_subtask, get_qc_reviewer_stats, get_subagent_status,
             list_active_subagents, spawn_subagent, terminate_subagent,
@@ -344,7 +342,6 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             list_checkpoints,
             delete_checkpoint,
             // Startup overlay + Demo Mode (Phase 3.3.1)
-            get_runtime_config,
             // Subagent System (Phase 4.9)
             spawn_subagent,
             execute_subtask,
@@ -412,7 +409,6 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             get_daily_budget_summary,
             get_daily_cap,
             set_daily_cap,
-            set_default_worker_budget,
             // Browser Automation QC Skill (Ruflo Feature 7)
             check_playwright_available,
             install_playwright_browsers,

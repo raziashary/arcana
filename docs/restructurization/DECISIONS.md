@@ -370,3 +370,15 @@ backend commands uncalled, which D-017 would delete in turn, so Razi was asked p
 - **Then 18 commands had no caller** and went by the D-017 rule: eight plan commands and ten plugin commands, with `plan_commands.rs` and `plugin_commands.rs`.
   The Rust side (`db/plans`, `arcana-core/src/plugin`) is untouched and is listed in `HARDENING_BACKLOG.md`.
 - **Kept:** `MemorySidebar`, `MemoryStats` and `memoryStore` (their 12 commands stay called). They were unmounted and had no stylesheet (69 class names, none defined); a stylesheet was written and the panel is mounted from a "Memory" button in the Chat header (2026-11-13).
+
+## D-022 · The inert Default Worker Budget setting is deleted — 2026-11-13, Razi
+
+The Settings inventory (`P6-15..18`) traced every control to its reader. One had none: **Default Worker Budget** (tokens, USD, turns, warn percentage) wrote
+`~/.arcana/runtime_config.json`, and the only reader was the Settings card itself. The module header and the card's comment both said the recipe runner applied the values
+to tasks assigned without a budget; a search of every crate and the frontend found no such read. Razi chose to delete it rather than wire it (wiring would start stopping
+tasks that run unlimited today) or label it.
+
+- **Deleted:** the Settings card and section header, `runtimeConfigStore.ts`, `set_default_worker_budget`, `get_runtime_config`, `runtime_config.rs` and `startup_commands.rs`
+  (empty without it). An existing `runtime_config.json` is left on disk and ignored.
+- **What bounds spend instead:** the per-task budget set with `set_task_budget`, and the daily cap (D-018).
+- **Method:** a claim in a comment that a value is "read by X" was checked by search, not trusted.

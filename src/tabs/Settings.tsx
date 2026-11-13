@@ -16,7 +16,6 @@ import WorkerCreateModal from '../components/workers/WorkerCreateModal'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 import { useWorkspaceStore } from '../stores/workspaceStore'
-import { useRuntimeConfigStore } from '../stores/runtimeConfigStore'
 import HooksSettings from '../components/settings/HooksSettings'
 import UpdateSettings from '../components/settings/UpdateSettings'
 import McpToolBrowser from '../components/mcp/McpToolBrowser'
@@ -47,9 +46,6 @@ export default function SettingsTab() {
 
         <SectionHeader title="Daily Spend Ceiling" />
         <DailyCapCard />
-
-        <SectionHeader title="Default Worker Budget" />
-        <DefaultWorkerBudgetCard />
 
         {/* P8-61. "Services" and "Submodules" were section headings with
             nothing under them: P8-54 deleted the panels and left the headers,
@@ -617,145 +613,6 @@ function DailyCapCard() {
         </button>
         {saved && <span className="font-sans text-xs" style={{ color: 'var(--accent)' }}>Saved</span>}
         {error && <span className="font-sans text-xs" style={{ color: 'var(--danger)' }}>{error}</span>}
-      </div>
-    </div>
-  )
-}
-
-// ─── Default Worker Budget (Ruflo Feature 4) ────────────────────────────────
-//
-// These values are persisted to ~/.arcana/runtime_config.json and read by
-// the Rust recipe runner when assigning tasks without an explicit budget.
-
-function DefaultWorkerBudgetCard() {
-  const cfg = useRuntimeConfigStore()
-
-  const [tokens,    setTokens]    = useState(100_000)
-  const [usd,       setUsd]       = useState(0.50)
-  const [turns,     setTurns]     = useState(20)
-  const [warnPct,   setWarnPct]   = useState(80)
-  const [saving,    setSaving]    = useState(false)
-  const [saved,     setSaved]     = useState(false)
-  const [error,     setError]     = useState<string | null>(null)
-
-  useEffect(() => {
-    cfg.load()
-  }, [])
-
-  useEffect(() => {
-    if (cfg.config) {
-      setTokens(cfg.config.default_worker_budget_tokens)
-      setUsd(cfg.config.default_worker_budget_usd)
-      setTurns(cfg.config.default_worker_budget_turns)
-      setWarnPct(cfg.config.budget_warn_pct)
-    }
-  }, [cfg.config])
-
-  const handleSave = async () => {
-    setSaving(true)
-    setError(null)
-    try {
-      await cfg.setDefaultWorkerBudget(tokens, usd, turns, warnPct)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
-    } catch (e) {
-      setError(String(e))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const labelStyle = { color: 'var(--text-3)', fontSize: '10px' } as const
-  const inputStyle = {
-    background: 'var(--bg-2)', border: '1px solid var(--border-2)',
-    color: 'var(--text-1)', borderRadius: '2px', padding: '3px 6px',
-    fontFamily: 'var(--font-sans)', fontSize: '11px', width: 90,
-  } as const
-
-  return (
-    <div
-      className="rounded-sm p-4 space-y-4"
-      style={{ background: 'var(--bg-card)', border: '1px solid var(--border-1)' }}
-    >
-      <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
-        Applied when Supervisor assigns a task without an explicit budget.
-        Stored in <span style={{ color: 'var(--accent)' }}>runtime_config.json</span> — available to the Rust engine.
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        {/* Max Tokens */}
-        <div>
-          <div className="font-sans mb-1" style={labelStyle}>MAX TOKENS PER TASK</div>
-          <input
-            type="number" min={1000} max={1_000_000} step={1000}
-            value={tokens}
-            onChange={e => setTokens(Math.max(1000, parseInt(e.target.value) || 1000))}
-            style={inputStyle}
-            title="Max tokens per task"
-          />
-          <div className="font-sans mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
-            ceiling: 1,000,000
-          </div>
-        </div>
-
-        {/* Max USD */}
-        <div>
-          <div className="font-sans mb-1" style={labelStyle}>MAX USD PER TASK</div>
-          <input
-            type="number" min={0.01} max={100} step={0.01}
-            value={usd}
-            onChange={e => setUsd(Math.max(0.01, parseFloat(e.target.value) || 0.01))}
-            style={inputStyle}
-            title="Max USD per task"
-          />
-          <div className="font-sans mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
-            ceiling: $100.00
-          </div>
-        </div>
-
-        {/* Max Turns */}
-        <div>
-          <div className="font-sans mb-1" style={labelStyle}>MAX TURNS</div>
-          <input
-            type="number" min={1} max={100} step={1}
-            value={turns}
-            onChange={e => setTurns(Math.max(1, parseInt(e.target.value) || 1))}
-            style={inputStyle}
-            title="Max agent turns per task"
-          />
-          <div className="font-sans mt-0.5" style={{ ...labelStyle, fontSize: '9px' }}>
-            ceiling: 100
-          </div>
-        </div>
-
-        {/* Warn % */}
-        <div>
-          <div className="font-sans mb-1" style={labelStyle}>
-            WARN AT &nbsp;<span style={{ color: 'var(--warning)' }}>{warnPct}%</span>
-          </div>
-          <input
-            type="range" min={10} max={100} step={5}
-            value={warnPct}
-            onChange={e => setWarnPct(parseInt(e.target.value))}
-            className="w-full"
-            title={`Warn when ${warnPct}% of budget used`}
-          />
-        </div>
-      </div>
-
-      {error && (
-        <div className="font-sans text-xs" style={{ color: 'var(--danger)' }}>{error}</div>
-      )}
-
-      <div className="flex justify-end">
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="font-sans text-xs px-3 py-1 rounded-sm cursor-pointer disabled:opacity-40 flex items-center gap-1.5"
-          style={{ background: 'var(--accent-muted)', border: '1px solid var(--accent-border)', color: 'var(--accent)' }}
-        >
-          {saving ? 'Saving…' : saved ? 'Saved!' : <><Save size={11} /> Save</>}
-        </button>
       </div>
     </div>
   )

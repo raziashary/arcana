@@ -31,7 +31,6 @@ pub mod settings_commands;
 // feature and were only ever neighbours of the sidecar code.
 pub mod mcp_commands;
 pub mod skill_commands;
-pub mod startup_commands;
 pub mod subagent_commands;
 pub mod task_commands;
 pub mod updater_commands;

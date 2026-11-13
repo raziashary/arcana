@@ -99,3 +99,4 @@ History: [`archive/development/HISTORICAL_DESIGN_PROGRAMME.md`](archive/developm
 - **`P5-08..13`** (true incremental update) stays deferred; `update_graph` is a full re-index (D-013).
 - **Backend left behind by D-021:** the plan system (`src-shared`/`arcana-core` `db/plans`, plan events) and the plugin system (`arcana-core/src/plugin`) have no UI and no Tauri
   command now. Either delete them or give them a UI after v1; until then they are compiled, unreachable from the app, and carry their tests.
+- **Update channel is not persisted:** the Settings channel selector (stable, beta, nightly) is component state passed to each manual `check_for_update`; the automatic check does not use it and it resets on restart. Persist it, or drop the selector, when the updater is worked on (R4 ships stable only).
