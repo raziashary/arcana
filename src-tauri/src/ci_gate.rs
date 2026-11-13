@@ -6978,61 +6978,23 @@ fn effect() { ToolEffect::Execute }"#;
     /// **may only shrink**. A new command must be called by the frontend (or the
     /// list must be edited deliberately, with a reason), and a command that
     /// gains a caller must leave the list. Deleting the entries is the owner's
-    /// call (`DECISIONS.md` D-015): several back later R3 rows (`has_provider_key`
-    /// for the first-run check, `get_user_preferences` for settings hydration,
-    /// `get_daily_budget_summary` for the spend ceiling).
+    /// call (`DECISIONS.md` D-015, D-017). D-017 deleted the 43 commands with no
+    /// caller anywhere; what remains is either planned v1 UI (`has_provider_key`
+    /// for the first-run check, `get_daily_budget_summary` for the spend cap,
+    /// `cmd_set_task_budget`, `force_release_task` and `get_orphaned_tasks` for
+    /// the task panel) or still called from Rust (`get_task`,
+    /// `read_log_file_full`, `read_structured_events_full`).
     #[test]
     fn tg_p6_11_registered_commands_nobody_calls_may_only_shrink() {
         const UNCALLED: &[&str] = &[
-            "analyze_diff",
-            "analyze_pr_diff",
-            "break_down_epic",
-            "check_arcana_instructions_exists",
             "cmd_set_task_budget",
-            "compare_checkpoints",
-            "create_checkpoint",
-            "create_phased_task",
-            "find_symbol_references",
             "force_release_task",
-            "get_arcana_instructions_char_count",
             "get_daily_budget_summary",
-            "get_file_metadata",
-            "get_graph_communities",
-            "get_graph_edges_for_viz",
-            "get_graph_nodes_for_viz",
             "get_orphaned_tasks",
-            "get_plugin_config",
-            "get_recipe",
-            "get_session",
-            "get_system_logs",
             "get_task",
-            "get_user_preferences",
-            "get_worker_analytics",
-            "get_worker_by_slug",
-            "git_blame",
-            "git_clone",
-            "git_init",
-            "git_worktree_add",
-            "git_worktree_remove",
             "has_provider_key",
-            "import_skill",
-            "list_installed_plugins",
-            "list_repos",
-            "list_skills",
-            "merge_all_repos_cmd",
             "read_log_file_full",
             "read_structured_events_full",
-            "register_repo",
-            "resolve_symbol",
-            "save_memory_md",
-            "search_file_contents",
-            "search_procedural",
-            "search_semantic",
-            "set_plugin_config",
-            "suggest_worker_for_task",
-            "summarize_session_cmd",
-            "unregister_repo",
-            "update_worker_model_sync",
         ];
         let registered = registered_commands();
         let invoked: std::collections::BTreeSet<String> = frontend_invocations()

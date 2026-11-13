@@ -9,21 +9,10 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::errors::{ArcanaError, Result};
-use crate::skills::types::{
-    Skill, SkillCategory, SkillExecutionResult, SkillSummary, ValidationResult,
-};
+use crate::skills::types::{Skill, SkillExecutionResult, SkillSummary, ValidationResult};
 use crate::skills::{SkillEngine, SkillRegistry};
 
 // ── list_skills ───────────────────────────────────────────────────────────────
-
-#[tauri::command]
-pub fn list_skills(
-    category: Option<String>,
-    registry: State<'_, Arc<SkillRegistry>>,
-) -> Result<Vec<SkillSummary>> {
-    let cat = category.as_deref().map(SkillCategory::from_str);
-    Ok(registry.list(cat))
-}
 
 // ── get_skill ─────────────────────────────────────────────────────────────────
 
@@ -97,31 +86,3 @@ pub fn reload_skills(registry: State<'_, Arc<SkillRegistry>>) -> Result<usize> {
 }
 
 // ── import_skill ──────────────────────────────────────────────────────────────
-
-#[tauri::command]
-pub fn import_skill(source: String, registry: State<'_, Arc<SkillRegistry>>) -> Result<Skill> {
-    use crate::db::arcana_dir;
-    use crate::skills::loader::SkillLoader;
-    use std::path::Path;
-
-    let path = Path::new(&source);
-    if !path.exists() {
-        return Err(ArcanaError::Agent(format!("File not found: {source}")));
-    }
-
-    let category_hint = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("custom");
-
-    let loader = SkillLoader::new()?;
-    let skill = loader.load_file(path, category_hint)?;
-
-    let dest_dir = arcana_dir()?.join("skills").join(skill.category.as_str());
-    std::fs::create_dir_all(&dest_dir)?;
-    std::fs::copy(path, dest_dir.join(path.file_name().unwrap()))?;
-
-    registry.reload()?;
-    Ok(skill)
-}

@@ -31,20 +31,3 @@ pub fn delete_arcana_instructions(repo_path: String) -> Result<()> {
     let db = ArcanaInstructionsDb::open()?;
     db.delete_repo(&repo_path)
 }
-
-/// Check if instructions exist for a scope.
-#[tauri::command]
-pub fn check_arcana_instructions_exists(scope: String, repo_path: Option<String>) -> Result<bool> {
-    let db = ArcanaInstructionsDb::open()?;
-    db.exists(&scope, repo_path.as_deref())
-}
-
-/// Get character count for a scope (for live counter in editor UI).
-#[tauri::command]
-pub fn get_arcana_instructions_char_count(
-    scope: String,
-    repo_path: Option<String>,
-) -> Result<usize> {
-    let db = ArcanaInstructionsDb::open()?;
-    db.char_count(&scope, repo_path.as_deref())
-}

@@ -8,7 +8,6 @@ pub mod annotation_commands;
 pub mod arcana_instructions_commands;
 pub mod browser_commands;
 pub mod budget_commands;
-pub mod diff_commands;
 #[cfg(feature = "e2e-ipc-receipt")]
 pub mod e2e_ipc_receipt;
 pub mod egress_consent_commands;

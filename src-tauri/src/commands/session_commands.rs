@@ -16,14 +16,6 @@ pub fn list_sessions(session_mgr: State<'_, Arc<SessionManager>>) -> Result<Vec<
 }
 
 #[tauri::command]
-pub fn get_session(
-    session_id: String,
-    session_mgr: State<'_, Arc<SessionManager>>,
-) -> Result<Option<Session>> {
-    session_mgr.get_session(&session_id)
-}
-
-#[tauri::command]
 pub fn get_session_messages(
     session_id: String,
     session_mgr: State<'_, Arc<SessionManager>>,

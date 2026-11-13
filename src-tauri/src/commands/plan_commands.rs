@@ -78,32 +78,6 @@ pub fn delete_plan(plan_id: String, app: AppHandle) -> Result<bool> {
 // ─── Fleet Commands ───────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn break_down_epic(epic_task_id: i64, supervisor_id: String, app: AppHandle) -> Result<Plan> {
-    let db = PlansDb::open()?;
-
-    let input = CreatePlanInput {
-        title: format!("Epic Breakdown #{}", epic_task_id),
-        description: Some("Supervisor-created epic breakdown plan".to_string()),
-        session_id: Some("fleet".to_string()),
-        assigned_agent: Some(supervisor_id.clone()),
-        created_by: Some(supervisor_id),
-        agent_scope: PlanScope::Epic,
-        parent_plan_id: None,
-        task_id: Some(epic_task_id),
-    };
-
-    let plan = db.create_plan(input)?;
-
-    emit_plan_changed(PlanChangedPayload {
-        plan_id: Some(plan.id.clone()),
-        kind: "epic_breakdown".to_string(),
-        status: Some("active".to_string()),
-    });
-
-    Ok(plan)
-}
-
-#[tauri::command]
 pub fn claim_plan_item(
     plan_id: String,
     worker_id: String,

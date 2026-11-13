@@ -4,11 +4,8 @@
 
 use crate::errors::{ArcanaError, Result};
 use crate::ide::{
-    file_reader, file_search, file_tree, symbol_nav, symbols,
-    types::{
-        ContentSearchResult, FileContent, FileMetadata, FileSearchResult, FileTreeNode,
-        SymbolDefinition, SymbolReference, SymbolTree,
-    },
+    file_reader, file_search, file_tree, symbols,
+    types::{FileContent, FileSearchResult, FileTreeNode, SymbolTree},
     workspace::{self, IdeWorkspaceState},
 };
 
@@ -73,12 +70,6 @@ pub fn read_file_content(
     file_reader::read_content(&workspace, &path, start_line, end_line)
 }
 
-#[tauri::command]
-pub fn get_file_metadata(path: String) -> Result<FileMetadata> {
-    let workspace = require_workspace()?;
-    file_reader::read_metadata(&workspace, &path)
-}
-
 // ─── Search ───────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -95,21 +86,6 @@ pub fn search_files(
         path.as_deref(),
         glob.as_deref(),
         max_results.unwrap_or(50),
-    )
-}
-
-#[tauri::command]
-pub fn search_file_contents(
-    query: String,
-    path: Option<String>,
-    max_results: Option<usize>,
-) -> Result<Vec<ContentSearchResult>> {
-    let workspace = require_workspace()?;
-    file_search::search_contents(
-        &workspace,
-        &query,
-        path.as_deref(),
-        max_results.unwrap_or(100),
     )
 }
 
@@ -248,30 +224,6 @@ mod path_safety_tests {
 }
 
 // ─── Symbol Navigation ────────────────────────────────────────────────────────
-
-/// Find the definition site of the symbol at `(line, column)` in `path`.
-/// `line` is 1-indexed; `column` is the 0-indexed byte offset within the line.
-/// Returns `null` on the frontend when no definition is found.
-#[tauri::command]
-pub fn resolve_symbol(
-    path: String,
-    line: usize,
-    column: usize,
-) -> Result<Option<SymbolDefinition>> {
-    let workspace = require_workspace()?;
-    symbol_nav::resolve_symbol(&workspace, &path, line, column)
-}
-
-/// Find all locations in the workspace where `symbol_name` appears as a whole
-/// word.  Searches source files only; binary files are skipped.
-#[tauri::command]
-pub fn find_symbol_references(
-    symbol_name: String,
-    max_results: Option<usize>,
-) -> Result<Vec<SymbolReference>> {
-    let workspace = require_workspace()?;
-    symbol_nav::find_symbol_references(&workspace, &symbol_name, max_results.unwrap_or(200))
-}
 
 // ─── Workspace state (open tabs, expanded dirs) ───────────────────────────────
 

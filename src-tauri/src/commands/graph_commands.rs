@@ -5,7 +5,6 @@ use crate::graph::analyze::{god_nodes, suggest_questions, surprising_connections
 use crate::graph::cluster::{run_clustering, Community};
 use crate::graph::export::{export_html, export_json, export_svg};
 use crate::graph::incremental::UpdateStats;
-use crate::graph::registry::{merge_all_repos, MergeStats, RepoEntry, RepoRegistry};
 use crate::graph::report::{export_report_markdown, generate_report};
 use crate::graph::store::GraphStore;
 use serde::{Deserialize, Serialize};
@@ -539,26 +538,6 @@ pub async fn get_graph_stats(repo_path: Option<String>) -> Result<GraphStats> {
 }
 
 #[tauri::command]
-pub async fn get_graph_communities(repo_path: Option<String>) -> Result<Vec<Community>> {
-    let path = repo_path
-        .and_then(|p| {
-            if p.is_empty() || p == "." {
-                None
-            } else {
-                Some(p)
-            }
-        })
-        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
-    let db_path = repo_db_path(&path)?;
-    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
-
-    let store = GraphStore::open(&db_path)?;
-    let communities = run_clustering(&store)?;
-
-    Ok(communities)
-}
-
-#[tauri::command]
 pub async fn get_graph_report(repo_path: Option<String>) -> Result<String> {
     let path = repo_path
         .and_then(|p| {
@@ -623,76 +602,6 @@ pub async fn export_graph(
 // ============================================================================
 // VISUALIZATION DATA COMMANDS
 // ============================================================================
-
-#[tauri::command]
-pub async fn get_graph_nodes_for_viz(
-    repo_path: Option<String>,
-    max_nodes: u32,
-) -> Result<Vec<serde_json::Value>> {
-    let path = repo_path
-        .and_then(|p| {
-            if p.is_empty() || p == "." {
-                None
-            } else {
-                Some(p)
-            }
-        })
-        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
-    let db_path = repo_db_path(&path)?;
-    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
-
-    let store = GraphStore::open(&db_path)?;
-    let all_nodes = store.get_all_nodes_for_graph(max_nodes as i64, 0)?;
-
-    let nodes: Vec<_> = all_nodes
-        .iter()
-        .map(|n| {
-            serde_json::json!({
-                "id": n.qualified_name,
-                "label": n.name,
-                "kind": n.kind,
-                "file": n.file_path,
-                "line": n.line_start,
-                "degree": 0 // Will be calculated by frontend
-            })
-        })
-        .collect();
-
-    Ok(nodes)
-}
-
-#[tauri::command]
-pub async fn get_graph_edges_for_viz(repo_path: Option<String>) -> Result<Vec<serde_json::Value>> {
-    let path = repo_path
-        .and_then(|p| {
-            if p.is_empty() || p == "." {
-                None
-            } else {
-                Some(p)
-            }
-        })
-        .ok_or_else(|| anyhow::anyhow!("repo_path required"))?;
-    let db_path = repo_db_path(&path)?;
-    std::fs::create_dir_all(db_path.parent().expect("db_path always has parent"))?;
-
-    let store = GraphStore::open(&db_path)?;
-    let all_edges = store.get_all_edges_for_graph(i64::MAX, 0)?;
-
-    let edges: Vec<_> = all_edges
-        .iter()
-        .map(|e| {
-            serde_json::json!({
-                "source": e.source_qualified,
-                "target": e.target_qualified,
-                "kind": e.kind,
-                "weight": e.weight,
-                "confidence": e.confidence_tier
-            })
-        })
-        .collect();
-
-    Ok(edges)
-}
 
 // ============================================================================
 // ANALYSIS COMMANDS
@@ -852,30 +761,6 @@ pub async fn search_graph_nodes(
 // ============================================================================
 // REGISTRY COMMANDS (Phase 6.16)
 // ============================================================================
-
-#[tauri::command]
-pub async fn register_repo(path: String, alias: Option<String>) -> Result<RepoEntry> {
-    let registry = RepoRegistry::load()?;
-    registry.register(Path::new(&path), alias.as_deref())
-}
-
-#[tauri::command]
-pub async fn unregister_repo(path: String) -> Result<()> {
-    let registry = RepoRegistry::load()?;
-    registry.unregister(Path::new(&path))
-}
-
-#[tauri::command]
-pub async fn list_repos() -> Result<Vec<RepoEntry>> {
-    let registry = RepoRegistry::load()?;
-    registry.list()
-}
-
-#[tauri::command]
-pub async fn merge_all_repos_cmd(output_path: String) -> Result<MergeStats> {
-    let registry = RepoRegistry::load()?;
-    merge_all_repos(&registry, Path::new(&output_path))
-}
 
 // ============================================================================
 // DELETE GRAPH COMMAND

@@ -59,11 +59,6 @@ pub async fn list_workers() -> Result<Vec<Worker>> {
 }
 
 #[tauri::command]
-pub fn get_worker_by_slug(slug: String) -> Result<Option<Worker>> {
-    WorkersDb::open()?.get_by_slug(&slug)
-}
-
-#[tauri::command]
 pub fn create_worker(input: CreateWorkerInput) -> Result<CreateWorkerOutput> {
     let db = WorkersDb::open()?;
     let slug = slugify(&input.name);
@@ -118,59 +113,6 @@ pub fn update_worker_status(worker_id: i64, status: String) -> Result<()> {
 #[tauri::command]
 pub fn update_worker_model(worker_id: i64, model: String) -> Result<()> {
     WorkersDb::open()?.update_model(worker_id, &model)
-}
-
-/// Update a worker's model and report the result to the UI.
-///
-/// ⚠ The name says `_sync` and the `UpdateModelSyncResult` shape carries a
-/// `sync_status`, because this used to push the model into the sidecar as well
-/// as the database. `P8-09` deleted that; the database write **is** the change
-/// now. Both are kept because `WorkerTable.tsx:75` invokes this command by name
-/// and renders its result — renaming them is a UI change, not a cleanup.
-///
-/// Unlike `update_worker_model`, which writes and returns nothing, this
-/// validates the worker exists first and returns a message the UI can toast.
-#[tauri::command]
-pub async fn update_worker_model_sync(
-    worker_id: i64,
-    model: String,
-) -> Result<UpdateModelSyncResult> {
-    // Step 1: Update database
-    let db = WorkersDb::open()?;
-
-    // Existence guard, not a read. `update_model` on a missing id is a silent
-    // no-op in SQLite, so without this the command would report "synced" for a
-    // worker that does not exist.
-    db.get_by_id(worker_id)?
-        .ok_or_else(|| ArcanaError::Agent(format!("Worker id={worker_id} not found")))?;
-
-    db.update_model(worker_id, &model)?;
-
-    // P8-09 — steps 2 and 3 are DELETED. Both wrote into the sidecar.
-    //
-    // 🔴 Step 2 pushed the model to a second process over HTTP; step 3
-    // wrote it into `config/agents/*.yaml` inside that process's own
-    // directory, described there as *"the authoritative source the agent
-    // reads on boot"*. Neither destination exists. The database write above
-    // IS the change now, and it takes effect on the next tick because the
-    // engine reads the row rather than a file a Python process owned.
-    //
-    // ⚠ The command, its name and its return SHAPE are unchanged —
-    // `WorkerTable.tsx:75` invokes it and renders the toast. What changes is
-    // that `sync_status` can no longer be `"pending"` or `"failed"`: there
-    // is nothing left to be pending on. Reporting "pending" forever would
-    // be a status with no producer, which is the defect `W-7` names.
-    let sync_result = (
-        "synced",
-        format!("Model updated to {model} — active on the next tick"),
-    );
-
-    Ok(UpdateModelSyncResult {
-        db_updated: true,
-        sync_status: sync_result.0.to_string(),
-        message: sync_result.1,
-        model,
-    })
 }
 
 #[tauri::command]

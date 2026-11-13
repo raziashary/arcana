@@ -10,11 +10,9 @@ pub mod edit_file;
 pub mod get_task_tool;
 pub mod git_commit;
 pub mod glob;
-pub mod graph_prompts;
 pub mod graph_query_tools;
 #[cfg(test)]
 mod graph_query_tools_tests;
-pub mod graph_tools;
 pub mod grep;
 pub mod list_directory;
 pub mod list_tasks_tool;

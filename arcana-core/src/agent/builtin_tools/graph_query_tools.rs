@@ -3,7 +3,7 @@
 // Eight read-only tools over the workspace's code graph: search, one symbol's
 // details, its direct callers and callees, its impact, a file's symbols, the
 // shortest dependency path between two symbols, and an overview. They replace
-// the 27 unregistered structs in `graph_tools.rs`, which could not be
+// the 27 unregistered structs of the old `graph_tools.rs` (deleted, D-017), which could not be
 // registered as they stood: every one loaded the whole node and edge tables
 // per call, `list_callers` was a transitive closure, and the traversal helpers
 // they leaned on compared edge kinds against `"Calls"` while the extractor

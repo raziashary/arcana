@@ -67,10 +67,7 @@ History: [`archive/development/HISTORICAL_DESIGN_PROGRAMME.md`](archive/developm
 
 ## G. Graph leftovers from R2 (2026-11-12, see D-013 and D-014)
 
-- **Inert code awaiting Razi's deletion call:** `arcana-core/src/agent/builtin_tools/graph_tools.rs` (27 unregistered structs) and
-  `graph_prompts.rs` (five prompts that tell the model to call those tools by name). Superseded by `graph_query_tools.rs`. They
-  compile, nothing registers them, and they carry the old whole-table scans. Delete both, and drop their `mod` lines, once
-  approved; the four ideas in them that did not ship are the next item.
+- **Deleted (D-017, 2026-11-13):** `graph_tools.rs` (27 unregistered structs) and `graph_prompts.rs` (five prompts that told the model to call them by name), superseded by `graph_query_tools.rs`. The four ideas that did not ship are the next item.
 - **Four tool ideas parked until their producers are fixed:** `detect_graph_changes` (runs `git` in the process directory, not the
   workspace), `get_graph_diff` (nothing writes snapshots), `get_graph_report` (reads a placeholder file), `get_flow_criticality`
   (call chains labelled as flows). `query.rs`, `flows.rs`, `changes.rs` and `analyze.rs` now compare the right edge-kind strings

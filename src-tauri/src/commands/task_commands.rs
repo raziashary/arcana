@@ -2,7 +2,7 @@
 // Frontend reads tasks via these commands to populate the Arcana Panel kanban.
 // PA's create_task tool writes directly via TasksDb; these expose read + status updates.
 
-use crate::db::tasks::{CreatePhasedTaskInput, PhaseSummary, Task, TasksDb, WorkerRequest};
+use crate::db::tasks::{PhaseSummary, Task, TasksDb, WorkerRequest};
 use crate::errors::Result;
 use crate::events::{
     emit_phase_complete, emit_task_changed, emit_task_unblocked, TaskChangedPayload,
@@ -386,48 +386,4 @@ pub fn get_epic_tasks(epic_id: String) -> Result<Vec<Task>> {
 pub fn get_epic_phase_summary(epic_id: String) -> Result<Vec<PhaseSummary>> {
     let db = TasksDb::open()?;
     db.get_phase_summary(&epic_id)
-}
-
-/// Create a subtask inside an epic with full phase metadata.
-/// Called by the Supervisor (or PA in FastDevelopment mode) when decomposing
-/// an epic into phased work. The `blocked_by` list contains string task IDs
-/// that must reach status=done before this task becomes ready.
-#[tauri::command]
-pub fn create_phased_task(
-    epic_id: String,
-    phase: String,
-    phase_order: i32,
-    title: String,
-    description: Option<String>,
-    priority: String,
-    task_type: String,
-    acceptance_criteria: String,
-    blocked_by: Vec<String>,
-    milestone: Option<String>,
-) -> Result<Task> {
-    let db = TasksDb::open()?;
-    let task = db.create_phased_task(CreatePhasedTaskInput {
-        epic_id,
-        phase,
-        phase_order,
-        title,
-        description,
-        priority,
-        task_type,
-        acceptance_criteria,
-        blocked_by,
-        milestone,
-        created_by: None,
-    })?;
-    emit_task_changed(TaskChangedPayload {
-        task_id: Some(task.id),
-        kind: "created".into(),
-        status: Some(if task.epic_id.is_some() {
-            "needs_info".into()
-        } else {
-            "ready".into()
-        }),
-        assigned_worker: None,
-    });
-    Ok(task)
 }

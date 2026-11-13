@@ -69,30 +69,12 @@ pub fn deactivate_fact(id: String) -> Result<()> {
     SemanticStore::deactivate_fact(&id)
 }
 
-/// Facts in preference + user_profile categories.
-#[tauri::command]
-pub fn get_user_preferences() -> Result<Vec<SemanticFact>> {
-    SemanticStore::get_user_preferences()
-}
-
-/// Keyword search within semantic tier.
-#[tauri::command]
-pub fn search_semantic(query: String, limit: Option<u32>) -> Result<Vec<SemanticFact>> {
-    SemanticStore::search(&query, limit.unwrap_or(20))
-}
-
 // ─── Procedural commands ─────────────────────────────────────────────────────
 
 /// Full MEMORY.md contents.
 #[tauri::command]
 pub fn get_memory_md() -> Result<String> {
     ProceduralStore::get_memory_md()
-}
-
-/// Overwrite MEMORY.md with new content.
-#[tauri::command]
-pub fn save_memory_md(content: String) -> Result<()> {
-    ProceduralStore::save_memory_md(&content)
 }
 
 /// List all topic files from disk.
@@ -124,12 +106,6 @@ pub fn delete_memory_topic(topic: String) -> Result<()> {
     ProceduralStore::delete_topic(&topic)
 }
 
-/// Keyword search within procedural tier.
-#[tauri::command]
-pub fn search_procedural(query: String, limit: Option<u32>) -> Result<Vec<ProceduralMemory>> {
-    ProceduralStore::search(&query, limit.unwrap_or(10))
-}
-
 // ─── Cross-tier commands ─────────────────────────────────────────────────────
 
 /// Full cross-tier search — used by the search bar in the Memory Sidebar.
@@ -154,10 +130,4 @@ pub fn search_memory(
 #[tauri::command]
 pub fn get_memory_stats() -> Result<MemoryStats> {
     Ok(recall::get_stats())
-}
-
-/// Manually trigger session summarization (e.g. from "End Session" button).
-#[tauri::command]
-pub fn summarize_session_cmd(session_id: String, working_dir: Option<String>) -> Result<String> {
-    crate::memory::Summarizer::summarize_session(&session_id, working_dir.as_deref())
 }

@@ -315,6 +315,9 @@ Asked and answered on 2026-11-13, with the instruction to carry R3 through end t
   in `HARDENING_BACKLOG.md` section G.
 - **The 49 uncalled commands: delete those with no caller anywhere** (no frontend, CLI or test). A command that looks like a planned v1 UI is kept and listed to Razi.
   `TG-P6-11`'s list shrinks to match.
+  **Done 2026-11-13:** 41 commands deleted with their registrations and the `diff_commands` module (its only content was the workspace-consent helpers for the deleted
+  `analyze_*` commands, tests included; the code is in git history if a diff-analysis UI returns). Kept: the 5 planned-v1-UI commands named in `SHIP_PLAN.md` and 3 that
+  Rust still calls. `TG-P6-11` pins those 8.
 - **Orphaned frontend code: "orphan" means a non-test file not imported, directly or transitively, from the app entry.** Those files are deleted, and the commit body lists them.
 
 ## D-018 · The daily spend cap ships off by default, and the first-run key step offers it — 2026-11-13, Razi

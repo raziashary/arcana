@@ -6,8 +6,8 @@
 
 use crate::errors::{ArcanaError, Result};
 use crate::git::types::{
-    BlameLine, BranchInfo, CheckpointInfo, CommitInfo, DiffResult, GitStatusReport, PullResult,
-    RepoInfo, RestoreResult, StashInfo, WorktreeInfo,
+    BranchInfo, CheckpointInfo, CommitInfo, DiffResult, GitStatusReport, PullResult, RepoInfo,
+    RestoreResult, StashInfo, WorktreeInfo,
 };
 use crate::git::{
     branch, checkpoint, commit, diff, history, remote, repo, stash, status, worktree,
@@ -18,18 +18,6 @@ use crate::git::{
 #[tauri::command]
 pub fn git_open_repo(path: String) -> Result<RepoInfo> {
     repo::info(&path)
-}
-
-#[tauri::command]
-pub async fn git_clone(url: String, path: String, branch: Option<String>) -> Result<RepoInfo> {
-    tokio::task::spawn_blocking(move || repo::clone_repo(&url, &path, branch.as_deref()))
-        .await
-        .map_err(|e| ArcanaError::Git(format!("clone join: {e}")))?
-}
-
-#[tauri::command]
-pub fn git_init(path: String, bare: Option<bool>) -> Result<RepoInfo> {
-    repo::init(&path, bare.unwrap_or(false))
 }
 
 // ─── Status / Diff ────────────────────────────────────────────────────────────
@@ -144,20 +132,6 @@ pub fn git_worktree_list(repo_path: String) -> Result<Vec<WorktreeInfo>> {
     worktree::list(&repo_path)
 }
 
-#[tauri::command]
-pub fn git_worktree_add(
-    repo_path: String,
-    path: String,
-    branch: Option<String>,
-) -> Result<WorktreeInfo> {
-    worktree::add(&repo_path, &path, branch.as_deref())
-}
-
-#[tauri::command]
-pub fn git_worktree_remove(repo_path: String, path: String, force: Option<bool>) -> Result<()> {
-    worktree::remove(&repo_path, &path, force.unwrap_or(false))
-}
-
 // ─── History ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -167,11 +141,6 @@ pub fn git_log(
     file: Option<String>,
 ) -> Result<Vec<CommitInfo>> {
     history::log(&repo_path, max_count, file.as_deref())
-}
-
-#[tauri::command]
-pub fn git_blame(repo_path: String, file: String, line: Option<usize>) -> Result<Vec<BlameLine>> {
-    history::blame(&repo_path, &file, line)
 }
 
 // ─── Stash ────────────────────────────────────────────────────────────────────
@@ -207,22 +176,6 @@ pub fn git_stash_drop(repo_path: String, index: usize) -> Result<()> {
 // ─── Checkpoints ──────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn create_checkpoint(
-    session_id: String,
-    task_id: Option<i64>,
-    file_path: String,
-    reason: String,
-) -> Result<Option<CheckpointInfo>> {
-    checkpoint::create_within_workspace(
-        &session_id,
-        task_id,
-        &file_path,
-        &reason,
-        &crate::commands::workspace_commands::load_workspace_dir(),
-    )
-}
-
-#[tauri::command]
 pub fn restore_checkpoint(checkpoint_id: String) -> Result<RestoreResult> {
     checkpoint::restore_within_workspace(
         &checkpoint_id,
@@ -242,9 +195,4 @@ pub fn list_checkpoints(
 #[tauri::command]
 pub fn delete_checkpoint(checkpoint_id: String) -> Result<()> {
     checkpoint::delete(&checkpoint_id)
-}
-
-#[tauri::command]
-pub fn compare_checkpoints(checkpoint_id_1: String, checkpoint_id_2: String) -> Result<DiffResult> {
-    checkpoint::compare(&checkpoint_id_1, &checkpoint_id_2)
 }

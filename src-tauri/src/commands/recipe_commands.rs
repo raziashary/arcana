@@ -77,13 +77,6 @@ pub fn list_recipes() -> Result<Vec<Recipe>> {
     recipes::list()
 }
 
-/// Get a specific recipe by id (filename stem).
-#[tauri::command]
-pub fn get_recipe(id: String) -> Result<Option<Recipe>> {
-    let all = recipes::list()?;
-    Ok(all.into_iter().find(|r| r.id == id))
-}
-
 /// List backups for a specific recipe, newest first (max 10).
 #[tauri::command]
 pub fn list_recipe_backups(recipe_id: String) -> Result<Vec<RecipeBackup>> {

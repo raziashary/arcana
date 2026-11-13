@@ -5,8 +5,7 @@ use crate::errors::ArcanaError;
 use crate::plugin::{
     manager::PluginManager,
     manifest::{
-        InstallResult, InstalledPlugin, PluginConfig, PluginInfo, RunResult, SetupToken,
-        TokenClaims, UpdateResult, VerifyResult,
+        InstallResult, PluginInfo, RunResult, SetupToken, TokenClaims, UpdateResult, VerifyResult,
     },
 };
 
@@ -17,13 +16,6 @@ use crate::plugin::{
 pub async fn list_plugins() -> Result<Vec<PluginInfo>, ArcanaError> {
     let mgr = PluginManager::new();
     Ok(mgr.list_marketplace())
-}
-
-/// List currently installed plugins.
-#[tauri::command]
-pub async fn list_installed_plugins() -> Result<Vec<InstalledPlugin>, ArcanaError> {
-    let mgr = PluginManager::new();
-    Ok(mgr.list_installed())
 }
 
 /// Get the full manifest for a single plugin by name.
@@ -86,21 +78,6 @@ pub async fn run_plugin(name: String, args: Vec<String>) -> Result<RunResult, Ar
 }
 
 // ─── Config ──────────────────────────────────────────────────────────────────
-
-/// Get the persisted config for an installed plugin.
-#[tauri::command]
-pub async fn get_plugin_config(name: String) -> Result<Option<serde_json::Value>, ArcanaError> {
-    let mgr = PluginManager::new();
-    mgr.get_config(&name).map_err(ArcanaError::from)
-}
-
-/// Set / update the config for an installed plugin.
-#[tauri::command]
-pub async fn set_plugin_config(name: String, values: serde_json::Value) -> Result<(), ArcanaError> {
-    let mgr = PluginManager::new();
-    let cfg = PluginConfig { name, values };
-    mgr.set_config(&cfg).map_err(ArcanaError::from)
-}
 
 // ─── Setup tokens ─────────────────────────────────────────────────────────────
 

@@ -44,18 +44,18 @@ use std::path::{Path, PathBuf};
 /// it. **This list may only shrink.** Adding to it requires a deliberate edit
 /// and a reviewer asking why a new file cannot be reached.
 ///
-/// **It is empty, and that is the goal state.** P1 resolved all three entries:
-/// `graph_tools.rs` and `graph_prompts.rs` are declared and compiling (P1-01,
-/// P1-03), and `db/checkpoints.rs` was deleted rather than declared, because
-/// its justification — "undo does not exist" — was false and declaring it would
-/// have created the second checkpoint store P1-16 then had to merge
-/// (ADR-LOG-RESTRUCT-0012).
+/// **It is empty, and that is the goal state.** P1 resolved all three entries,
+/// and the two graph modules it declared were later deleted (D-017): the 27
+/// structs in `graph_tools.rs` never implemented `Tool` and nothing registered
+/// them, and the interactive agent's graph tools are the eight in
+/// `graph_query_tools.rs` (D-014, `TG-P5-18`). `db/checkpoints.rs` was deleted
+/// rather than declared, because its justification — "undo does not exist" —
+/// was false and declaring it would have created the second checkpoint store
+/// P1-16 then had to merge (ADR-LOG-RESTRUCT-0012).
 ///
-/// ⚠ **Compiling is not wiring.** The 27 structs in `graph_tools.rs` still do
-/// not implement `Tool` and nothing registers them; the interactive agent's graph
-/// tools are the eight in `graph_query_tools.rs` (D-014, `TG-P5-18`). This gate
-/// proves the code is *built*, never that a capability *exists*. A green gate
-/// here must not be read as a working feature.
+/// ⚠ **Compiling is not wiring.** This gate proves the code is *built*, never
+/// that a capability *exists*. A green gate here must not be read as a working
+/// feature.
 const KNOWN_UNREACHABLE: &[(&str, &str)] = &[];
 
 /// Walk `src/`, returning every `.rs` file relative to it.
