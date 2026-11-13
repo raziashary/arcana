@@ -22,6 +22,7 @@ import { BuildingContextMenu } from './interaction/BuildingContextMenu'
 import { ImpactOverlay } from './impact/ImpactOverlay'
 import { ImpactPanel } from './impact/ImpactPanel'
 import { ErrorBoundary } from '../ErrorBoundary'
+import { CITY } from '../../styles/palette'
 
 const CITY_SIZE = 180
 const GOD_NODE_DEGREE_THRESHOLD = 15
@@ -91,7 +92,7 @@ export function CityView() {
     return (
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100%', color: '#555', flexDirection: 'column', gap: 12
+        height: '100%', color: CITY.inkFaint, flexDirection: 'column', gap: 12
       }}>
         <div style={{ fontSize: 48 }}>🏙</div>
         <div style={{ fontSize: 14 }}>Build a graph first to see the 3D city</div>
@@ -118,7 +119,7 @@ export function CityView() {
           position: [CITY_SIZE / 2, CITY_SIZE * 0.55, CITY_SIZE * 0.85],
         }}
         gl={{ antialias: true, alpha: false }}
-        style={{ background: '#050508' }}
+        style={{ background: CITY.stage }}
         onCreated={({ camera }) => {
           // Ensure camera looks at city centre from frame 1
           camera.lookAt(CITY_SIZE / 2, 0, CITY_SIZE / 2)
@@ -233,24 +234,24 @@ export function CityView() {
           position: 'fixed',
           left: cursorPos.x + 14,
           top: cursorPos.y - 8,
-          background: '#111111',
-          border: '1px solid #222222',
+          background: CITY.panel,
+          border: `1px solid ${CITY.panelBorder}`,
           borderRadius: 3,
           padding: '7px 11px',
           fontFamily: "'IBM Plex Mono', monospace",
           fontSize: 11,
-          color: '#888888',
+          color: CITY.inkMuted,
           zIndex: 1000,
           pointerEvents: 'none',
           maxWidth: 300,
           lineHeight: 1.5,
         }}>
-          <div style={{ color: '#f0f0f0', fontWeight: 600, marginBottom: 2 }}>
+          <div style={{ color: CITY.inkBright, fontWeight: 600, marginBottom: 2 }}>
             {hoveredNode.label || hoveredNode.id.split('::').pop() || hoveredNode.id}
           </div>
           <div>{hoveredNode.kind}{hoveredNode.language ? ` · ${hoveredNode.language}` : ''}</div>
           {hoveredNode.file_path && (
-            <div style={{ color: '#4477ff', marginTop: 2 }}>{hoveredNode.file_path}</div>
+            <div style={{ color: CITY.link, marginTop: 2 }}>{hoveredNode.file_path}</div>
           )}
           {(hoveredNode.line_start || hoveredNode.line_end) && (
             <div>L{hoveredNode.line_start}–{hoveredNode.line_end}</div>
@@ -280,8 +281,8 @@ export function CityView() {
           onClick={() => setShowCalls(v => !v)}
           style={{
             background: showCalls ? 'rgba(0,255,136,0.2)' : 'rgba(0,0,0,0.6)',
-            border: `1px solid ${showCalls ? '#00ff88' : 'rgba(255,255,255,0.15)'}`,
-            color: showCalls ? '#00ff88' : '#888',
+            border: `1px solid ${showCalls ? CITY.ok : 'rgba(255,255,255,0.15)'}`,
+            color: showCalls ? CITY.ok : CITY.inkMuted,
             padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11,
           }}
           title="Toggle CALLS arcs"
@@ -293,7 +294,7 @@ export function CityView() {
           style={{
             background: 'rgba(0,0,0,0.6)',
             border: '1px solid rgba(255,255,255,0.15)',
-            color: '#888', padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11,
+            color: CITY.inkMuted, padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 11,
           }}
           title="Toggle FPS stats"
         >
@@ -305,9 +306,9 @@ export function CityView() {
       <div style={{
         position: 'absolute', bottom: 12, left: 12,
         background: 'rgba(0,0,0,0.7)', border: '1px solid rgba(255,255,255,0.08)',
-        borderRadius: 6, padding: '8px 12px', fontSize: 10, color: '#666', zIndex: 10,
+        borderRadius: 6, padding: '8px 12px', fontSize: 10, color: CITY.inkDim, zIndex: 10,
       }}>
-        <div style={{ color: '#888', marginBottom: 4, fontWeight: 600 }}>KEYBOARD</div>
+        <div style={{ color: CITY.inkMuted, marginBottom: 4, fontWeight: 600 }}>KEYBOARD</div>
         <div>0 — Overview &nbsp; G — Street level &nbsp; T — Top down</div>
         <div style={{ marginTop: 3 }}>🖱 Drag pan · Scroll zoom · Right-drag orbit</div>
       </div>

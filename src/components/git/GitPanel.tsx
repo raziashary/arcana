@@ -354,7 +354,7 @@ interface ChangeRowProps {
 function ChangeRow({ entry, onDiff, primary, secondary }: ChangeRowProps) {
   return (
     <div
-      className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono hover:bg-[var(--bg-hover)] group"
+      className="flex items-center gap-1.5 px-2 py-0.5 text-[11px] font-mono hover:bg-[color:var(--bg-hover)] group"
       style={{ color: 'var(--text-2)' }}
     >
       <span
@@ -446,7 +446,7 @@ function HistoryTab() {
       {log.map((c) => (
         <div
           key={c.oid}
-          className="px-2 py-1.5 border-b hover:bg-[var(--bg-hover)]"
+          className="px-2 py-1.5 border-b hover:bg-[color:var(--bg-hover)]"
           style={{ borderColor: 'var(--border-1)' }}
         >
           <div className="flex items-center gap-1.5 text-[11px] font-mono" style={{ color: 'var(--text-1)' }}>
@@ -481,7 +481,7 @@ function IconBtn({ onClick, title, children }: { onClick: () => void; title: str
   return (
     <button
       onClick={onClick}
-      className="p-1 rounded hover:bg-[var(--bg-hover)]"
+      className="p-1 rounded hover:bg-[color:var(--bg-hover)]"
       title={title}
       aria-label={title}
     >

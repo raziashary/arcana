@@ -74,8 +74,8 @@ export default function UpdateSettings() {
       {store.availableUpdate && (
         <div className="rounded-lg border p-4"
           style={{
-            background: store.isCritical ? 'var(--orange-950, #1c0a00)' : 'var(--blue-950, #00091c)',
-            borderColor: store.isCritical ? 'var(--orange-700, #c2550a)' : 'var(--blue-700, #0a6cc2)',
+            background: store.isCritical ? 'var(--bg-2)' : 'var(--accent)',
+            borderColor: store.isCritical ? 'var(--warning)' : 'var(--accent)',
           }}>
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -91,8 +91,8 @@ export default function UpdateSettings() {
             </div>
             <button
               onClick={store.openDialog}
-              className="shrink-0 px-3 py-1.5 rounded-md text-xs font-medium text-white transition-colors"
-              style={{ background: store.isCritical ? '#c2550a' : '#1d6fbf' }}
+              className="shrink-0 px-3 py-1.5 rounded-md text-xs font-medium text-[color:var(--text-on-accent)] transition-colors"
+              style={{ background: store.isCritical ? 'var(--warning)' : 'var(--accent)' }}
             >
               View
             </button>
@@ -112,13 +112,13 @@ export default function UpdateSettings() {
               onClick={() => setChannel(ch)}
               className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors border
                 ${channel === ch
-                  ? 'text-white'
+                  ? 'text-[color:var(--text-on-accent)]'
                   : 'opacity-60 hover:opacity-90'
                 }`}
               style={{
                 background: channel === ch ? 'var(--accent-1)' : 'var(--bg-2)',
                 borderColor: channel === ch ? 'var(--accent-2)' : 'var(--border-1)',
-                color: channel === ch ? '#fff' : 'var(--text-2)',
+                color: channel === ch ? 'var(--text-on-accent)' : 'var(--text-2)',
               }}
             >
               {ch}
@@ -138,7 +138,7 @@ export default function UpdateSettings() {
         </button>
 
         {store.checkError && (
-          <p className="text-xs text-red-400">{store.checkError}</p>
+          <p className="text-xs text-[color:var(--danger)]">{store.checkError}</p>
         )}
         {store.lastChecked && !store.isChecking && !store.availableUpdate && (
           <p className="text-xs" style={{ color: 'var(--text-3)' }}>
@@ -171,7 +171,7 @@ export default function UpdateSettings() {
           <div className="mt-2 rounded-lg border p-3 space-y-2"
             style={{ background: 'var(--bg-2)', borderColor: 'var(--border-1)' }}>
             <div className="flex items-center gap-2">
-              <span className={store.integrityReport.all_ok ? 'text-green-400' : 'text-red-400'}>
+              <span className={store.integrityReport.all_ok ? 'text-[color:var(--success)]' : 'text-[color:var(--danger)]'}>
                 {store.integrityReport.all_ok ? '✓' : '✗'}
               </span>
               <span className="text-xs font-medium" style={{ color: 'var(--text-1)' }}>
@@ -182,7 +182,7 @@ export default function UpdateSettings() {
               {store.integrityReport.checks.map((check) => (
                 <div key={check.name} className="flex items-center justify-between text-xs">
                   <span className="flex items-center gap-1.5" style={{ color: 'var(--text-2)' }}>
-                    <span className={check.present ? 'text-green-400' : check.message.includes('critical') ? 'text-red-400' : 'text-yellow-500'}>
+                    <span className={check.present ? 'text-[color:var(--success)]' : check.message.includes('critical') ? 'text-[color:var(--danger)]' : 'text-[color:var(--warning)]'}>
                       {check.present ? '✓' : '○'}
                     </span>
                     {check.name}

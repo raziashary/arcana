@@ -7,24 +7,12 @@ import { useWorkspaceStore } from '../stores/workspaceStore'
 import { useGraphStore } from '../stores/graphStore'
 import { CityView } from '../components/city/CityView'
 import './Graph.css'
+import { CATEGORICAL, GRAPH_EDGE } from '../styles/palette'
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
-const COMMUNITY_COLORS = [
-  '#4E79A7', '#F28E2B', '#59A14F', '#E15759', '#76B7B2',
-  '#EDC948', '#B07AA1', '#FF9DA7', '#9C755F', '#BAB0AC',
-]
+const COMMUNITY_COLORS = CATEGORICAL
 
-const EDGE_COLORS: Record<string, string> = {
-  CALLS:               '#00FF88',
-  IMPORTS_FROM:        '#4477FF',
-  INHERITS:            '#B07AA1',
-  IMPLEMENTS:          '#76B7B2',
-  TESTED_BY:           '#F28E2B',
-  DEPENDS_ON:          '#EDC948',
-  REFERENCES:          '#888888',
-  CONTAINS:            '#2A2A2A',
-  SEMANTICALLY_SIMILAR:'#9C755F',
-}
+const EDGE_COLORS = GRAPH_EDGE
 
 const DEFAULT_EDGE_FILTERS: Record<string, boolean> = {
   CALLS: true, IMPORTS_FROM: true, INHERITS: true, IMPLEMENTS: true,
@@ -52,9 +40,9 @@ function nodeRadius(degree: number): number {
 }
 
 function cohesionColor(score: number): string {
-  if (score > 0.5)  return '#00FF88'
-  if (score >= 0.25) return '#FFAA00'
-  return '#FF4444'
+  if (score > 0.5)  return 'var(--success)'
+  if (score >= 0.25) return 'var(--warning)'
+  return 'var(--danger)'
 }
 
 interface GraphStats {
@@ -308,7 +296,7 @@ export default function GraphTab() {
         return [p[0] + (dx / len) * 28, p[1] + (dy / len) * 28] as [number, number]
       })
       const path = d3.line<[number, number]>().curve(d3.curveCatmullRomClosed)(expanded)
-      if (path) hullData.push({ id: commId, path, color: commColorMap[commId] || '#888888' })
+      if (path) hullData.push({ id: commId, path, color: commColorMap[commId] || 'var(--text-muted)' })
     })
     hullGRef.current.selectAll<SVGPathElement, any>('path.hull')
       .data(hullData, (d: any) => d.id)
@@ -419,7 +407,7 @@ export default function GraphTab() {
       .data(edges, (d: any) => `${d.source}-${d.target}-${d.kind}`)
       .join('line')
       .attr('class', (d: any) => `edge edge-${d.kind.toLowerCase()}`)
-      .attr('stroke', (d: any) => EDGE_COLORS[d.kind] || '#555555')
+      .attr('stroke', (d: any) => EDGE_COLORS[d.kind] || 'var(--text-dim)')
       .attr('stroke-opacity', 0.4)
       .attr('stroke-width', (d: any) => 0.5 + (d.weight || 1) * 1.5)
       .attr('marker-end', (d: any) =>
@@ -444,12 +432,12 @@ export default function GraphTab() {
       })
       .on('mouseenter', (ev, d: any) => {
         setTooltip({ node: d, x: ev.clientX, y: ev.clientY })
-        d3.select(ev.currentTarget).select('path').attr('stroke', '#FFFFFF').attr('stroke-width', 2)
+        d3.select(ev.currentTarget).select('path').attr('stroke', 'var(--text-primary)').attr('stroke-width', 2)
       })
       .on('mouseleave', (ev, d: any) => {
         setTooltip(null)
         d3.select(ev.currentTarget).select('path')
-          .attr('stroke', commColorMap[d.community ?? -1] || '#444444')
+          .attr('stroke', commColorMap[d.community ?? -1] || 'var(--text-dim)')
           .attr('stroke-width', selectedNodeRef.current === d.id ? 2 : 0.5)
       })
       .call(d3.drag<SVGGElement, any>()
@@ -469,7 +457,7 @@ export default function GraphTab() {
       .append('circle')
       .attr('r', (d: any) => nodeRadius(d._degree) + 6)
       .attr('fill', 'none')
-      .attr('stroke', (d: any) => commColorMap[d.community ?? -1] || '#888888')
+      .attr('stroke', (d: any) => commColorMap[d.community ?? -1] || 'var(--text-muted)')
       .attr('stroke-width', 2.5)
       .attr('stroke-opacity', 0.25)
 
@@ -479,9 +467,9 @@ export default function GraphTab() {
         const r = nodeRadius(d._degree)
         return symGen.type(symbolForKind(d.kind || '')).size(Math.PI * r * r)()
       })
-      .attr('fill', (d: any) => commColorMap[d.community ?? -1] || '#444444')
+      .attr('fill', (d: any) => commColorMap[d.community ?? -1] || 'var(--text-dim)')
       .attr('fill-opacity', (d: any) => d._degree === 0 ? 0.4 : 0.85)
-      .attr('stroke', (d: any) => commColorMap[d.community ?? -1] || '#444444')
+      .attr('stroke', (d: any) => commColorMap[d.community ?? -1] || 'var(--text-dim)')
       .attr('stroke-opacity', 0.5)
       .attr('stroke-width', 0.5)
 
@@ -492,7 +480,7 @@ export default function GraphTab() {
       .attr('class', 'node-label hover-label')
       .attr('text-anchor', 'middle')
       .style('font-size', '10px')
-      .style('fill', '#888888')
+      .style('fill', 'var(--text-muted)')
       .text((d: any) => (d.label || '').substring(0, 20))
       .attr('display', 'none')
 
@@ -1105,7 +1093,7 @@ export default function GraphTab() {
                           {shownIn.map((e, i) => {
                             const srcId = typeof e.source === 'string' ? e.source : (e.source as VisualizationNode).id
                             const srcNode = graphData!.nodes.find(n => n.id === srcId)
-                            const col = EDGE_COLORS[e.kind] || '#888888'
+                            const col = EDGE_COLORS[e.kind] || 'var(--text-muted)'
                             return (
                               <div key={i} className="node-inspector-edge" onClick={() => setSelectedNode(srcId)}>
                                 {/* edge kind badge color is runtime data from EDGE_COLORS */}
@@ -1131,7 +1119,7 @@ export default function GraphTab() {
                           {shownOut.map((e, i) => {
                             const tgtId = typeof e.target === 'string' ? e.target : (e.target as VisualizationNode).id
                             const tgtNode = graphData!.nodes.find(n => n.id === tgtId)
-                            const col = EDGE_COLORS[e.kind] || '#888888'
+                            const col = EDGE_COLORS[e.kind] || 'var(--text-muted)'
                             return (
                               <div key={i} className="node-inspector-edge" onClick={() => setSelectedNode(tgtId)}>
                                 {/* edge kind badge color is runtime data from EDGE_COLORS */}

@@ -62,12 +62,12 @@ export interface CreateWorkerOutput {
 
 export function workerStatusColor(status: WorkerStatus): string {
   switch (status) {
-    case 'active':  return '#7FDBCA'   // aqua — live heartbeat
-    case 'working': return '#FFCB8B'   // amber — in-progress
-    case 'idle':    return '#82AAFF'   // periwinkle — waiting
-    case 'paused':  return '#637777'   // muted — paused
-    case 'error':   return '#FF6363'   // coral — error
-    default:        return '#3D5A6E'   // dim — created / deleted
+    case 'active':  return 'var(--aqua)'   // aqua — live heartbeat
+    case 'working': return 'var(--warning)'   // amber — in-progress
+    case 'idle':    return 'var(--accent)'   // periwinkle — waiting
+    case 'paused':  return 'var(--text-muted)'   // muted — paused
+    case 'error':   return 'var(--danger)'   // coral — error
+    default:        return 'var(--text-dim)'   // dim — created / deleted
   }
 }
 

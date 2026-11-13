@@ -77,7 +77,7 @@ export default function McpToolBrowser() {
           className="flex items-center gap-1.5 font-mono px-2 py-1 rounded-sm"
           style={{
             fontSize:   '11px',
-            background: 'var(--bg-elevated, #1a1a1a)',
+            background: 'var(--bg-code)',
             border:     '1px solid var(--border-1)',
             color:      'var(--text-2)',
             opacity:    loading ? 0.6 : 1,
@@ -93,7 +93,7 @@ export default function McpToolBrowser() {
       <div
         className="flex items-center gap-2 px-2 py-1.5 rounded-sm"
         style={{
-          background: 'var(--bg-elevated, #1a1a1a)',
+          background: 'var(--bg-code)',
           border:     '1px solid var(--border-1)',
         }}
       >
@@ -109,7 +109,7 @@ export default function McpToolBrowser() {
       </div>
 
       {error && (
-        <div className="font-mono text-xs" style={{ color: 'var(--danger, #ff6b6b)' }}>
+        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
           {error}
         </div>
       )}
@@ -128,7 +128,7 @@ export default function McpToolBrowser() {
               key={tool.name}
               className="rounded-sm"
               style={{
-                background: 'var(--bg-elevated, #1a1a1a)',
+                background: 'var(--bg-code)',
                 border:     '1px solid var(--border-1)',
               }}
             >
@@ -163,7 +163,7 @@ export default function McpToolBrowser() {
                   style={{
                     fontSize:   '10.5px',
                     color:      'var(--text-2)',
-                    background: 'var(--bg-deep, #0f0f0f)',
+                    background: 'var(--bg-code)',
                     margin:     0,
                     padding:    '8px 10px',
                     borderTop:  '1px solid var(--border-1)',

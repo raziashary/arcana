@@ -70,7 +70,7 @@ export default function StashManager() {
         {stashes.map((s) => (
           <div
             key={s.oid}
-            className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono hover:bg-[var(--bg-hover)] group"
+            className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono hover:bg-[color:var(--bg-hover)] group"
             style={{ color: 'var(--text-2)' }}
           >
             <span

@@ -6,33 +6,31 @@ module.exports = {
   ],
   theme: {
     extend: {
+      // Colour is defined once, in src/styles/globals.css (:root). These names
+      // point at those variables so a utility class cannot carry its own hex.
       colors: {
-        /* Backgrounds — Winter is Coming */
-        'bg-app':      '#011627',
-        'bg-surface':  '#00233B',
-        'bg-card':     '#01111D',
-        'bg-2':        '#022C4A',
-        'bg-input':    '#0D2137',
-        'bg-selected': '#0B3A5C',
-        'bg-hover':    '#022C4A',
-        /* Borders */
-        'border-1':    '#0D3652',
-        'border-2':    '#1A527A',
-        /* Accent system */
-        accent:        '#82AAFF',
-        'accent-muted':  '#82AAFF15',
-        'accent-border': '#82AAFF30',
-        aqua:          '#7FDBCA',
-        success:       '#ADDB67',
-        danger:        '#FF6363',
-        warning:       '#FFCB8B',
-        info:          '#C792EA',
-        gold:          '#ECC48D',
-        /* Typography */
-        'text-1':      '#D6DEEB',
-        'text-2':      '#637777',
-        'text-3':      '#3D5A6E',
-        'text-4':      '#1A3A50',
+        'bg-app':        'var(--bg-app)',
+        'bg-surface':    'var(--bg-surface)',
+        'bg-card':       'var(--bg-card)',
+        'bg-2':          'var(--bg-2)',
+        'bg-input':      'var(--bg-input)',
+        'bg-selected':   'var(--bg-selected)',
+        'bg-hover':      'var(--bg-hover)',
+        'border-1':      'var(--border-1)',
+        'border-2':      'var(--border-2)',
+        accent:          'var(--accent)',
+        'accent-muted':  'var(--accent-muted)',
+        'accent-border': 'var(--accent-border)',
+        aqua:            'var(--aqua)',
+        success:         'var(--success)',
+        danger:          'var(--danger)',
+        warning:         'var(--warning)',
+        info:            'var(--info)',
+        gold:            'var(--gold)',
+        'text-1':        'var(--text-1)',
+        'text-2':        'var(--text-2)',
+        'text-3':        'var(--text-3)',
+        'text-4':        'var(--text-4)',
       },
       fontFamily: {
         mono: ['IBM Plex Mono', 'monospace'],

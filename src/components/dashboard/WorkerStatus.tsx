@@ -113,10 +113,10 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
               style={{
                 flex: 1,
                 padding: '6px 8px',
-                background: '#0B3A5C',
-                border: '1px solid #1A527A',
+                background: 'var(--bg-selected)',
+                border: '1px solid var(--border-secondary)',
                 borderRadius: '2px',
-                color: '#637777',
+                color: 'var(--text-muted)',
                 fontSize: '11px',
                 cursor: 'pointer',
                 display: 'flex',
@@ -133,10 +133,10 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
               style={{
                 flex: 1,
                 padding: '6px 8px',
-                background: '#0B3A5C',
-                border: '1px solid #1A527A',
+                background: 'var(--bg-selected)',
+                border: '1px solid var(--border-secondary)',
                 borderRadius: '2px',
-                color: '#637777',
+                color: 'var(--text-muted)',
                 fontSize: '11px',
                 cursor: 'pointer',
                 display: 'flex',
@@ -162,8 +162,8 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
           zIndex: 1000,
         }}>
           <div style={{
-            background: '#00233B',
-            border: '1px solid #0D3652',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-primary)',
             borderRadius: '4px',
             padding: '20px',
             maxWidth: '500px',
@@ -172,28 +172,28 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
             overflowY: 'auto',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, color: '#D6DEEB' }}>
+              <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>
                 All Workers
                 {workers !== null && (
-                  <span style={{ fontSize: '12px', color: '#637777', marginLeft: 8, fontWeight: 'normal' }}>
+                  <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginLeft: 8, fontWeight: 'normal' }}>
                     ({workers.length})
                   </span>
                 )}
               </h3>
               <button
                 onClick={() => setShowWorkerList(false)}
-                style={{ background: 'none', border: 'none', color: '#637777', cursor: 'pointer', fontSize: '20px' }}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}
               >✕</button>
             </div>
 
             {listLoading && (
-              <div style={{ color: '#637777', fontSize: '12px', textAlign: 'center', padding: '16px' }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: '12px', textAlign: 'center', padding: '16px' }}>
                 Loading…
               </div>
             )}
 
             {!listLoading && workers !== null && workers.length === 0 && (
-              <div style={{ color: '#637777', fontSize: '12px', textAlign: 'center', padding: '16px' }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: '12px', textAlign: 'center', padding: '16px' }}>
                 No workers found.
               </div>
             )}
@@ -205,28 +205,28 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                 alignItems: 'center',
                 padding: '12px',
                 marginBottom: '8px',
-                background: '#0B3A5C',
+                background: 'var(--bg-selected)',
                 borderRadius: '2px',
-                border: '1px solid #1A527A',
+                border: '1px solid var(--border-secondary)',
               }}>
                 <div>
-                  <div style={{ color: '#D6DEEB', fontSize: '12px', fontWeight: 'bold' }}>
+                  <div style={{ color: 'var(--text-primary)', fontSize: '12px', fontWeight: 'bold' }}>
                     {worker.name}
                   </div>
-                  <div style={{ color: '#637777', fontSize: '10px', marginTop: '2px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '10px', marginTop: '2px' }}>
                     {worker.slug} · {worker.worker_type}
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <div style={{
-                    color: worker.status === 'active' ? '#7FDBCA' : '#637777',
+                    color: worker.status === 'active' ? 'var(--aqua)' : 'var(--text-muted)',
                     fontSize: '11px',
                     fontWeight: 'bold',
                     marginBottom: '2px',
                   }}>
                     {worker.status}
                   </div>
-                  <div style={{ color: '#637777', fontSize: '10px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
                     {worker.model}
                   </div>
                 </div>
@@ -239,10 +239,10 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                 marginTop: '16px',
                 width: '100%',
                 padding: '8px',
-                background: '#0B3A5C',
-                border: '1px solid #1A527A',
+                background: 'var(--bg-selected)',
+                border: '1px solid var(--border-secondary)',
                 borderRadius: '2px',
-                color: '#637777',
+                color: 'var(--text-muted)',
                 cursor: 'pointer',
                 fontSize: '12px',
               }}
@@ -263,23 +263,23 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
           zIndex: 1000,
         }}>
           <div style={{
-            background: '#00233B',
-            border: '1px solid #0D3652',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-primary)',
             borderRadius: '4px',
             padding: '20px',
             maxWidth: '400px',
             width: '90%',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, color: '#D6DEEB' }}>Add New Worker</h3>
+              <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Add New Worker</h3>
               <button
                 onClick={() => setShowAddWorker(false)}
-                style={{ background: 'none', border: 'none', color: '#637777', cursor: 'pointer', fontSize: '20px' }}
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '20px' }}
               >✕</button>
             </div>
 
             <div style={{ marginBottom: '12px' }}>
-              <label style={{ color: '#D6DEEB', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
+              <label style={{ color: 'var(--text-primary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
                 Worker Name
               </label>
               <input
@@ -290,10 +290,10 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                 style={{
                   width: '100%',
                   padding: '8px',
-                  background: '#0D2137',
-                  border: '1px solid #0D3652',
+                  background: 'var(--bg-input)',
+                  border: '1px solid var(--border-primary)',
                   borderRadius: '2px',
-                  color: '#D6DEEB',
+                  color: 'var(--text-primary)',
                   fontSize: '12px',
                   boxSizing: 'border-box',
                 }}
@@ -301,7 +301,7 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
             </div>
 
             <div style={{ marginBottom: '16px' }}>
-              <label style={{ color: '#D6DEEB', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
+              <label style={{ color: 'var(--text-primary)', fontSize: '12px', display: 'block', marginBottom: '4px' }}>
                 Worker Type
               </label>
               <select
@@ -311,10 +311,10 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                 style={{
                   width: '100%',
                   padding: '8px',
-                  background: '#0D2137',
-                  border: '1px solid #0D3652',
+                  background: 'var(--bg-input)',
+                  border: '1px solid var(--border-primary)',
                   borderRadius: '2px',
-                  color: '#D6DEEB',
+                  color: 'var(--text-primary)',
                   fontSize: '12px',
                 }}
               >
@@ -326,7 +326,7 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
             </div>
 
             {addError && (
-              <div style={{ color: '#FF6363', fontSize: '11px', marginBottom: '8px' }}>
+              <div style={{ color: 'var(--danger)', fontSize: '11px', marginBottom: '8px' }}>
                 {addError}
               </div>
             )}
@@ -337,8 +337,8 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                 disabled={addPending}
                 style={{
                   flex: 1, padding: '8px',
-                  background: '#0B3A5C', border: '1px solid #1A527A',
-                  borderRadius: '2px', color: '#637777',
+                  background: 'var(--bg-selected)', border: '1px solid var(--border-secondary)',
+                  borderRadius: '2px', color: 'var(--text-muted)',
                   cursor: 'pointer', fontSize: '12px',
                 }}
               >
@@ -349,9 +349,9 @@ const WorkerStatus: React.FC<WorkerStatusProps> = ({ summary }) => {
                 disabled={addPending || !workerName.trim()}
                 style={{
                   flex: 1, padding: '8px',
-                  background: addPending ? '#637777' : '#82AAFF',
-                  border: '1px solid #82AAFF',
-                  borderRadius: '2px', color: '#011627',
+                  background: addPending ? 'var(--text-muted)' : 'var(--accent)',
+                  border: '1px solid var(--accent)',
+                  borderRadius: '2px', color: 'var(--bg-app)',
                   cursor: addPending ? 'not-allowed' : 'pointer',
                   fontSize: '12px', fontWeight: 'bold',
                 }}

@@ -53,7 +53,7 @@ export default function TabBar({ tabs, activeTab, onTabChange }: Props) {
                   style={{
                     fontSize:   '9px',
                     background: 'var(--warning)',
-                    color:      '#000',
+                    color:      'var(--text-on-accent)',
                     minWidth:   '14px',
                     height:     '14px',
                     padding:    '0 3px',

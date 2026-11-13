@@ -17,10 +17,10 @@ import { useMcpHealthStore, type McpServerHealth, type McpConnectionState } from
 
 function stateColor(state: McpConnectionState): string {
   switch (state) {
-    case 'connected':      return 'var(--aqua, #7fdbff)'
-    case 'degraded':       return 'var(--warning, #FFCB8B)'
-    case 'disconnected':   return 'var(--danger, #ff6b6b)'
-    case 'reconnecting':   return 'var(--warning, #FFCB8B)'
+    case 'connected':      return 'var(--aqua)'
+    case 'degraded':       return 'var(--warning)'
+    case 'disconnected':   return 'var(--danger)'
+    case 'reconnecting':   return 'var(--warning)'
     case 'not_monitored':  return 'var(--text-4)'
     default:               return 'var(--text-4)'
   }
@@ -122,7 +122,7 @@ function ServerRow({ health, onReconnect }: {
             background: 'rgba(255,107,107,0.1)',
             border:     '1px solid rgba(255,107,107,0.3)',
             borderRadius: 2,
-            color:      'var(--danger, #ff6b6b)',
+            color:      'var(--danger)',
             fontSize:   9,
             fontFamily: 'monospace',
             cursor:     reconnecting ? 'default' : 'pointer',

@@ -40,17 +40,17 @@ function pct(used: number, max: number | undefined): number {
 }
 
 function fillClass(p: number, exceeded: boolean): string {
-  if (exceeded || p > 95) return 'bg-red-500'
-  if (p > 80)             return 'bg-orange-500'
-  if (p > 50)             return 'bg-yellow-400'
-  return 'bg-emerald-500'
+  if (exceeded || p > 95) return 'bg-[color:var(--danger)]'
+  if (p > 80)             return 'bg-[color:var(--warning)]'
+  if (p > 50)             return 'bg-[color:var(--warning)]'
+  return 'bg-[color:var(--success)]'
 }
 
 function trackClass(p: number, exceeded: boolean): string {
-  if (exceeded || p > 95) return 'bg-red-950/40'
-  if (p > 80)             return 'bg-orange-950/40'
-  if (p > 50)             return 'bg-yellow-950/40'
-  return 'bg-emerald-950/40'
+  if (exceeded || p > 95) return 'bg-[color:var(--danger-muted)]'
+  if (p > 80)             return 'bg-[color:var(--warning-muted)]'
+  if (p > 50)             return 'bg-[color:var(--warning-muted)]'
+  return 'bg-[color:var(--add-bg)]'
 }
 
 function fmt(n: number): string {
@@ -100,9 +100,9 @@ export function BudgetBar({ taskId, maxTokens, maxUsd, maxTurns, compact = false
 
   if (compact) {
     return (
-      <div className="flex items-center gap-2 text-[10px] text-zinc-400">
+      <div className="flex items-center gap-2 text-[10px] text-[color:var(--text-muted)]">
         {exceeded && (
-          <span className="px-1 py-0.5 rounded bg-red-600 text-white font-bold text-[9px] tracking-wide">
+          <span className="px-1 py-0.5 rounded bg-[color:var(--danger)] text-[color:var(--text-on-accent)] font-bold text-[9px] tracking-wide">
             EXCEEDED
           </span>
         )}
@@ -123,18 +123,18 @@ export function BudgetBar({ taskId, maxTokens, maxUsd, maxTurns, compact = false
     <div className="space-y-1.5 text-[11px]">
       {exceeded && (
         <div className="flex items-center gap-1.5">
-          <span className="px-1.5 py-0.5 rounded bg-red-600 text-white font-bold text-[10px] tracking-widest">
+          <span className="px-1.5 py-0.5 rounded bg-[color:var(--danger)] text-[color:var(--text-on-accent)] font-bold text-[10px] tracking-widest">
             EXCEEDED
           </span>
           {status.exceeded_reason && (
-            <span className="text-red-400">{status.exceeded_reason.replace(/_/g, ' ')}</span>
+            <span className="text-[color:var(--danger)]">{status.exceeded_reason.replace(/_/g, ' ')}</span>
           )}
         </div>
       )}
 
       {/* Token bar */}
       <div>
-        <div className="flex justify-between text-zinc-400 mb-0.5">
+        <div className="flex justify-between text-[color:var(--text-muted)] mb-0.5">
           <span>Tokens</span>
           <span className="tabular-nums">
             {fmt(status.tokens_used)}{maxTokens ? ` / ${fmt(maxTokens)}` : ''}
@@ -151,7 +151,7 @@ export function BudgetBar({ taskId, maxTokens, maxUsd, maxTurns, compact = false
       {/* Cost bar — only render if a USD budget was set */}
       {maxUsd != null && (
         <div>
-          <div className="flex justify-between text-zinc-400 mb-0.5">
+          <div className="flex justify-between text-[color:var(--text-muted)] mb-0.5">
             <span>Cost</span>
             <span className="tabular-nums">
               ${status.cost_usd.toFixed(4)} / ${maxUsd.toFixed(2)}
@@ -168,7 +168,7 @@ export function BudgetBar({ taskId, maxTokens, maxUsd, maxTurns, compact = false
 
       {/* Turns indicator */}
       {maxTurns != null && (
-        <div className="text-zinc-500 tabular-nums">
+        <div className="text-[color:var(--text-muted)] tabular-nums">
           Turns: {status.turns_used} / {maxTurns}
         </div>
       )}

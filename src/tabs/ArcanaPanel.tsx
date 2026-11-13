@@ -110,7 +110,7 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
         className="shrink-0 border-b font-mono"
         style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-1)', padding: '8px 12px' }}
       >
-        <span style={{ fontSize: 11, color: '#333' }}>Loading agents…</span>
+        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Loading agents…</span>
       </div>
     )
   }
@@ -163,7 +163,7 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
             ? { label: 'OK',  color: 'var(--success)', title: 'Last tick completed', glow: false }
           : lastOutcome?.startsWith('error')
             ? { label: 'ERR', color: 'var(--danger)',  title: `Last tick failed: ${lastOutcome}`, glow: false }
-          :   { label: '—',   color: '#3D5A6E',        title: 'No tick data yet', glow: false }
+          :   { label: '—',   color: 'var(--text-dim)',        title: 'No tick data yet', glow: false }
         const hasModeData = !!currentMode || !!lastOutcome
 
         return (
@@ -185,7 +185,7 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
             />
             {/* Agent name + inline mode indicator (dot + label) right after name */}
             <div className="shrink-0 flex items-center gap-1" style={{ width: 150 }}>
-              <span style={{ color: '#888' }}>{label}</span>
+              <span style={{ color: 'var(--text-muted)' }}>{label}</span>
               <span
                 title={modeBadge.title}
                 style={{
@@ -209,12 +209,12 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
             <div className="flex-1 overflow-hidden">
               <AgentStatusCell agentId={worker.slug} fallbackLabel={taskLabel} />
             </div>
-            <div className="shrink-0" style={{ color: '#555', fontSize: '10px', width: 55 }}>
+            <div className="shrink-0" style={{ color: 'var(--text-dim)', fontSize: '10px', width: 55 }}>
               {typeLabel}
             </div>
             <div
               className="shrink-0 text-right"
-              style={{ color: '#333', fontSize: '10px', width: 55 }}
+              style={{ color: 'var(--text-dim)', fontSize: '10px', width: 55 }}
             >
               {elapsed}
             </div>
@@ -261,24 +261,24 @@ function TaskCard({
       <div className="p-2" style={{ display: 'flex', alignItems: 'flex-start', gap: 6 }}>
         <button
           onClick={e => { e.stopPropagation(); setExpanded(v => !v) }}
-          style={{ color: '#444', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginTop: 1 }}
+          style={{ color: 'var(--text-dim)', background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginTop: 1 }}
         >
           {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         </button>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ color: '#444', fontSize: '10px' }}>
+          <div style={{ color: 'var(--text-dim)', fontSize: '10px' }}>
             #{task.id} · {priorityLabel(task.priority)}
           </div>
-          <div style={{ color: '#777', margin: '2px 0', lineHeight: 1.3 }}>
+          <div style={{ color: 'var(--text-muted)', margin: '2px 0', lineHeight: 1.3 }}>
             {task.title}
           </div>
           {task.assigned_worker && (
-            <div style={{ fontSize: '10px', color: buildFailedStyle ? 'var(--warning)' : rejectedStyle ? '#FF6B35' : needsInfoStyle ? '#F59E0B' : (doneStyle ? 'var(--accent)' : 'var(--accent)') }}>
+            <div style={{ fontSize: '10px', color: buildFailedStyle ? 'var(--warning)' : rejectedStyle ? 'var(--danger)' : needsInfoStyle ? 'var(--warning)' : (doneStyle ? 'var(--accent)' : 'var(--accent)') }}>
               {buildFailedStyle ? '⚠ build failed' : rejectedStyle ? '✗ rejected' : needsInfoStyle ? '⏸ needs info' : (doneStyle ? '✓ done' : task.assigned_worker)}
             </div>
           )}
           {rejectedStyle && task.rejection_reason && (
-            <div style={{ fontSize: '9px', color: '#FF6B35', marginTop: 2, fontStyle: 'italic', lineHeight: 1.4 }}>
+            <div style={{ fontSize: '9px', color: 'var(--danger)', marginTop: 2, fontStyle: 'italic', lineHeight: 1.4 }}>
               {task.rejection_reason}
             </div>
           )}
@@ -288,7 +288,7 @@ function TaskCard({
               {task.epic_id && (
                 <span style={{
                   fontSize: 8, padding: '1px 4px', borderRadius: 2,
-                  background: 'rgba(195,166,255,0.12)', color: '#C3A6FF',
+                  background: 'rgba(195,166,255,0.12)', color: 'var(--purple)',
                   border: '1px solid rgba(195,166,255,0.25)', fontFamily: 'monospace',
                 }}>
                   epic #{task.epic_id}
@@ -297,7 +297,7 @@ function TaskCard({
               {task.phase && (
                 <span style={{
                   fontSize: 8, padding: '1px 4px', borderRadius: 2,
-                  background: 'rgba(130,170,255,0.12)', color: '#82AAFF',
+                  background: 'rgba(130,170,255,0.12)', color: 'var(--accent)',
                   border: '1px solid rgba(130,170,255,0.25)', fontFamily: 'monospace',
                 }}>
                   {task.phase}
@@ -306,7 +306,7 @@ function TaskCard({
               {task.blocked_by && task.blocked_by.length > 0 && (
                 <span style={{
                   fontSize: 8, padding: '1px 4px', borderRadius: 2,
-                  background: 'rgba(245,158,11,0.12)', color: '#F59E0B',
+                  background: 'rgba(245,158,11,0.12)', color: 'var(--warning)',
                   border: '1px solid rgba(245,158,11,0.25)', fontFamily: 'monospace',
                 }}>
                   blocked
@@ -389,9 +389,9 @@ const COL_HEADER_COLORS: Partial<Record<string, string>> = {
   ready:       'var(--accent)',
   in_progress: 'var(--warning)',
   qc_review:   'var(--info)',
-  rejected:    '#FF6B35',
+  rejected:    'var(--danger)',
   done_today:  'var(--success)',
-  needs_info:  '#F59E0B',
+  needs_info:  'var(--warning)',
 }
 
 function KanbanColumn({
@@ -421,7 +421,7 @@ function KanbanColumn({
         style={{
           fontFamily:    'IBM Plex Mono, monospace',
           fontSize:      '10px',
-          color:         '#444',
+          color:         'var(--text-dim)',
           letterSpacing: '0.08em',
           textTransform: 'uppercase',
           marginBottom:  8,
@@ -590,11 +590,11 @@ function WorkerRequestsWidget({
     : t
 
   const typeColor = (t: string) =>
-    t === 'decompose_audit' ? '#7FDBCA'
-    : t === 'reassign' ? '#FFCB8B'
-    : t === 'needs_info' ? '#82AAFF'
-    : t === 'report_issue' ? '#FF6363'
-    : t === 'request_review' ? '#C3A6FF'
+    t === 'decompose_audit' ? 'var(--aqua)'
+    : t === 'reassign' ? 'var(--warning)'
+    : t === 'needs_info' ? 'var(--accent)'
+    : t === 'report_issue' ? 'var(--danger)'
+    : t === 'request_review' ? 'var(--purple)'
     : 'var(--text-4)'
 
   const handleResolve = async (
@@ -625,7 +625,7 @@ function WorkerRequestsWidget({
         onClick={() => setPanelOpen(o => !o)}
       >
         <div className="flex items-center gap-2">
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#FF6363', display: 'inline-block' }} />
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--danger)', display: 'inline-block' }} />
           <span style={{ fontSize: '11px', color: 'var(--text-2)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
             Worker Requests
           </span>
@@ -633,7 +633,7 @@ function WorkerRequestsWidget({
             style={{
               fontSize: '9px',
               background: 'rgba(255,99,99,0.15)',
-              color: '#FF6363',
+              color: 'var(--danger)',
               padding: '1px 6px',
               borderRadius: 4,
               fontFamily: 'monospace',
@@ -728,7 +728,7 @@ function WorkerRequestsWidget({
                       style={{
                         color:        'var(--text-3)',
                         fontSize:     '10px',
-                        background:   'var(--bg-deep, #0f0f0f)',
+                        background:   'var(--bg-code)',
                         border:       '1px solid var(--border-1)',
                         borderRadius: 2,
                         padding:      '6px 8px',
@@ -754,7 +754,7 @@ function WorkerRequestsWidget({
                           border: '1px solid rgba(127,219,202,0.3)',
                           borderRadius: 2,
                           padding: '2px 8px',
-                          color: '#7FDBCA',
+                          color: 'var(--aqua)',
                           fontSize: '9px',
                           fontFamily: 'monospace',
                           cursor: pendingId === req.id ? 'wait' : 'pointer',
@@ -771,7 +771,7 @@ function WorkerRequestsWidget({
                           border: '1px solid rgba(255,99,99,0.25)',
                           borderRadius: 2,
                           padding: '2px 8px',
-                          color: '#FF6363',
+                          color: 'var(--danger)',
                           fontSize: '9px',
                           fontFamily: 'monospace',
                           cursor: pendingId === req.id ? 'wait' : 'pointer',
@@ -789,7 +789,7 @@ function WorkerRequestsWidget({
                       <div
                         className="font-mono"
                         style={{
-                          color:      'var(--danger, #FF6363)',
+                          color:      'var(--danger)',
                           fontSize:   '10px',
                           marginTop:  6,
                         }}
@@ -957,7 +957,7 @@ function ObservabilityTabs(props: {
                 <span
                   style={{
                     background:   isActive ? 'var(--accent)' : 'var(--info)',
-                    color:        '#000',
+                    color:        'var(--text-on-accent)',
                     fontSize:     '9px',
                     padding:      '0 5px',
                     borderRadius: 9,
@@ -1335,13 +1335,13 @@ export default function ArcanaTab() {
           top: 0,
           bottom: 0,
           width: '320px',
-          borderLeft: '1px solid #0D3652',
+          borderLeft: '1px solid var(--border-primary)',
           background: 'var(--bg-surface)',
           overflowY: 'auto',
           zIndex: 1000,
           boxShadow: '-2px 0 8px rgba(0,0,0,0.3)',
         }}>
-          <div style={{ padding: '12px', borderBottom: '1px solid #0D3652', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ padding: '12px', borderBottom: '1px solid var(--border-primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-1)' }}>Subagent Monitor</span>
             <button
               onClick={() => setShowSubagents(false)}

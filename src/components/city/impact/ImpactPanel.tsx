@@ -2,6 +2,7 @@
 import { useMemo } from 'react'
 import type { GraphNode, ImpactData, ImpactRisk } from '../../../stores/graphStore'
 import { useGraphStore } from '../../../stores/graphStore'
+import { CITY } from '../../../styles/palette'
 
 interface ImpactPanelProps {
   impactData: ImpactData
@@ -74,13 +75,13 @@ export function ImpactPanel({ impactData, nodes }: ImpactPanelProps) {
         {visible.map(id => {
           const n = nodeMap.get(id)
           return (
-            <div key={id} style={{ color: '#888', padding: '1px 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div key={id} style={{ color: CITY.inkMuted, padding: '1px 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               → {n?.label || id.split('::').pop() || id}
             </div>
           )
         })}
         {remaining > 0 && (
-          <div style={{ color: '#555' }}>... {remaining} more</div>
+          <div style={{ color: CITY.inkFaint }}>... {remaining} more</div>
         )}
       </div>
     )
@@ -89,13 +90,13 @@ export function ImpactPanel({ impactData, nodes }: ImpactPanelProps) {
   return (
     <div style={panelStyle}>
       <div style={headerStyle}>
-        <div style={{ color: '#ff4444', fontWeight: 700 }}>⚡ BLAST RADIUS</div>
-        <div style={{ color: '#ff8888', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
+        <div style={{ color: CITY.danger, fontWeight: 700 }}>⚡ BLAST RADIUS</div>
+        <div style={{ color: CITY.dangerSoft, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 140 }}>
           {epicenterLabel}
         </div>
         <button
           onClick={() => setImpactData(null)}
-          style={{ background: 'none', border: 'none', color: '#666', cursor: 'pointer', fontSize: 14, padding: '0 4px' }}
+          style={{ background: 'none', border: 'none', color: CITY.inkDim, cursor: 'pointer', fontSize: 14, padding: '0 4px' }}
         >
           ✕
         </button>
@@ -103,35 +104,35 @@ export function ImpactPanel({ impactData, nodes }: ImpactPanelProps) {
 
       {buckets.high.length > 0 && (
         <div style={sectionStyle}>
-          <div style={{ color: '#ff2222', fontWeight: 600 }}>❗ HIGH RISK (1–2 hops) — {buckets.high.length} nodes</div>
+          <div style={{ color: CITY.riskHigh, fontWeight: 600 }}>❗ HIGH RISK (1–2 hops) — {buckets.high.length} nodes</div>
           <NodeList ids={buckets.high} />
         </div>
       )}
 
       {buckets.medium.length > 0 && (
         <div style={sectionStyle}>
-          <div style={{ color: '#ff8800', fontWeight: 600 }}>⚠ MEDIUM RISK (3–4 hops) — {buckets.medium.length} nodes</div>
+          <div style={{ color: CITY.riskMedium, fontWeight: 600 }}>⚠ MEDIUM RISK (3–4 hops) — {buckets.medium.length} nodes</div>
           <NodeList ids={buckets.medium} />
         </div>
       )}
 
       {buckets.low.length > 0 && (
         <div style={sectionStyle}>
-          <div style={{ color: '#aaff00', fontWeight: 600 }}>ℹ LOW RISK (5+ hops) — {buckets.low.length} nodes</div>
+          <div style={{ color: CITY.riskLow, fontWeight: 600 }}>ℹ LOW RISK (5+ hops) — {buckets.low.length} nodes</div>
           <NodeList ids={buckets.low} max={2} />
         </div>
       )}
 
       {buckets.test.length > 0 && (
         <div style={sectionStyle}>
-          <div style={{ color: '#00ff88', fontWeight: 600 }}>TESTS TO RUN: {buckets.test.length}</div>
+          <div style={{ color: CITY.ok, fontWeight: 600 }}>TESTS TO RUN: {buckets.test.length}</div>
           <NodeList ids={buckets.test} />
         </div>
       )}
 
       {buckets.untested.length > 0 && (
         <div style={sectionStyle}>
-          <div style={{ color: '#ff4444', fontWeight: 600 }}>⛔ NO TEST COVERAGE: {buckets.untested.length} nodes</div>
+          <div style={{ color: CITY.danger, fontWeight: 600 }}>⛔ NO TEST COVERAGE: {buckets.untested.length} nodes</div>
           <NodeList ids={buckets.untested} />
         </div>
       )}
@@ -139,13 +140,13 @@ export function ImpactPanel({ impactData, nodes }: ImpactPanelProps) {
       <div style={{ padding: '8px 12px', display: 'flex', gap: 6 }}>
         <button style={{
           flex: 1, padding: '5px 0', borderRadius: 4, border: '1px solid rgba(0,255,136,0.3)',
-          background: 'rgba(0,255,136,0.1)', color: '#00ff88', cursor: 'pointer', fontSize: 11, fontFamily: 'monospace',
+          background: 'rgba(0,255,136,0.1)', color: CITY.ok, cursor: 'pointer', fontSize: 11, fontFamily: 'monospace',
         }}>
           ▶ Run Tests
         </button>
         <button style={{
           flex: 1, padding: '5px 0', borderRadius: 4, border: '1px solid rgba(255,255,255,0.1)',
-          background: 'rgba(255,255,255,0.05)', color: '#888', cursor: 'pointer', fontSize: 11, fontFamily: 'monospace',
+          background: 'rgba(255,255,255,0.05)', color: CITY.inkMuted, cursor: 'pointer', fontSize: 11, fontFamily: 'monospace',
         }}>
           + Create Tasks
         </button>

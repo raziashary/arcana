@@ -74,7 +74,7 @@ export function DirectoryListingDisplay({ data }: DirectoryListingDisplayProps) 
             <tr
               key={i}
               style={{
-                borderBottom: '1px solid rgba(255,255,255,0.03)',
+                borderBottom: '1px solid color-mix(in srgb, var(--text-primary) 3%, transparent)',
               }}
             >
               <td style={{ padding: '4px 10px', color: 'var(--text-1)' }}>

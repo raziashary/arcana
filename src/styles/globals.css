@@ -33,66 +33,96 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── CSS Custom Properties — Arcana Industrial Dark ─────────────────────── */
+/* ── CSS Custom Properties — Arcana light palette ──────────────────────────
+   The ONE place colour is defined (TG-P6-04). Components reference these tokens;
+   Tailwind's colours below point here; three.js, d3 and canvas, which cannot read
+   a CSS variable, take their literals from src/styles/palette.ts. Values come from
+   reference/ui-anchor.md (D-019); where the anchor's colour fails contrast as TEXT
+   on white (Stellar Blue, Sunny Herb, Comet Blue) the text role gets a darker
+   variant of the same hue and the anchor colour is kept as the fill or tint. */
 :root {
   /* Backgrounds */
-  --bg-app:           #0f0f17;   /* app root */
-  --bg-surface:       #161622;   /* titlebar, tabbar, sidebar, panels */
-  --bg-card:          #1e1e2e;   /* message bubbles, cards, modal bodies */
-  --bg-code:          #252535;   /* code blocks, diff views, terminal */
-  --bg-darker:        #0f0f17;   /* deepest nesting, terminal inner */
-  --bg-2:             #252535;   /* button surfaces, inline inputs — compat */
-  --bg-input:         #1e1e2e;   /* form text fields — compat */
-  --bg-selected:      #252535;   /* active list item, selected row */
-  --bg-hover:         #161616;   /* hover state */
-  /* Aliases used across Skills, Hooks, Plans, Subagents, Git, Plugin components */
-  --bg-panel:         #1e1e2e;   /* floating modals, command palettes, side drawers */
-  --bg-1:             #1e1e2e;   /* generic component background — same level as card */
+  --bg-app:           #FFFEF7;   /* Milky White: app root */
+  --bg-surface:       #FFFFFF;   /* Stellar White: titlebar, tabbar, sidebar, panels */
+  --bg-card:          #FFFFFF;   /* cards, message bubbles, modal bodies */
+  --bg-code:          #EDECF9;   /* Galaxy Veil: code blocks, diff views, terminal */
+  --bg-darker:        #EDECF9;   /* deepest nesting, terminal inner */
+  --bg-2:             #EDECF9;   /* button surfaces, inline inputs */
+  --bg-input:         #FFFFFF;   /* form text fields */
+  --bg-selected:      rgba(141,194,255,0.22);   /* active list item, selected row (Ice Blue) */
+  --bg-hover:         rgba(190,189,247,0.20);   /* hover state (Lunar Lavender) */
+  --bg-panel:         #FFFFFF;   /* floating modals, command palettes, side drawers */
+  --bg-1:             #FFFFFF;   /* generic component background */
 
   /* Borders */
-  --border-primary:   #2a2a3e;   /* most borders — subtle */
-  --border-secondary: #363658;   /* heavier outlines, active/focus rings */
-  --border-1:         #2a2a3e;   /* compat alias */
-  --border-2:         #363658;   /* compat alias */
-  --border:           #2a2a3e;   /* compat alias */
+  --border-primary:   #DBDBFC;   /* Moonlit Mist: most borders */
+  --border-secondary: #BEBDF7;   /* Lunar Lavender: heavier outlines */
+  --border-1:         #DBDBFC;
+  --border-2:         #BEBDF7;
+  --border:           #DBDBFC;
 
   /* Accent system */
-  --accent:           #00FF88;   /* active states, CTAs, success */
-  --accent-muted:     #00FF8812; /* user msg bg, hover tints */
-  --accent-border:    #00FF8825; /* user msg border */
-  --accent-dim:       #00FF8840; /* input focus ring */
-  --accent-rgb:       0, 255, 136; /* RGB components for rgba(var(--accent-rgb), α) usage */
-  --aqua:             #00FF88;   /* compat — same as accent */
-  --success:          #00FF88;   /* compat */
-  --danger:           #FF4444;   /* errors, denied, destructive */
-  --danger-muted:     rgba(255,68,68,0.08);
-  --warning:          #FFAA00;   /* in-progress, working, blocked */
-  --warning-muted:    rgba(255,170,0,0.08);
-  --info:             #4477FF;   /* tool names, keywords, links */
-  --info-muted:       rgba(68,119,255,0.08);
-  --purple:           #C792EA;   /* notifications category, special accents */
-  --purple-muted:     rgba(199,146,234,0.1);
-  --gold:             #FFAA00;   /* compat — cost numbers */
-  --green-add:        #00FF88;   /* diff additions */
-  --red-del:          #FF4444;   /* diff deletions */
-  --add-bg:           rgba(0,255,136,0.08);
-  --del-bg:           rgba(255,68,68,0.08);
+  --accent:           #2D6CDF;   /* active states, links, focus: Stellar Blue darkened for text contrast */
+  --accent-muted:     rgba(76,159,255,0.12);   /* tints, hover */
+  --accent-border:    rgba(76,159,255,0.35);
+  --accent-dim:       rgba(76,159,255,0.45);   /* input focus ring */
+  --accent-rgb:       45, 108, 223;            /* for rgba(var(--accent-rgb), a) */
+  --aqua:             #2D6CDF;
+  --cta:              #CEF26D;   /* Sunny Herb: primary call-to-action fill; text on it is --text-primary */
+  --success:          #3C7A12;   /* valid, done, added: Sunny Herb darkened for text */
+  --success-fill:     #CEF26D;
+  --danger:           #D64550;   /* errors, denied, destructive: Nova Coral darkened for text */
+  --danger-muted:     rgba(255,105,107,0.12);
+  --warning:          #A15C00;   /* in-progress, blocked */
+  --warning-muted:    rgba(255,170,0,0.14);
+  --info:             #2F6FB5;   /* tool names, keywords */
+  --info-muted:       rgba(141,194,255,0.18);
+  --purple:           #7B4FA3;   /* special accents (Nebula Purple, lightened) */
+  --purple-muted:     rgba(190,189,247,0.25);
+  --gold:             #8A5A00;   /* cost numbers */
+  --green-add:        #3C7A12;   /* diff additions */
+  --red-del:          #D64550;   /* diff deletions */
+  --add-bg:           rgba(206,242,109,0.28);
+  --del-bg:           rgba(255,105,107,0.12);
+  --text-on-accent:   #FFFFFF;   /* text on a solid --accent or --danger fill */
 
   /* Typography */
-  --text-primary:     #aaaaaa;   /* primary text */
-  --text-secondary:   rgba(255,255,255,0.7);   /* secondary text, sidebar items */
-  --text-muted:       rgba(255,255,255,0.45);  /* labels, column headers */
-  --text-dim:         rgba(255,255,255,0.3);   /* inactive items, timestamps */
-  --text-bright:      #F0F0F0;   /* code, diff, terminal content */
-  --text-1:           #aaaaaa;   /* compat alias */
-  --text-2:           rgba(255,255,255,0.7);   /* compat alias */
-  --text-3:           rgba(255,255,255,0.45);  /* compat alias */
-  --text-4:           rgba(255,255,255,0.3);   /* compat alias */
+  --text-primary:     #0E1131;   /* Deep Space Navy */
+  --text-secondary:   #2B4C75;   /* Orbital Blue */
+  --text-muted:       rgba(14,17,49,0.62);   /* labels, column headers */
+  --text-dim:         rgba(14,17,49,0.42);   /* inactive items, timestamps */
+  --text-bright:      #0E1131;   /* code, diff, terminal content */
+  --text-1:           #0E1131;
+  --text-2:           #2B4C75;
+  --text-3:           rgba(14,17,49,0.62);
+  --text-4:           rgba(14,17,49,0.42);
 
   /* Fonts & radius */
   --font-mono:        'IBM Plex Mono', monospace;
   --font-sans:        'IBM Plex Sans', sans-serif;
   --radius:           2px;
+
+  /* Aliases for names components already use (each used to carry a hex fallback) */
+  --accent-color:     var(--accent);
+  --accent-1:         var(--accent);
+  --accent-2:         var(--accent);
+  --text-tertiary:    var(--text-muted);
+  --error:            var(--danger);
+  --error-color:      var(--danger);
+  --surface-bg:       var(--bg-surface);
+  --bg-3:             var(--bg-2);
+  --bg-base:          var(--bg-app);
+  --bg-raised:        var(--bg-card);
+  --bg-elevated:      var(--bg-card);
+  --input-bg:         var(--bg-input);
+  --border-0:         var(--border-primary);
+  --green:            var(--success);
+  --font-ui:          var(--font-sans);
+
+  /* Scrollbar and inactive dot (formerly literals outside the token block) */
+  --scrollbar-thumb:       #DBDBFC;
+  --scrollbar-thumb-hover: #BEBDF7;
+  --dot-dim:               #DBDBFC;
 }
 
 /* ── Base Reset ──────────────────────────────────────────────────────────── */
@@ -115,8 +145,8 @@ html, body, #root {
 /* ── Scrollbar ───────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar         { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track   { background: transparent; }
-::-webkit-scrollbar-thumb   { background: #1A1A1A; border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #222222; }
+::-webkit-scrollbar-thumb   { background: var(--scrollbar-thumb); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
 
 /* ── Focus outline ───────────────────────────────────────────────────────── */
 :focus-visible {
@@ -134,7 +164,7 @@ html, body, #root {
 .dot-yellow { background: var(--warning); }  /* blocked / in-progress — amber */
 .dot-red    { background: var(--danger); }   /* error / offline — red */
 .dot-purple { background: var(--info); }     /* QC review — blue */
-.dot-dim    { background: #1A1A1A; }         /* inactive dot */
+.dot-dim    { background: var(--dot-dim); }         /* inactive dot */
 
 /* ── Selection ───────────────────────────────────────────────────────────── */
 ::selection {

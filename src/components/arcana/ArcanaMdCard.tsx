@@ -12,7 +12,7 @@ import ArcanaMdEditor from './ArcanaMdEditor'
 function StatusDot({ content }: { content: string }) {
   const isEmpty    = content.trim().length === 0
   const isOver     = content.length > MAX_ARCANA_CHARS * 0.85
-  const background = isEmpty ? '#0D3652' : isOver ? 'var(--warning)' : 'var(--success)'
+  const background = isEmpty ? 'var(--border-primary)' : isOver ? 'var(--warning)' : 'var(--success)'
   return (
     <div
       className="shrink-0 rounded-full"

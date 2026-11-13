@@ -129,7 +129,7 @@ export function AnnotationPanel({ annotation }: AnnotationPanelProps) {
             <div className="ann-panel-section-label">Resolution note (optional)</div>
             <textarea
               style={{
-                background:  '#161622',
+                background:  'var(--bg-surface)',
                 border:      '1px solid var(--border-1)',
                 borderRadius: 2,
                 color:       'var(--text-2)',

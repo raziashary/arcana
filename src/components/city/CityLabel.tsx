@@ -9,6 +9,7 @@
 // stack, so it also follows the app's typography.
 
 import { Html } from '@react-three/drei'
+import { CITY } from '../../styles/palette'
 
 interface CityLabelProps {
   position: [number, number, number]
@@ -52,7 +53,7 @@ export function CityLabel({
           whiteSpace: 'nowrap',
           overflow: 'hidden',
           textOverflow: 'ellipsis',
-          textShadow: '0 0 3px #000, 0 0 3px #000, 0 1px 2px #000',
+          textShadow: `0 0 3px ${CITY.black}, 0 0 3px ${CITY.black}, 0 1px 2px ${CITY.black}`,
           opacity: 0.92,
         }}
       >

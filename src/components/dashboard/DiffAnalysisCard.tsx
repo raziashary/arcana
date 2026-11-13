@@ -19,17 +19,17 @@ interface Props {
 }
 
 const RISK_COLORS: Record<string, string> = {
-  low:      '#4caf50',
-  medium:   '#ff9800',
-  high:     '#f44336',
-  critical: '#9c27b0',
+  low:      'var(--success)',
+  medium:   'var(--warning)',
+  high:     'var(--danger)',
+  critical: 'var(--purple)',
 }
 
 const RISK_BG: Record<string, string> = {
-  low:      '#4caf5022',
-  medium:   '#ff980022',
-  high:     '#f4433622',
-  critical: '#9c27b022',
+  low:      'color-mix(in srgb, var(--success) 13%, transparent)',
+  medium:   'color-mix(in srgb, var(--warning) 13%, transparent)',
+  high:     'color-mix(in srgb, var(--danger) 13%, transparent)',
+  critical: 'color-mix(in srgb, var(--purple) 13%, transparent)',
 }
 
 export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
@@ -44,8 +44,8 @@ export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
 
   if (!result) return null
 
-  const riskColor = RISK_COLORS[result.risk_level] ?? '#888'
-  const riskBg    = RISK_BG[result.risk_level]    ?? '#88888822'
+  const riskColor = RISK_COLORS[result.risk_level] ?? 'var(--text-muted)'
+  const riskBg    = RISK_BG[result.risk_level]    ?? 'var(--bg-2)'
 
   return (
     <div
@@ -63,7 +63,7 @@ export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
         <span
           style={{
             background:   riskColor,
-            color:        '#fff',
+            color:        'var(--text-on-accent)',
             borderRadius: 4,
             padding:      '1px 7px',
             fontWeight:   700,
@@ -76,18 +76,18 @@ export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
 
         <span
           style={{
-            background:   'var(--bg-raised, #2a2a2a)',
-            border:       '1px solid var(--border-1, #444)',
+            background:   'var(--bg-code)',
+            border:       '1px solid var(--border-1)',
             borderRadius: 4,
             padding:      '1px 7px',
             fontSize:     11,
-            color:        'var(--text-2, #aaa)',
+            color:        'var(--text-2)',
           }}
         >
           {result.classification}
         </span>
 
-        <span style={{ color: 'var(--text-3, #888)', fontSize: 11 }}>
+        <span style={{ color: 'var(--text-3)', fontSize: 11 }}>
           {result.file_count} file{result.file_count !== 1 ? 's' : ''}
           {' · +'}
           {result.lines_added}
@@ -103,10 +103,10 @@ export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
           style={{
             fontSize:   10,
             padding:    '1px 6px',
-            border:     '1px solid var(--border-1, #444)',
+            border:     '1px solid var(--border-1)',
             borderRadius: 3,
             background: 'transparent',
-            color:      'var(--text-3, #888)',
+            color:      'var(--text-3)',
             cursor:     'pointer',
           }}
         >
@@ -115,7 +115,7 @@ export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
       </div>
 
       {/* Summary */}
-      <div style={{ marginTop: 5, color: 'var(--text-1, #eee)', lineHeight: 1.4 }}>
+      <div style={{ marginTop: 5, color: 'var(--text-1)', lineHeight: 1.4 }}>
         {result.summary}
       </div>
 
@@ -124,12 +124,12 @@ export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
         <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
           {result.review_notes.length > 0 && (
             <div>
-              <div style={{ fontWeight: 600, color: 'var(--text-2, #aaa)', marginBottom: 3 }}>
+              <div style={{ fontWeight: 600, color: 'var(--text-2)', marginBottom: 3 }}>
                 Review Notes
               </div>
               <ul style={{ margin: 0, paddingLeft: 16 }}>
                 {result.review_notes.map((note, i) => (
-                  <li key={i} style={{ color: 'var(--text-1, #eee)', marginBottom: 2 }}>
+                  <li key={i} style={{ color: 'var(--text-1)', marginBottom: 2 }}>
                     {note}
                   </li>
                 ))}
@@ -139,12 +139,12 @@ export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
 
           {result.suggested_checks.length > 0 && (
             <div>
-              <div style={{ fontWeight: 600, color: 'var(--text-2, #aaa)', marginBottom: 3 }}>
+              <div style={{ fontWeight: 600, color: 'var(--text-2)', marginBottom: 3 }}>
                 Suggested Checks
               </div>
               <ul style={{ margin: 0, paddingLeft: 16 }}>
                 {result.suggested_checks.map((check, i) => (
-                  <li key={i} style={{ color: 'var(--text-1, #eee)', marginBottom: 2 }}>
+                  <li key={i} style={{ color: 'var(--text-1)', marginBottom: 2 }}>
                     {check}
                   </li>
                 ))}
@@ -167,7 +167,7 @@ export function DiffAnalysisCard({ diffAnalysisJson }: Props) {
             </div>
           )}
 
-          <div style={{ color: 'var(--text-3, #888)', fontSize: 10 }}>
+          <div style={{ color: 'var(--text-3)', fontSize: 10 }}>
             Risk score: {result.risk_score.toFixed(2)} · Analyzed {new Date(result.analyzed_at).toLocaleString()}
           </div>
         </div>

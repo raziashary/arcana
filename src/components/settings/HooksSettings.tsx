@@ -225,7 +225,7 @@ export default function HooksSettings() {
             title="Add hook"
             onClick={() => setShowAddForm(f => !f)}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-mono"
-            style={{ background: 'var(--accent)', color: '#011627' }}
+            style={{ background: 'var(--accent)', color: 'var(--bg-app)' }}
           >
             <Plus size={12} />
             Add Hook
@@ -350,7 +350,7 @@ function HookTemplateGallery({
               className="px-2.5 py-0.5 rounded-full text-xs font-mono capitalize"
               style={{
                 background: filter === cat ? 'var(--accent)'       : 'var(--bg-panel)',
-                color:      filter === cat ? '#011627'             : 'var(--text-3)',
+                color:      filter === cat ? 'var(--bg-app)'             : 'var(--text-3)',
                 border:     filter === cat ? 'none'                : '1px solid var(--border)',
               }}
             >
@@ -397,7 +397,7 @@ function HookTemplateGallery({
                 className="shrink-0 text-xs px-2.5 py-1 rounded font-mono disabled:opacity-40"
                 style={{
                   background: installed ? 'var(--bg-selected)' : 'var(--accent)',
-                  color:      installed ? 'var(--success)'     : '#011627',
+                  color:      installed ? 'var(--success)'     : 'var(--bg-app)',
                 }}
               >
                 {installed ? '✓ Installed' : installing === tpl.id ? '…' : 'Install'}
@@ -637,7 +637,7 @@ function HookTestModal({ hook, onClose }: { hook: HookConfig; onClose: () => voi
             onClick={runTest}
             disabled={running}
             className="flex items-center gap-1.5 px-4 py-1.5 rounded text-xs font-mono font-semibold disabled:opacity-50"
-            style={{ background: 'var(--accent)', color: '#011627' }}
+            style={{ background: 'var(--accent)', color: 'var(--bg-app)' }}
           >
             <Play size={11} />
             {running ? 'Running…' : 'Run Test'}
@@ -994,7 +994,7 @@ function AddHookForm({ onAdd, onCancel }: { onAdd: (i: AddHookInput) => Promise<
           onClick={handleSave}
           disabled={saving}
           className="px-4 py-1.5 rounded text-xs font-mono font-semibold"
-          style={{ background: 'var(--accent)', color: '#011627', opacity: saving ? 0.6 : 1 }}
+          style={{ background: 'var(--accent)', color: 'var(--bg-app)', opacity: saving ? 0.6 : 1 }}
         >
           {saving ? 'Saving…' : 'Save Hook'}
         </button>

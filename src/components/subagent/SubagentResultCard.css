@@ -11,12 +11,12 @@
 }
 
 .subagent-result-card.status-completed {
-  border-left: 3px solid #6c6;
+  border-left: 3px solid var(--success);
 }
 
 .subagent-result-card.status-failed,
 .subagent-result-card.status-terminated {
-  border-left: 3px solid #e66;
+  border-left: 3px solid var(--danger);
 }
 
 .subagent-result-card-header {
@@ -54,11 +54,11 @@
 
 .subagent-result-card-error {
   background: rgba(230, 102, 102, 0.08);
-  border-left: 2px solid #e66;
+  border-left: 2px solid var(--danger);
   padding: 8px 10px;
   border-radius: 3px;
   margin-bottom: 8px;
-  color: #e66;
+  color: var(--danger);
   font-size: 12px;
 }
 
@@ -73,7 +73,7 @@
   margin-top: 6px;
   background: transparent;
   border: none;
-  color: var(--aqua, #7fdbca);
+  color: var(--aqua);
   cursor: pointer;
   font-size: 11px;
   padding: 0;

@@ -83,10 +83,10 @@ const ModelUsage: React.FC<ModelUsageProps> = ({ analytics }) => {
               marginTop: '12px',
               width: '100%',
               padding: '6px 8px',
-              background: '#0B3A5C',
-              border: '1px solid #1A527A',
+              background: 'var(--bg-selected)',
+              border: '1px solid var(--border-secondary)',
               borderRadius: '2px',
-              color: '#637777',
+              color: 'var(--text-muted)',
               fontSize: '11px',
               cursor: 'pointer',
               display: 'flex',
@@ -116,21 +116,21 @@ const ModelUsage: React.FC<ModelUsageProps> = ({ analytics }) => {
           zIndex: 1000,
         }}>
           <div style={{
-            background: '#00233B',
-            border: '1px solid #0D3652',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-primary)',
             borderRadius: '4px',
             padding: '20px',
             maxWidth: '450px',
             width: '90%',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, color: '#D6DEEB' }}>Cost per Model</h3>
+              <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Cost per Model</h3>
               <button
                 onClick={() => setShowCostBreakdown(false)}
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#637777',
+                  color: 'var(--text-muted)',
                   cursor: 'pointer',
                   fontSize: '20px',
                 }}
@@ -147,23 +147,23 @@ const ModelUsage: React.FC<ModelUsageProps> = ({ analytics }) => {
                 alignItems: 'center',
                 padding: '12px',
                 marginBottom: '8px',
-                background: '#0B3A5C',
+                background: 'var(--bg-selected)',
                 borderRadius: '2px',
-                border: '1px solid #1A527A',
+                border: '1px solid var(--border-secondary)',
               }}>
                 <div>
-                  <div style={{ color: '#D6DEEB', fontSize: '12px', fontWeight: 'bold' }}>
+                  <div style={{ color: 'var(--text-primary)', fontSize: '12px', fontWeight: 'bold' }}>
                     {model}
                   </div>
-                  <div style={{ color: '#637777', fontSize: '10px', marginTop: '2px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '10px', marginTop: '2px' }}>
                     {tokens.toLocaleString()} tokens
                   </div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ color: '#ECC48D', fontSize: '12px', fontWeight: 'bold', marginBottom: '2px' }}>
+                  <div style={{ color: 'var(--gold)', fontSize: '12px', fontWeight: 'bold', marginBottom: '2px' }}>
                     ${cost.toFixed(2)}
                   </div>
-                  <div style={{ color: '#637777', fontSize: '10px' }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
                     {costPercent.toFixed(1)}% of total
                   </div>
                 </div>
@@ -171,15 +171,15 @@ const ModelUsage: React.FC<ModelUsageProps> = ({ analytics }) => {
             ))}
 
             <div style={{
-              background: '#0B3A5C',
+              background: 'var(--bg-selected)',
               padding: '12px',
               borderRadius: '2px',
               marginTop: '12px',
               marginBottom: '16px',
               fontSize: '12px',
             }}>
-              <div style={{ color: '#637777', marginBottom: '4px' }}>Total Cost</div>
-              <div style={{ color: '#ECC48D', fontWeight: 'bold', fontSize: '14px' }}>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Total Cost</div>
+              <div style={{ color: 'var(--gold)', fontWeight: 'bold', fontSize: '14px' }}>
                 ${totalCost.toFixed(2)}
               </div>
             </div>
@@ -189,10 +189,10 @@ const ModelUsage: React.FC<ModelUsageProps> = ({ analytics }) => {
               style={{
                 width: '100%',
                 padding: '8px',
-                background: '#0B3A5C',
-                border: '1px solid #1A527A',
+                background: 'var(--bg-selected)',
+                border: '1px solid var(--border-secondary)',
                 borderRadius: '2px',
-                color: '#637777',
+                color: 'var(--text-muted)',
                 cursor: 'pointer',
                 fontSize: '12px',
               }}

@@ -23,7 +23,7 @@ export default function ToolCallDisplay({ toolCall }: Props) {
       className="rounded-sm font-mono text-xs my-1 self-start max-w-4xl"
       style={{
         background:  'var(--bg-surface)',
-        border:      '1px solid #1d1d1d',
+        border:      '1px solid var(--border-primary)',
         padding:     '8px 10px',
       }}
     >
@@ -86,7 +86,7 @@ function renderToolOutput(toolCall: ToolCallData) {
         style={{
           color: 'var(--danger)',
           borderLeft: `2px solid var(--danger)`,
-          backgroundColor: '#FF006610',
+          backgroundColor: 'color-mix(in srgb, var(--danger) 6%, transparent)',
           fontSize: '11px',
         }}
       >

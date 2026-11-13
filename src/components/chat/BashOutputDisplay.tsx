@@ -33,8 +33,8 @@ export function BashOutputDisplay({ data }: BashOutputDisplayProps) {
           <span
             className="px-2 py-0.5 rounded text-xs font-semibold"
             style={{
-              backgroundColor: data.exit_code === 0 ? "#7FDBCA20" : "#FF636320",
-              color: data.exit_code === 0 ? "#7FDBCA" : "#FF6363",
+              backgroundColor: data.exit_code === 0 ? "color-mix(in srgb, var(--aqua) 13%, transparent)" : "color-mix(in srgb, var(--danger) 13%, transparent)",
+              color: data.exit_code === 0 ? "var(--aqua)" : "var(--danger)",
             }}
           >
             Exit {data.exit_code}
@@ -56,7 +56,7 @@ export function BashOutputDisplay({ data }: BashOutputDisplayProps) {
           <pre
             className="overflow-x-auto"
             style={{
-              backgroundColor: "#00000020",
+              backgroundColor: "color-mix(in srgb, var(--bg-code) 13%, transparent)",
               padding: "8px",
               borderRadius: "4px",
               fontSize: "13px",
@@ -76,7 +76,7 @@ export function BashOutputDisplay({ data }: BashOutputDisplayProps) {
           <button
             onClick={() => setShowStderr(!showStderr)}
             className="text-xs font-semibold mb-2 flex items-center gap-1 transition-colors"
-            style={{ color: "#FF0066" }}
+            style={{ color: "var(--danger)" }}
           >
             <span>{showStderr ? "▼" : "▶"}</span>
             Error Output ({data.stderr.split("\n").length} lines)
@@ -85,14 +85,14 @@ export function BashOutputDisplay({ data }: BashOutputDisplayProps) {
             <pre
               className="overflow-x-auto"
               style={{
-                backgroundColor: "#FF006610",
+                backgroundColor: "color-mix(in srgb, var(--danger) 6%, transparent)",
                 padding: "8px",
                 borderRadius: "4px",
                 fontSize: "13px",
                 lineHeight: "1.5",
-                color: "#FF0066",
+                color: "var(--danger)",
                 fontFamily: "'Courier New', monospace",
-                border: "1px solid #FF006640",
+                border: "1px solid color-mix(in srgb, var(--danger) 25%, transparent)",
               }}
             >
               <Ansi>{data.stderr}</Ansi>

@@ -89,7 +89,7 @@ const s: Record<string, React.CSSProperties> = {
     padding:      '2px 8px',
     borderRadius: 10,
     background:   'var(--accent)',
-    color:        '#fff',
+    color:        'var(--text-on-accent)',
     fontSize:     11,
     fontWeight:   600,
     flexShrink:   0,
@@ -107,7 +107,7 @@ const s: Record<string, React.CSSProperties> = {
   tag: {
     padding:      '2px 8px',
     borderRadius: 10,
-    background:   'var(--bg-3, #2a2a2a)',
+    background:   'var(--bg-code)',
     color:        'var(--text-3)',
     fontSize:     11,
   },
@@ -160,7 +160,7 @@ const filterBtn = (active: boolean): React.CSSProperties => ({
   borderRadius: 20,
   border:       `1px solid ${active ? 'var(--accent)' : 'var(--border)'}`,
   background:   active ? 'var(--accent)' : 'transparent',
-  color:        active ? '#fff' : 'var(--text-2)',
+  color:        active ? 'var(--text-on-accent)' : 'var(--text-2)',
   fontSize:     13,
   cursor:       'pointer',
   transition:   'all 0.15s',
@@ -183,9 +183,9 @@ const btn = (variant: 'primary' | 'ghost' | 'danger'): React.CSSProperties => ({
   borderRadius: 6,
   border:       variant === 'ghost' ? '1px solid var(--border)' : 'none',
   background:   variant === 'primary' ? 'var(--accent)' :
-                variant === 'danger'  ? 'var(--error, #c0392b)' :
+                variant === 'danger'  ? 'var(--danger)' :
                                         'transparent',
-  color:        variant === 'ghost' ? 'var(--text-2)' : '#fff',
+  color:        variant === 'ghost' ? 'var(--text-2)' : 'var(--text-on-accent)',
   fontSize:     13,
   cursor:       'pointer',
   transition:   'opacity 0.15s',
@@ -197,14 +197,14 @@ const checkRow = (present: boolean, required: boolean): React.CSSProperties => (
   gap:         10,
   padding:     '6px 0',
   borderBottom:'1px solid var(--border)',
-  color:       !present && required ? 'var(--error, #c0392b)' : 'var(--text-2)',
+  color:       !present && required ? 'var(--danger)' : 'var(--text-2)',
 })
 
 const resultBox = (success: boolean): React.CSSProperties => ({
   padding:      12,
   borderRadius: 8,
   background:   success ? 'rgba(39,174,96,0.1)' : 'rgba(192,57,43,0.1)',
-  border:       `1px solid ${success ? 'var(--success, #27ae60)' : 'var(--error, #c0392b)'}`,
+  border:       `1px solid ${success ? 'var(--success)' : 'var(--danger)'}`,
   color:        'var(--text-1)',
   fontSize:     13,
 })
@@ -294,7 +294,7 @@ const PluginManager: React.FC = () => {
 
       {/* Error banner */}
       {pluginError && (
-        <div style={{ padding: '10px 20px', background: 'rgba(192,57,43,0.12)', color: 'var(--error, #e74c3c)', fontSize: 13 }}>
+        <div style={{ padding: '10px 20px', background: 'rgba(192,57,43,0.12)', color: 'var(--danger)', fontSize: 13 }}>
           {pluginError}
           <button
             onClick={clearError}
@@ -429,7 +429,7 @@ const PluginDetailPanel: React.FC<DetailPanelProps> = ({
 
         <div style={s.tags}>
           {plugin.tags.map(t => <span key={t} style={s.tag}>{t}</span>)}
-          {plugin.builtin && <span style={{ ...s.tag, background: 'var(--accent)', color: '#fff' }}>built-in</span>}
+          {plugin.builtin && <span style={{ ...s.tag, background: 'var(--accent)', color: 'var(--text-on-accent)' }}>built-in</span>}
         </div>
 
         <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
@@ -441,7 +441,7 @@ const PluginDetailPanel: React.FC<DetailPanelProps> = ({
           <div style={resultBox(installResult.success)}>
             {installResult.success ? '✓ ' : '✗ '}{installResult.message}
             {installResult.warnings.map((w, i) => (
-              <div key={i} style={{ color: 'var(--warning, #f39c12)', marginTop: 4 }}>⚠ {w}</div>
+              <div key={i} style={{ color: 'var(--warning)', marginTop: 4 }}>⚠ {w}</div>
             ))}
           </div>
         )}

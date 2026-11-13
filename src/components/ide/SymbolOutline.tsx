@@ -80,7 +80,7 @@ export default function SymbolOutline() {
           <button
             key={`${sym.name}-${sym.line}-${idx}`}
             onClick={() => openFile(activeTab, sym.line)}
-            className="w-full flex items-center gap-1.5 px-2 py-0.5 text-left hover:bg-[var(--bg-hover)]"
+            className="w-full flex items-center gap-1.5 px-2 py-0.5 text-left hover:bg-[color:var(--bg-hover)]"
             style={{ color: 'var(--text-1)' }}
           >
             <SymbolGlyph kind={sym.kind} />

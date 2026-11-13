@@ -84,7 +84,7 @@
 
 .plan-status-abandoned {
   background: rgba(255, 99, 99, 0.2);
-  color: #ff6363;
+  color: var(--danger);
 }
 
 .plan-display-description {
@@ -129,7 +129,7 @@
 }
 
 .plan-display-button:hover {
-  background: #9ab3ff;
+  background: var(--accent);
   transform: translateY(-1px);
 }
 

@@ -143,13 +143,13 @@ function buildTraceTree(records: StructuredRecord[], search = ''): TraceNode[] {
 }
 
 const LEVEL_COLOR: Record<LogLevel, string> = {
-  ERROR:   '#FF6363',
-  WARN:    '#FFCB8B',
-  INFO:    '#82AAFF',
-  DEBUG:   '#637777',
-  TRACE:   '#3D5A6E',
-  PANIC:   '#FF6363',
-  UNKNOWN: '#637777',
+  ERROR:   'var(--danger)',
+  WARN:    'var(--warning)',
+  INFO:    'var(--accent)',
+  DEBUG:   'var(--text-muted)',
+  TRACE:   'var(--text-dim)',
+  PANIC:   'var(--danger)',
+  UNKNOWN: 'var(--text-muted)',
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -437,12 +437,12 @@ export default function LogsTab() {
             >
               {lvl}
               {lvl === 'ERROR' && errorCount > 0 && (
-                <span style={{ marginLeft: 4, background: '#FF636330', borderRadius: 2, padding: '0 3px' }}>
+                <span style={{ marginLeft: 4, background: 'color-mix(in srgb, var(--danger) 19%, transparent)', borderRadius: 2, padding: '0 3px' }}>
                   {errorCount}
                 </span>
               )}
               {lvl === 'WARN' && warnCount > 0 && (
-                <span style={{ marginLeft: 4, background: '#FFCB8B20', borderRadius: 2, padding: '0 3px' }}>
+                <span style={{ marginLeft: 4, background: 'color-mix(in srgb, var(--warning) 13%, transparent)', borderRadius: 2, padding: '0 3px' }}>
                   {warnCount}
                 </span>
               )}
@@ -588,11 +588,11 @@ export default function LogsTab() {
               }}
               title="Download full log file (not truncated)"
               style={{
-                background:   '#FFCB8B18',
-                border:       '1px solid #FFCB8B50',
+                background:   'color-mix(in srgb, var(--warning) 9%, transparent)',
+                border:       '1px solid color-mix(in srgb, var(--warning) 31%, transparent)',
                 borderRadius: 2,
                 padding:      '2px 7px',
-                color:        '#FFCB8B',
+                color:        'var(--warning)',
                 cursor:       'pointer',
                 display:      'flex',
                 alignItems:   'center',
@@ -666,11 +666,11 @@ export default function LogsTab() {
             disabled={clearingLogs}
             title={clearConfirm ? 'Click again to permanently delete ALL log files' : 'Delete all log files from disk'}
             style={{
-              background:   clearConfirm ? '#FF636318' : 'var(--bg-card)',
-              border:       `1px solid ${clearConfirm ? '#FF636350' : 'var(--border-2)'}`,
+              background:   clearConfirm ? 'color-mix(in srgb, var(--danger) 9%, transparent)' : 'var(--bg-card)',
+              border:       `1px solid ${clearConfirm ? 'color-mix(in srgb, var(--danger) 31%, transparent)' : 'var(--border-2)'}`,
               borderRadius: 2,
               padding:      '2px 7px',
-              color:        clearConfirm ? '#FF6363' : 'var(--text-3)',
+              color:        clearConfirm ? 'var(--danger)' : 'var(--text-3)',
               cursor:       clearingLogs ? 'not-allowed' : 'pointer',
               display:      'flex',
               alignItems:   'center',
@@ -713,7 +713,7 @@ export default function LogsTab() {
               <span style={{ marginLeft: 8 }}>refresh {refreshMs} ms · {fullSize.toLocaleString()} bytes</span>
             )}
             {truncated && (
-              <span style={{ color: '#FFCB8B', marginLeft: 4 }}>
+              <span style={{ color: 'var(--warning)', marginLeft: 4 }}>
                 (showing last {lines.length.toLocaleString()} of {totalLines.toLocaleString()} total)
               </span>
             )}
@@ -722,7 +722,7 @@ export default function LogsTab() {
             <span style={{
               fontFamily: 'monospace',
               fontSize: 9,
-              color: '#FFCB8B',
+              color: 'var(--warning)',
               display: 'flex',
               alignItems: 'center',
               gap: 4,
@@ -750,7 +750,7 @@ export default function LogsTab() {
             </span>
           )}
           {loadError && (
-            <span role="alert" style={{ fontFamily: 'monospace', fontSize: 9, color: '#FF6363' }}>
+            <span role="alert" style={{ fontFamily: 'monospace', fontSize: 9, color: 'var(--danger)' }}>
               {loadError}
             </span>
           )}
@@ -760,7 +760,7 @@ export default function LogsTab() {
             </span>
           )}
           {fullWindowMetrics.file_logging_unavailable === true ? (
-            <span role="status" style={{ fontFamily: 'monospace', fontSize: 9, color: '#FF6363' }}>
+            <span role="status" style={{ fontFamily: 'monospace', fontSize: 9, color: 'var(--danger)' }}>
               File logging unavailable in this process — console only. Empty sections below mean no file sink exists, not that nothing happened.
             </span>
           ) : dates.length === 0 && (
@@ -816,8 +816,8 @@ export default function LogsTab() {
                 ? 'rgba(255, 99, 99, 0.04)'
                 : line.level === 'WARN' ? 'rgba(255, 203, 139, 0.03)' : 'transparent',
               borderLeft: line.level === 'ERROR' || line.level === 'PANIC'
-                ? '2px solid #FF636340'
-                : line.level === 'WARN' ? '2px solid #FFCB8B40' : '2px solid transparent',
+                ? '2px solid color-mix(in srgb, var(--danger) 25%, transparent)'
+                : line.level === 'WARN' ? '2px solid color-mix(in srgb, var(--warning) 25%, transparent)' : '2px solid transparent',
             }}
           >
             {/* Timestamp */}
@@ -860,8 +860,8 @@ export default function LogsTab() {
           <summary style={{ cursor: 'pointer', padding: '9px 14px', color: 'var(--text-1)', fontFamily: 'monospace', fontSize: 11 }}>
             Structured Events <span style={{ color: 'var(--text-4)' }}>({structuredRecords.length}{structuredTruncated ? ` of ${structuredTotalLines} · tail shown` : ''}{structuredError ? ' · read error' : ''})</span>
           </summary>
-          {structuredError && <div role="alert" style={{ padding: '8px 14px', color: '#FF6363' }}>{structuredError}</div>}
-          {structuredTruncated && <div role="status" style={{ padding: '8px 14px', color: '#FFCB8B' }}>
+          {structuredError && <div role="alert" style={{ padding: '8px 14px', color: 'var(--danger)' }}>{structuredError}</div>}
+          {structuredTruncated && <div role="status" style={{ padding: '8px 14px', color: 'var(--warning)' }}>
             Showing the newest 2,000 structured events of {structuredTotalLines.toLocaleString()}. Export the observability bundle for the complete selected date.
           </div>}
           {structuredRecords.length === 0 && !structuredError && <div style={{ padding: '12px 14px', color: 'var(--text-4)' }}>No structured telemetry has been recorded for this date.</div>}
@@ -920,7 +920,7 @@ export default function LogsTab() {
             {droppedLines > 0 && ` · telemetry dropped: ${droppedLines.toLocaleString()} lines`}
             {fullWindowMetrics.file_logging_unavailable === true && ' · file logging unavailable (console only)'}
             {Number(fullWindowMetrics.malformed_events ?? 0) > 0 && ` · ${Number(fullWindowMetrics.malformed_events).toLocaleString()} malformed`}
-          {metricsError && <div role="alert" style={{ color: '#FF6363', marginTop: 6 }}>Metrics unavailable: {metricsError}</div>}
+          {metricsError && <div role="alert" style={{ color: 'var(--danger)', marginTop: 6 }}>Metrics unavailable: {metricsError}</div>}
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8, color: 'var(--text-2)' }}>
               <span>{Number(fullWindowMetrics.provider_calls ?? 0)} provider calls</span>
               <span>{Number(fullWindowMetrics.provider_attempts ?? 0)} attempts/retries</span>

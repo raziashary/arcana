@@ -582,7 +582,7 @@ export default function ChatTab() {
               style={{
                 background: 'var(--accent)',
                 border:     '1px solid var(--accent)',
-                color:      '#000',
+                color:      'var(--text-on-accent)',
               }}
             >
               <Send size={14} />
@@ -619,7 +619,7 @@ export default function ChatTab() {
           borderRadius: '50%',
           background: 'var(--accent)',
           border: 'none',
-          color: '#011627',
+          color: 'var(--bg-app)',
           cursor: 'pointer',
           display: 'flex',
           alignItems: 'center',
@@ -641,13 +641,13 @@ export default function ChatTab() {
           top: 0,
           bottom: 0,
           width: '320px',
-          borderLeft: '1px solid #0D3652',
+          borderLeft: '1px solid var(--border-primary)',
           background: 'var(--bg-surface)',
           overflowY: 'auto',
           zIndex: 1000,
           boxShadow: '-2px 0 8px rgba(0,0,0,0.3)',
         }}>
-          <div style={{ padding: '12px', borderBottom: '1px solid #0D3652', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ padding: '12px', borderBottom: '1px solid var(--border-primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: '12px', fontWeight: 'bold', color: 'var(--text-1)' }}>Subagent Monitor</span>
             <button
               onClick={() => setShowSubagents(false)}

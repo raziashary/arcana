@@ -21,21 +21,21 @@ export default function TitleBar() {
           type="button"
           onClick={() => win.close().catch(console.error)}
           className="w-3 h-3 rounded-full cursor-pointer border-none p-0 hover:opacity-80"
-          style={{ background: '#FF5F57' }}
+          style={{ background: 'var(--danger)' }}
           aria-label="Close"
         />
         <button
           type="button"
           onClick={() => win.minimize().catch(console.error)}
           className="w-3 h-3 rounded-full cursor-pointer border-none p-0 hover:opacity-80"
-          style={{ background: '#FEBC2E' }}
+          style={{ background: 'var(--warning)' }}
           aria-label="Minimize"
         />
         <button
           type="button"
           onClick={() => win.toggleMaximize().catch(console.error)}
           className="w-3 h-3 rounded-full cursor-pointer border-none p-0 hover:opacity-80"
-          style={{ background: '#28C840' }}
+          style={{ background: 'var(--success)' }}
           aria-label="Maximize"
         />
       </div>
@@ -43,7 +43,7 @@ export default function TitleBar() {
       {/* App title */}
       <span
         className="font-mono text-xs"
-        style={{ color: '#555', letterSpacing: '0.05em' }}
+        style={{ color: 'var(--text-dim)', letterSpacing: '0.05em' }}
       >
         Arcana — v1.0.0
       </span>

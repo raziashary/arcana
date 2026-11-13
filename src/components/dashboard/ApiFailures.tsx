@@ -66,9 +66,9 @@ const ApiFailures: React.FC<ApiFailuresProps> = ({ analytics }) => {
   };
 
   const getTrendColor = (trend?: number) => {
-    if (!trend) return '#637777';
-    if (trend < 0) return '#7FDBCA'; // improving
-    return '#FF6363'; // worsening
+    if (!trend) return 'var(--text-muted)';
+    if (trend < 0) return 'var(--aqua)'; // improving
+    return 'var(--danger)'; // worsening
   };
 
   return (
@@ -110,10 +110,10 @@ const ApiFailures: React.FC<ApiFailuresProps> = ({ analytics }) => {
               marginTop: '8px',
               width: '100%',
               padding: '6px 8px',
-              background: '#0B3A5C',
-              border: '1px solid #1A527A',
+              background: 'var(--bg-selected)',
+              border: '1px solid var(--border-secondary)',
               borderRadius: '2px',
-              color: '#637777',
+              color: 'var(--text-muted)',
               fontSize: '11px',
               cursor: 'pointer',
               display: 'flex',
@@ -143,21 +143,21 @@ const ApiFailures: React.FC<ApiFailuresProps> = ({ analytics }) => {
           zIndex: 1000,
         }}>
           <div style={{
-            background: '#00233B',
-            border: '1px solid #0D3652',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-primary)',
             borderRadius: '4px',
             padding: '20px',
             maxWidth: '400px',
             width: '90%',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, color: '#D6DEEB' }}>Provider Failure Rates</h3>
+              <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Provider Failure Rates</h3>
               <button
                 onClick={() => setShowDetails(false)}
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#637777',
+                  color: 'var(--text-muted)',
                   cursor: 'pointer',
                   fontSize: '20px',
                 }}
@@ -174,17 +174,17 @@ const ApiFailures: React.FC<ApiFailuresProps> = ({ analytics }) => {
                   justifyContent: 'space-between',
                   alignItems: 'center',
                   padding: '12px 0',
-                  borderBottom: '1px solid #0D3652',
+                  borderBottom: '1px solid var(--border-primary)',
                   fontSize: '12px',
                 }}>
                   <div>
-                    <div style={{ color: '#D6DEEB', marginBottom: '4px' }}>{item.provider}</div>
-                    <div style={{ color: '#637777', fontSize: '10px' }}>
+                    <div style={{ color: 'var(--text-primary)', marginBottom: '4px' }}>{item.provider}</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
                       {item.failures} failures
                     </div>
                   </div>
                   <div style={{ textAlign: 'right' }}>
-                    <div style={{ color: '#FF6363', marginBottom: '4px' }}>
+                    <div style={{ color: 'var(--danger)', marginBottom: '4px' }}>
                       {item.rate.toFixed(2)}% rate
                     </div>
                     {item.trend && (
@@ -199,16 +199,16 @@ const ApiFailures: React.FC<ApiFailuresProps> = ({ analytics }) => {
 
             {/* Overall stats */}
             <div style={{
-              background: '#0B3A5C',
+              background: 'var(--bg-selected)',
               padding: '12px',
               borderRadius: '2px',
               marginBottom: '16px',
               fontSize: '11px',
             }}>
-              <div style={{ color: '#637777', marginBottom: '4px' }}>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>
                 Last 24 hours
               </div>
-              <div style={{ color: '#D6DEEB', fontWeight: 'bold' }}>
+              <div style={{ color: 'var(--text-primary)', fontWeight: 'bold' }}>
                 {analytics.total_failures} total failures
               </div>
             </div>
@@ -218,10 +218,10 @@ const ApiFailures: React.FC<ApiFailuresProps> = ({ analytics }) => {
               style={{
                 width: '100%',
                 padding: '8px',
-                background: '#0B3A5C',
-                border: '1px solid #1A527A',
+                background: 'var(--bg-selected)',
+                border: '1px solid var(--border-secondary)',
                 borderRadius: '2px',
-                color: '#637777',
+                color: 'var(--text-muted)',
                 cursor: 'pointer',
                 fontSize: '12px',
               }}

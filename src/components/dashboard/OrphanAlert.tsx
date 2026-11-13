@@ -48,7 +48,7 @@ export function OrphanAlert() {
             gap: 8,
             padding: '6px 10px',
             background: 'var(--bg-raised)',
-            border: '1px solid var(--yellow, #f5a623)',
+            border: '1px solid var(--warning)',
             borderRadius: 6,
             fontSize: 12,
           }}

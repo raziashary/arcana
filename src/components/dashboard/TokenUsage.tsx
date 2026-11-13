@@ -81,7 +81,7 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
   })();
 
   // Real model distribution from analytics.by_model
-  const MODEL_COLORS = ['#82AAFF', '#7FDBCA', '#FFCB8B', '#ECC48D', '#C792EA'];
+  const MODEL_COLORS = ['var(--accent)', 'var(--aqua)', 'var(--warning)', 'var(--gold)', 'var(--purple)'];
   const modelUsage: ModelUsageData[] = (() => {
     const byModel = analytics?.by_model ?? {};
     const entries = Object.entries(byModel).sort(([, a], [, b]) => b - a).slice(0, 5);
@@ -146,10 +146,10 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
               marginTop: '8px',
               width: '100%',
               padding: '6px 8px',
-              background: '#0B3A5C',
-              border: '1px solid #1A527A',
+              background: 'var(--bg-selected)',
+              border: '1px solid var(--border-secondary)',
               borderRadius: '2px',
-              color: '#637777',
+              color: 'var(--text-muted)',
               fontSize: '11px',
               cursor: 'pointer',
               display: 'flex',
@@ -180,8 +180,8 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
           overflowY: 'auto',
         }}>
           <div style={{
-            background: '#00233B',
-            border: '1px solid #0D3652',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-primary)',
             borderRadius: '4px',
             padding: '20px',
             maxWidth: '900px',
@@ -190,13 +190,13 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
             overflowY: 'auto',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, color: '#D6DEEB' }}>Token Analytics</h3>
+              <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Token Analytics</h3>
               <button
                 onClick={() => setShowCharts(false)}
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#637777',
+                  color: 'var(--text-muted)',
                   cursor: 'pointer',
                   fontSize: '20px',
                 }}
@@ -207,23 +207,23 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
 
             {/* 7-Day Trend Chart */}
             <div style={{ marginBottom: '24px' }}>
-              <h4 style={{ color: '#D6DEEB', marginBottom: '12px', fontSize: '12px' }}>7-Day Token Trend</h4>
+              <h4 style={{ color: 'var(--text-primary)', marginBottom: '12px', fontSize: '12px' }}>7-Day Token Trend</h4>
               <ResponsiveContainer width="100%" height={250}>
                 <LineChart data={sevenDayData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#0D3652" />
-                  <XAxis dataKey="date" stroke="#637777" style={{ fontSize: '12px' }} />
-                  <YAxis stroke="#637777" style={{ fontSize: '12px' }} />
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border-primary)" />
+                  <XAxis dataKey="date" stroke="var(--text-muted)" style={{ fontSize: '12px' }} />
+                  <YAxis stroke="var(--text-muted)" style={{ fontSize: '12px' }} />
                   <Tooltip
-                    contentStyle={{ background: '#011627', border: '1px solid #0D3652', borderRadius: '2px' }}
-                    labelStyle={{ color: '#D6DEEB' }}
+                    contentStyle={{ background: 'var(--bg-app)', border: '1px solid var(--border-primary)', borderRadius: '2px' }}
+                    labelStyle={{ color: 'var(--text-primary)' }}
                     formatter={(value: any) => formatTokens(value as number)}
                   />
                   <Line
                     type="monotone"
                     dataKey="tokens"
-                    stroke="#82AAFF"
+                    stroke="var(--accent)"
                     strokeWidth={2}
-                    dot={{ fill: '#82AAFF', r: 4 }}
+                    dot={{ fill: 'var(--accent)', r: 4 }}
                     activeDot={{ r: 6 }}
                   />
                 </LineChart>
@@ -232,7 +232,7 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
 
             {/* Model Breakdown Pie Chart */}
             <div style={{ marginBottom: '24px' }}>
-              <h4 style={{ color: '#D6DEEB', marginBottom: '12px', fontSize: '12px' }}>Model Distribution</h4>
+              <h4 style={{ color: 'var(--text-primary)', marginBottom: '12px', fontSize: '12px' }}>Model Distribution</h4>
               <ResponsiveContainer width="100%" height={250}>
                 <PieChart>
                   <Pie
@@ -242,7 +242,7 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
                     labelLine={false}
                     label={({ name, percent }: any) => `${name}: ${(percent * 100).toFixed(0)}%`}
                     outerRadius={80}
-                    fill="#8884d8"
+                    fill="var(--accent)"
                     dataKey="value"
                   >
                     {modelUsage.map((entry, index) => (
@@ -250,8 +250,8 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
                     ))}
                   </Pie>
                   <Tooltip
-                    contentStyle={{ background: '#011627', border: '1px solid #0D3652', borderRadius: '2px' }}
-                    labelStyle={{ color: '#D6DEEB' }}
+                    contentStyle={{ background: 'var(--bg-app)', border: '1px solid var(--border-primary)', borderRadius: '2px' }}
+                    labelStyle={{ color: 'var(--text-primary)' }}
                     formatter={(value: any) => formatTokens(value as number)}
                   />
                 </PieChart>
@@ -260,20 +260,20 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
 
             {/* Top Sessions */}
             <div style={{ marginBottom: '16px' }}>
-              <h4 style={{ color: '#D6DEEB', marginBottom: '12px', fontSize: '12px' }}>Top Sessions by Token Usage</h4>
+              <h4 style={{ color: 'var(--text-primary)', marginBottom: '12px', fontSize: '12px' }}>Top Sessions by Token Usage</h4>
               {topSessions.map((session, idx) => (
                 <div key={session.id} style={{
                   display: 'flex',
                   justifyContent: 'space-between',
                   padding: '8px 0',
-                  borderBottom: '1px solid #0D3652',
+                  borderBottom: '1px solid var(--border-primary)',
                   fontSize: '12px',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                    <span style={{ color: '#637777' }}>#{idx + 1}</span>
-                    <span style={{ color: '#D6DEEB' }}>{session.name}</span>
+                    <span style={{ color: 'var(--text-muted)' }}>#{idx + 1}</span>
+                    <span style={{ color: 'var(--text-primary)' }}>{session.name}</span>
                   </div>
-                  <span style={{ color: '#82AAFF' }}>{formatTokens(session.tokens)}</span>
+                  <span style={{ color: 'var(--accent)' }}>{formatTokens(session.tokens)}</span>
                 </div>
               ))}
             </div>
@@ -284,10 +284,10 @@ const TokenUsage: React.FC<TokenUsageProps> = ({ summary, analytics, costAnalyti
                 marginTop: '16px',
                 width: '100%',
                 padding: '8px',
-                background: '#0B3A5C',
-                border: '1px solid #1A527A',
+                background: 'var(--bg-selected)',
+                border: '1px solid var(--border-secondary)',
                 borderRadius: '2px',
-                color: '#637777',
+                color: 'var(--text-muted)',
                 cursor: 'pointer',
                 fontSize: '12px',
               }}

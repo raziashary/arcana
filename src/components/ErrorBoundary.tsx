@@ -51,10 +51,10 @@ export class ErrorBoundary extends Component<Props, State> {
         <div
           style={{
             padding:    '8px 12px',
-            background: 'var(--danger-bg, #2a0a0a)',
-            border:     '1px solid var(--danger, #e45)',
+            background: 'var(--bg-2)',
+            border:     '1px solid var(--danger)',
             borderRadius: 4,
-            color:      'var(--danger, #e45)',
+            color:      'var(--danger)',
             fontFamily: 'var(--font-mono, monospace)',
             fontSize:   11,
           }}
@@ -79,15 +79,15 @@ export class ErrorBoundary extends Component<Props, State> {
           alignItems:     'center',
           justifyContent: 'center',
           padding:        32,
-          background:     'var(--bg-panel, #0a0a14)',
-          color:          'var(--text-1, #d6deeb)',
+          background:     'var(--bg-panel)',
+          color:          'var(--text-1)',
         }}
       >
         <div
           style={{
             maxWidth:     600,
             width:        '100%',
-            border:       '1px solid var(--danger, #e45)',
+            border:       '1px solid var(--danger)',
             borderRadius: 6,
             overflow:     'hidden',
           }}
@@ -99,11 +99,11 @@ export class ErrorBoundary extends Component<Props, State> {
               alignItems:     'center',
               justifyContent: 'space-between',
               padding:        '10px 16px',
-              background:     'var(--danger-bg, #2a0a0a)',
-              borderBottom:   '1px solid var(--danger, #e45)',
+              background:     'var(--bg-2)',
+              borderBottom:   '1px solid var(--danger)',
             }}
           >
-            <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 13, color: 'var(--danger, #e45)', fontWeight: 600 }}>
+            <span style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 13, color: 'var(--danger)', fontWeight: 600 }}>
               ⚠ {title}
             </span>
             <button
@@ -111,9 +111,9 @@ export class ErrorBoundary extends Component<Props, State> {
               style={{
                 padding:      '3px 10px',
                 background:   'transparent',
-                border:       '1px solid var(--danger, #e45)',
+                border:       '1px solid var(--danger)',
                 borderRadius: 3,
-                color:        'var(--danger, #e45)',
+                color:        'var(--danger)',
                 cursor:       'pointer',
                 fontFamily:   'var(--font-mono, monospace)',
                 fontSize:     11,
@@ -124,12 +124,12 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
 
           {/* Error message */}
-          <div style={{ padding: '12px 16px', background: 'var(--bg-card, #0d1b2a)' }}>
+          <div style={{ padding: '12px 16px', background: 'var(--bg-card)' }}>
             <div
               style={{
                 fontFamily:  'var(--font-mono, monospace)',
                 fontSize:    12,
-                color:       'var(--text-1, #d6deeb)',
+                color:       'var(--text-1)',
                 marginBottom: 12,
                 whiteSpace:  'pre-wrap',
                 wordBreak:   'break-word',
@@ -145,7 +145,7 @@ export class ErrorBoundary extends Component<Props, State> {
                     cursor:      'pointer',
                     fontFamily:  'var(--font-mono, monospace)',
                     fontSize:    10,
-                    color:       'var(--text-3, #637777)',
+                    color:       'var(--text-3)',
                     userSelect:  'none',
                   }}
                 >
@@ -155,11 +155,11 @@ export class ErrorBoundary extends Component<Props, State> {
                   style={{
                     marginTop:   6,
                     padding:     '8px 10px',
-                    background:  'var(--bg-surface, #01111d)',
+                    background:  'var(--bg-surface)',
                     borderRadius: 3,
                     fontFamily:  'var(--font-mono, monospace)',
                     fontSize:    10,
-                    color:       'var(--text-3, #637777)',
+                    color:       'var(--text-3)',
                     whiteSpace:  'pre-wrap',
                     wordBreak:   'break-all',
                     overflowX:   'auto',

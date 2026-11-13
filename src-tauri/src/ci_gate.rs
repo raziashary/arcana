@@ -7270,4 +7270,130 @@ fn effect() { ToolEffect::Execute }"#;
             );
         }
     }
+
+    /// Frontend `.ts`, `.tsx` and `.css` sources under `src/`, tests excluded.
+    fn style_sources() -> Vec<(String, String)> {
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("ts") | Some("tsx") | Some("css")
+                ) {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&repo_root().join("src"), &mut files);
+        files
+            .into_iter()
+            .filter_map(|file| {
+                let name = file.to_string_lossy().replace('\\', "/");
+                if name.contains(".test.") || name.contains(".spec.") {
+                    return None;
+                }
+                std::fs::read_to_string(&file)
+                    .ok()
+                    .map(|text| (name, text.replace("\r\n", "\n")))
+            })
+            .collect()
+    }
+
+    /// Hex colour literals in `text` (`#abc`, `#abcd`, `#aabbcc`, `#aabbccdd`).
+    /// HTML entities (`&#183;`) and longer identifiers do not count.
+    fn hex_literals(text: &str) -> Vec<String> {
+        let re = regex::Regex::new(
+            r"(?:^|[^\w&/#])(#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4}))(?:[^\w-]|$)",
+        )
+        .expect("hex pattern compiles");
+        re.captures_iter(text).map(|c| c[1].to_string()).collect()
+    }
+
+    /// `TG-P6-04` (P6-01/04, D-016, D-019) — colour is defined once. A literal hex
+    /// colour may appear only in the `:root` block of `src/styles/globals.css`
+    /// (the tokens) and in `src/styles/palette.ts` (three.js, d3 and Monaco, which
+    /// cannot read a CSS variable). Every other source uses `var(--token)`.
+    /// `src/data/docsAll*.ts` is documentation text, not styling. Before this the
+    /// app carried 709 literals in 80 files and three palettes that disagreed.
+    #[test]
+    fn tg_p6_04_colour_is_defined_once() {
+        // The scanner itself, both ways, so a gate that found nothing cannot pass.
+        assert_eq!(hex_literals("color: '#fff'"), vec!["#fff"]);
+        assert_eq!(hex_literals("a { background: #0E1131; }"), vec!["#0E1131"]);
+        assert!(hex_literals("<span>&#183;</span> and #root and href=\"#top\"").is_empty());
+
+        let sources = style_sources();
+        assert!(
+            sources.len() > 150,
+            "the style scan found {} files; the gate has lost its input",
+            sources.len()
+        );
+        let mut offenders = Vec::new();
+        for (name, text) in &sources {
+            if name.ends_with("src/styles/palette.ts") || name.contains("src/data/docsAll") {
+                continue;
+            }
+            let scanned = if name.ends_with("src/styles/globals.css") {
+                // Tokens live in `:root { ... }`; everything after it must use them.
+                let start = text.find(":root {").expect("globals.css defines :root");
+                let end = start + text[start..].find("\n}").expect(":root block closes");
+                format!("{}{}", &text[..start], &text[end..])
+            } else {
+                text.clone()
+            };
+            let found = hex_literals(&scanned);
+            if !found.is_empty() {
+                offenders.push(format!("{name}: {}", found.join(", ")));
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "hex colour literals outside the token file and palette.ts; use var(--token) \
+             or add the colour to src/styles/palette.ts:\n{}",
+            offenders.join("\n")
+        );
+    }
+
+    /// `TG-P6-01` (P6-01) — every `var(--name)` a component uses is defined. An
+    /// undefined variable silently falls back or renders nothing, and several
+    /// components used names (`--bg-3`, `--text-tertiary`, ...) that no stylesheet
+    /// defined, each hiding behind a hex fallback.
+    #[test]
+    fn tg_p6_01_every_css_variable_used_is_defined() {
+        let defined_re = regex::Regex::new(r#"(?:^|[\s'"{;])(--[a-zA-Z0-9-]+)\s*['"]?\s*:"#)
+            .expect("definition pattern compiles");
+        let used_re = regex::Regex::new(r"var\((--[a-zA-Z0-9-]+)").expect("use pattern compiles");
+        let sources = style_sources();
+        let mut defined = std::collections::BTreeSet::new();
+        for (_, text) in &sources {
+            for c in defined_re.captures_iter(text) {
+                defined.insert(c[1].to_string());
+            }
+        }
+        assert!(
+            defined.contains("--bg-app") && defined.contains("--text-on-accent"),
+            "the token definitions were not found; the gate has lost its input"
+        );
+        let mut undefined = Vec::new();
+        for (name, text) in &sources {
+            for c in used_re.captures_iter(text) {
+                if !defined.contains(&c[1]) {
+                    undefined.push(format!("{name}: {}", &c[1]));
+                }
+            }
+        }
+        undefined.sort();
+        undefined.dedup();
+        assert!(
+            undefined.is_empty(),
+            "CSS variables are used but never defined:\n{}",
+            undefined.join("\n")
+        );
+    }
 }

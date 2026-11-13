@@ -28,7 +28,7 @@ export function GrepResultsDisplay({ data }: GrepResultsDisplayProps) {
     return (
       <>
         {content.slice(0, start)}
-        <span style={{ backgroundColor: "#FFD70050", fontWeight: 600 }}>
+        <span style={{ backgroundColor: "color-mix(in srgb, var(--warning) 31%, transparent)", fontWeight: 600 }}>
           {content.slice(start, end)}
         </span>
         {content.slice(end)}
@@ -40,7 +40,7 @@ export function GrepResultsDisplay({ data }: GrepResultsDisplayProps) {
     <div className="rounded p-3" style={{ backgroundColor: "var(--surface-bg)", border: "1px solid var(--border-primary)" }}>
       {/* Summary */}
       <div className="mb-2" style={{ color: "var(--text-secondary)" }}>
-        <div className="font-semibold mb-1">Pattern: <code style={{ backgroundColor: "#ffffff10", padding: "2px 6px", borderRadius: "3px" }}>{data.pattern}</code></div>
+        <div className="font-semibold mb-1">Pattern: <code style={{ backgroundColor: "color-mix(in srgb, var(--bg-surface) 6%, transparent)", padding: "2px 6px", borderRadius: "3px" }}>{data.pattern}</code></div>
         <div className="text-sm">
           Found <strong>{data.total_matches}</strong> matches in <strong>{data.files_matched}</strong> files
         </div>
@@ -91,7 +91,7 @@ export function GrepResultsDisplay({ data }: GrepResultsDisplayProps) {
                       className="w-full text-left p-2 border-b last:border-b-0 hover:brightness-125 transition"
                       style={{
                         borderColor: "var(--border-secondary)",
-                        backgroundColor: "#00000020",
+                        backgroundColor: "color-mix(in srgb, var(--bg-code) 13%, transparent)",
                         background: "transparent",
                         cursor: "pointer",
                       }}

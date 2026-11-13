@@ -290,7 +290,7 @@ export default function ArcanaMdEditor({ onClose, initialScope = 'global' }: Pro
             className="flex items-center gap-1 text-xs px-3 py-1 rounded transition-opacity"
             style={{
               background: saved ? 'var(--success)' : 'var(--accent)',
-              color:      '#fff',
+              color:      'var(--text-on-accent)',
               border:     'none',
               cursor:     isOver ? 'not-allowed' : 'pointer',
               opacity:    isOver || store.isSaving ? 0.5 : 1,

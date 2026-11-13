@@ -119,7 +119,7 @@ function WorkerRow({
           {worker.is_system_defined && (
             <span style={{
               fontSize: 9, padding: '1px 5px', borderRadius: 3,
-              background: 'rgba(255,255,255,0.06)', color: 'var(--text-3)',
+              background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)', color: 'var(--text-3)',
               textTransform: 'uppercase', letterSpacing: 1,
             }}>sys</span>
           )}
@@ -206,7 +206,7 @@ function WorkerRow({
           ) : (
             <button
               onClick={() => onStart(worker.id)}
-              style={btnStyle('#00AA55')}
+              style={btnStyle('var(--success)')}
               disabled={worker.status === 'error'}
             >
               Start
@@ -215,7 +215,7 @@ function WorkerRow({
           {canDelete && (
             <button
               onClick={() => onDelete(worker.id)}
-              style={btnStyle('#AA3333')}
+              style={btnStyle('var(--danger)')}
             >
               Del
             </button>
@@ -373,12 +373,12 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
               animation: 'fadeInUp 0.3s ease-out',
               border: '1px solid',
               borderColor: toast.type === 'success' ? 'var(--success)' : 
-                          toast.type === 'warning' ? '#FFCB8B' : '#FF6363',
+                          toast.type === 'warning' ? 'var(--warning)' : 'var(--danger)',
               backgroundColor: toast.type === 'success' ? 'rgba(173,219,103,0.1)' :
                               toast.type === 'warning' ? 'rgba(255,203,139,0.1)' :
                               'rgba(255,99,99,0.1)',
               color: toast.type === 'success' ? 'var(--success)' :
-                     toast.type === 'warning' ? '#FFCB8B' : '#FF6363',
+                     toast.type === 'warning' ? 'var(--warning)' : 'var(--danger)',
             }}
           >
             {toast.type === 'success' && '✓ '}
@@ -392,7 +392,7 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
       {confirm !== null && (
         <div style={{
           marginTop: 8, fontFamily: 'monospace', fontSize: 11,
-          color: '#FF6363', padding: '6px 10px', border: '1px solid #FF636350',
+          color: 'var(--danger)', padding: '6px 10px', border: '1px solid color-mix(in srgb, var(--danger) 31%, transparent)',
           borderRadius: 4, background: 'rgba(255,99,99,0.06)',
         }}>
           Click Delete again within 3s to confirm deletion
@@ -400,7 +400,7 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
       )}
 
       {store.error && (
-        <div style={{ marginTop: 8, fontFamily: 'monospace', fontSize: 11, color: '#FF6363' }}>
+        <div style={{ marginTop: 8, fontFamily: 'monospace', fontSize: 11, color: 'var(--danger)' }}>
           Error: {store.error}
         </div>
       )}

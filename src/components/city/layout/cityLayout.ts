@@ -2,10 +2,11 @@
 import * as d3Hierarchy from 'd3-hierarchy'
 import type { GraphNode, GraphEdge, Community } from '../../../stores/graphStore'
 import type { CityLayout, BuildingLayout, DistrictLayout } from './layoutTypes'
+import { CITY } from '../../../styles/palette'
 
 const COMMUNITY_COLORS = [
-  '#4E79A7', '#F28E2B', '#59A14F', '#E15759', '#76B7B2',
-  '#EDC948', '#B07AA1', '#FF9DA7', '#9C755F', '#BAB0AC',
+  CITY.cat0, CITY.cat1, CITY.cat2, CITY.cat3, CITY.cat4,
+  CITY.cat5, CITY.cat6, CITY.cat7, CITY.cat8, CITY.cat9,
 ]
 
 export function communityColor(id: number): string {

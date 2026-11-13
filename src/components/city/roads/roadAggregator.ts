@@ -2,6 +2,7 @@
 // Returns community-level aggregate roads instead of per-node roads
 import type { GraphNode, GraphEdge } from '../../../stores/graphStore'
 import type { CityLayout, AggregateRoad } from '../layout/layoutTypes'
+import { CITY } from '../../../styles/palette'
 
 export function aggregateImportRoads(
   edges: GraphEdge[],
@@ -54,7 +55,7 @@ export function aggregateImportRoads(
       to: tgtCenter,
       width: Math.max(2.5, Math.log(1 + count) * 2.5),
       laneCount: Math.min(count, 6),
-      color: '#3a5fff',
+      color: CITY.roadAggregate,
       srcCommunity: srcComm,
       tgtCommunity: tgtComm,
       edgeCount: count,

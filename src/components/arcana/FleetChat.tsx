@@ -16,11 +16,11 @@ import { useTaskStore } from '../../stores/taskStore'
 import { parseDbTimestamp } from '../../utils/dbTime'
 
 const KIND_PALETTE: Record<WorkerMessageKind, { fg: string; bg: string; label: string }> = {
-  nudge:     { fg: '#7FDBCA', bg: 'rgba(127,219,202,0.08)', label: 'NUDGE' },
-  question:  { fg: '#FFCB8B', bg: 'rgba(255,203,139,0.10)', label: 'QUESTION' },
-  answer:    { fg: '#82AAFF', bg: 'rgba(130,170,255,0.08)', label: 'ANSWER' },
-  fyi:       { fg: '#888888', bg: 'rgba(255,255,255,0.04)', label: 'FYI' },
-  broadcast: { fg: '#C792EA', bg: 'rgba(199,146,234,0.10)', label: 'BROADCAST' },
+  nudge:     { fg: 'var(--aqua)', bg: 'rgba(127,219,202,0.08)', label: 'NUDGE' },
+  question:  { fg: 'var(--warning)', bg: 'rgba(255,203,139,0.10)', label: 'QUESTION' },
+  answer:    { fg: 'var(--accent)', bg: 'rgba(130,170,255,0.08)', label: 'ANSWER' },
+  fyi:       { fg: 'var(--text-muted)', bg: 'color-mix(in srgb, var(--text-primary) 4%, transparent)', label: 'FYI' },
+  broadcast: { fg: 'var(--purple)', bg: 'rgba(199,146,234,0.10)', label: 'BROADCAST' },
 }
 
 function timeAgo(iso: string): string {
@@ -77,10 +77,10 @@ export function FleetChat({ taskId = null }: Props) {
       <div
         style={{
           padding:       '8px 12px',
-          background:    'var(--bg-2, #111)',
-          border:        '1px solid var(--border, #222)',
+          background:    'var(--bg-2)',
+          border:        '1px solid var(--border)',
           borderRadius:  2,
-          color:         'var(--text-secondary, #666)',
+          color:         'var(--text-secondary)',
           fontSize:      11,
           fontFamily:    'var(--font-mono, monospace)',
         }}
@@ -91,7 +91,7 @@ export function FleetChat({ taskId = null }: Props) {
           style={{
             background: 'transparent',
             border:     'none',
-            color:      'var(--accent, #00FF88)',
+            color:      'var(--accent)',
             cursor:     'pointer',
             fontSize:   10,
           }}
@@ -105,26 +105,26 @@ export function FleetChat({ taskId = null }: Props) {
   return (
     <div
       style={{
-        background:    'var(--bg-1, #0A0A0A)',
-        border:        '1px solid var(--border, #222)',
+        background:    'var(--bg-1)',
+        border:        '1px solid var(--border)',
         borderRadius:  2,
         padding:       12,
         fontFamily:    'var(--font-mono, monospace)',
         fontSize:      11,
-        color:         'var(--text-primary, #F0F0F0)',
+        color:         'var(--text-primary)',
       }}
     >
       {/* Header: task chips + collapse */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 10, textTransform: 'uppercase', color: 'var(--text-secondary, #666)' }}>
+        <span style={{ fontSize: 10, textTransform: 'uppercase', color: 'var(--text-secondary)' }}>
           📡 Fleet Chat
         </span>
         <button
           onClick={() => setSelectedTaskId(null)}
           style={{
-            background:    effectiveTaskId === null ? 'var(--accent, #00FF88)' : 'transparent',
-            color:         effectiveTaskId === null ? '#000' : 'var(--text-secondary, #888)',
-            border:        '1px solid var(--border, #333)',
+            background:    effectiveTaskId === null ? 'var(--accent)' : 'transparent',
+            color:         effectiveTaskId === null ? 'var(--text-on-accent)' : 'var(--text-secondary)',
+            border:        '1px solid var(--border)',
             borderRadius:  2,
             padding:       '2px 6px',
             cursor:        'pointer',
@@ -143,9 +143,9 @@ export function FleetChat({ taskId = null }: Props) {
               onClick={() => setSelectedTaskId(id)}
               title={task?.title ?? `Task #${id}`}
               style={{
-                background:   active ? 'var(--accent, #00FF88)' : 'transparent',
-                color:        active ? '#000' : 'var(--text-secondary, #888)',
-                border:       '1px solid var(--border, #333)',
+                background:   active ? 'var(--accent)' : 'transparent',
+                color:        active ? 'var(--text-on-accent)' : 'var(--text-secondary)',
+                border:       '1px solid var(--border)',
                 borderRadius: 2,
                 padding:      '2px 6px',
                 cursor:       'pointer',
@@ -162,7 +162,7 @@ export function FleetChat({ taskId = null }: Props) {
               onClick={() => setShowCollapsed(true)}
               style={{
                 background: 'transparent', border: 'none',
-                color: 'var(--text-secondary, #666)', cursor: 'pointer', fontSize: 10,
+                color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 10,
               }}
             >
               [collapse]
@@ -182,7 +182,7 @@ export function FleetChat({ taskId = null }: Props) {
         }}
       >
         {filtered.length === 0 && (
-          <div style={{ color: 'var(--text-secondary, #666)', fontStyle: 'italic' }}>
+          <div style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>
             {effectiveTaskId === null
               ? 'No messages yet. Workers will start posting here when they need to coordinate.'
               : `No messages on task #${effectiveTaskId}.`}
@@ -206,8 +206,8 @@ export function FleetChat({ taskId = null }: Props) {
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                 <span style={{ color: palette.fg, fontWeight: 600 }}>{m.from_slug}</span>
-                <span style={{ color: 'var(--text-secondary, #666)' }}>→</span>
-                <span style={{ color: 'var(--text-primary, #F0F0F0)' }}>{m.to_slug}</span>
+                <span style={{ color: 'var(--text-secondary)' }}>→</span>
+                <span style={{ color: 'var(--text-primary)' }}>{m.to_slug}</span>
                 <span
                   style={{
                     fontSize:      9,
@@ -223,7 +223,7 @@ export function FleetChat({ taskId = null }: Props) {
                 </span>
                 {m.task_id !== null && (
                   <span
-                    style={{ fontSize: 9, color: 'var(--text-secondary, #888)', marginLeft: 4 }}
+                    style={{ fontSize: 9, color: 'var(--text-secondary)', marginLeft: 4 }}
                   >
                     #{m.task_id}
                   </span>
@@ -232,7 +232,7 @@ export function FleetChat({ taskId = null }: Props) {
               <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>
               <div
                 title={m.created_at}
-                style={{ fontSize: 10, color: 'var(--text-secondary, #666)', whiteSpace: 'nowrap' }}
+                style={{ fontSize: 10, color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}
               >
                 {timeAgo(m.created_at)}
                 {m.status !== 'pending' && (

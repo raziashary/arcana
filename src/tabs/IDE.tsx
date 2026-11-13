@@ -161,7 +161,7 @@ export default function IDETab() {
           <div className="flex-1 min-w-0"><TabBar /></div>
           <button
             onClick={() => setGitOpen((v) => !v)}
-            className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono uppercase tracking-wider hover:bg-[var(--bg-hover)]"
+            className="flex items-center gap-1 px-2 py-1 text-[10px] font-mono uppercase tracking-wider hover:bg-[color:var(--bg-hover)]"
             style={{
               color:       gitOpen ? 'var(--accent)' : 'var(--text-2)',
               borderLeft:  '1px solid var(--border-1)',

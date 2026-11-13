@@ -7,6 +7,7 @@ import type { GraphEdge, GraphNode } from '../../../stores/graphStore'
 import type { CityLayout } from '../layout/layoutTypes'
 import { PerNodeGroundRoad } from './GroundRoad'
 import { InheritsBridge, TestedByRoad } from './InheritsBridge'
+import { CITY } from '../../../styles/palette'
 
 // Max roads per edge kind to keep draw calls bounded
 const KIND_CAP: Record<string, number> = {
@@ -59,7 +60,7 @@ function DashedPath({ from, to }: DashedPathProps) {
         >
           <boxGeometry args={[0.55, 0.05, 0.38]} />
           <meshStandardMaterial
-            color="#6e5a48"
+            color={CITY.roadSelection}
             transparent
             opacity={0.40}
             roughness={0.95}

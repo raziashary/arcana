@@ -210,7 +210,7 @@ export default function HooksInfoModal({ onClose }: Props) {
           <button
             onClick={onClose}
             className="px-3 py-1.5 rounded text-xs font-mono"
-            style={{ background: 'var(--accent)', color: '#011627' }}
+            style={{ background: 'var(--accent)', color: 'var(--bg-app)' }}
           >
             Got it
           </button>

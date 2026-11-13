@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import * as THREE from 'three'
 import type { GraphNode, GraphEdge } from '../../../stores/graphStore'
 import type { CityLayout } from '../layout/layoutTypes'
+import { CITY } from '../../../styles/palette'
 
 interface CallsArcProps {
   sourcePos: THREE.Vector3
@@ -33,8 +34,8 @@ function CallsArc({ sourcePos, targetPos, confidence }: CallsArcProps) {
   return (
     <mesh geometry={geometry}>
       <meshStandardMaterial
-        color="#00FF88"
-        emissive="#00FF88"
+        color={CITY.ok}
+        emissive={CITY.ok}
         emissiveIntensity={0.6}
         transparent
         opacity={opacity}

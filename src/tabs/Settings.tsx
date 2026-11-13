@@ -259,7 +259,7 @@ function WorkspaceCard() {
         <div className="flex items-center gap-2">
           <span
             className="w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ background: ws.workspaceDir ? 'var(--aqua)' : '#0D3652' }}
+            style={{ background: ws.workspaceDir ? 'var(--aqua)' : 'var(--border-primary)' }}
           />
           <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
             Workspace Folder
@@ -290,7 +290,7 @@ function WorkspaceCard() {
             <button
               onClick={() => ws.clearWorkspaceDir()}
               className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer"
-              style={{ background: 'transparent', border: '1px solid #FF636330', color: 'var(--danger)' }}
+              style={{ background: 'transparent', border: '1px solid color-mix(in srgb, var(--danger) 19%, transparent)', color: 'var(--danger)' }}
               aria-label="Clear workspace"
             >
               <X size={11} />
@@ -398,7 +398,7 @@ export function PythonFallbackCard() {
               onClick={clear}
               disabled={busy}
               className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer disabled:opacity-40"
-              style={{ background: 'transparent', border: '1px solid #FF636330', color: 'var(--danger)' }}
+              style={{ background: 'transparent', border: '1px solid color-mix(in srgb, var(--danger) 19%, transparent)', color: 'var(--danger)' }}
               aria-label="Clear Python fallback"
             >
               <X size={11} />
@@ -483,7 +483,7 @@ function VaultBackendCard() {
           </div>
           <div
             className="font-mono text-xs"
-            style={{ color: backend.is_os_keychain ? 'var(--text-3)' : 'var(--warning, #fbbf24)' }}
+            style={{ color: backend.is_os_keychain ? 'var(--text-3)' : 'var(--warning)' }}
           >
             {backend.note}
           </div>
@@ -492,7 +492,7 @@ function VaultBackendCard() {
 
       {orphans.length > 0 && (
         <div className="space-y-2">
-          <div className="font-mono text-xs" style={{ color: 'var(--warning, #fbbf24)' }}>
+          <div className="font-mono text-xs" style={{ color: 'var(--warning)' }}>
             {orphans.length} key{orphans.length === 1 ? '' : 's'} stored for a provider Arcana
             no longer supports. These sit in your credential store until removed.
           </div>
@@ -512,7 +512,7 @@ function VaultBackendCard() {
       )}
 
       {error && (
-        <div className="font-mono text-xs" style={{ color: 'var(--danger, #f87171)' }}>{error}</div>
+        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</div>
       )}
     </div>
   )
@@ -616,7 +616,7 @@ function DailyCapCard() {
           {saving ? 'Saving…' : 'Save ceiling'}
         </button>
         {saved && <span className="font-mono text-xs" style={{ color: 'var(--accent)' }}>Saved</span>}
-        {error && <span className="font-mono text-xs" style={{ color: 'var(--danger, #f87171)' }}>{error}</span>}
+        {error && <span className="font-mono text-xs" style={{ color: 'var(--danger)' }}>{error}</span>}
       </div>
     </div>
   )
@@ -823,7 +823,7 @@ function GitHubPATCard() {
         <div className="flex items-center gap-2">
           <span
             className="w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ background: hasPat ? 'var(--aqua)' : '#0D3652' }}
+            style={{ background: hasPat ? 'var(--aqua)' : 'var(--border-primary)' }}
           />
           <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
             GitHub Personal Access Token
@@ -844,7 +844,7 @@ function GitHubPATCard() {
           <button
             onClick={handleRemove}
             className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer"
-            style={{ background: 'transparent', border: '1px solid #FF636330', color: 'var(--danger)' }}
+            style={{ background: 'transparent', border: '1px solid color-mix(in srgb, var(--danger) 19%, transparent)', color: 'var(--danger)' }}
           >
             Remove
           </button>
@@ -947,7 +947,7 @@ function GitHubMCPCard() {
         <div className="flex items-center gap-2">
           <span
             className="w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ background: cfg.enabled ? 'var(--aqua)' : '#0D3652' }}
+            style={{ background: cfg.enabled ? 'var(--aqua)' : 'var(--border-primary)' }}
           />
           <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>GitHub MCP Server</span>
           {cfg.enabled && (
@@ -1081,8 +1081,8 @@ function BrowserTestingCard() {
           className="flex items-center gap-2 p-2 rounded-sm"
           style={{ background: 'rgba(255,203,139,0.08)', border: '1px solid rgba(255,203,139,0.2)' }}
         >
-          <AlertTriangle size={13} style={{ color: 'var(--warning, #FFCB8B)', flexShrink: 0 }} />
-          <span className="font-mono text-xs" style={{ color: 'var(--warning, #FFCB8B)' }}>
+          <AlertTriangle size={13} style={{ color: 'var(--warning)', flexShrink: 0 }} />
+          <span className="font-mono text-xs" style={{ color: 'var(--warning)' }}>
             Browser testing requires Playwright. Click Install to set it up.
           </span>
         </div>
@@ -1097,11 +1097,11 @@ function BrowserTestingCard() {
           </span>
           {avail ? (
             avail.playwright_installed ? (
-              <span className="font-mono text-xs" style={{ color: 'var(--aqua, #7fdbff)' }}>
+              <span className="font-mono text-xs" style={{ color: 'var(--aqua)' }}>
                 ✓ {avail.playwright_version ?? 'installed'}
               </span>
             ) : (
-              <span className="font-mono text-xs" style={{ color: 'var(--danger, #ff6b6b)' }}>
+              <span className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
                 not installed
               </span>
             )
@@ -1129,7 +1129,7 @@ function BrowserTestingCard() {
                 fontSize: '10px',
                 background: 'rgba(127,219,255,0.08)',
                 border: '1px solid rgba(127,219,255,0.3)',
-                color: 'var(--aqua, #7fdbff)',
+                color: 'var(--aqua)',
                 cursor: installing || !avail?.npx_available ? 'default' : 'pointer',
                 opacity: installing || !avail?.npx_available ? 0.6 : 1,
               }}
@@ -1142,7 +1142,7 @@ function BrowserTestingCard() {
 
       {/* Install error */}
       {installErr && (
-        <div className="font-mono text-xs" style={{ color: 'var(--danger, #ff6b6b)' }}>
+        <div className="font-mono text-xs" style={{ color: 'var(--danger)' }}>
           {installErr}
         </div>
       )}
@@ -1155,7 +1155,7 @@ function BrowserTestingCard() {
               <span
                 style={{
                   width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
-                  background: b.installed ? 'var(--aqua, #7fdbff)' : 'var(--text-4)',
+                  background: b.installed ? 'var(--aqua)' : 'var(--text-4)',
                   display: 'inline-block',
                 }}
               />
@@ -1193,7 +1193,7 @@ function BrowserTestingCard() {
           className="w-full font-mono rounded-sm px-2 py-1"
           style={{
             fontSize: '11px',
-            background: 'var(--bg-elevated, #1a1a1a)',
+            background: 'var(--bg-code)',
             border: '1px solid var(--border-1)',
             color: 'var(--text-1)',
             outline: 'none',
@@ -1214,7 +1214,7 @@ function BrowserTestingCard() {
           disabled={!avail?.playwright_installed}
           style={{
             width: 32, height: 18, borderRadius: 9, border: 'none',
-            background: browserEnabled ? 'var(--aqua, #7fdbff)' : 'var(--bg-elevated, #1a1a1a)',
+            background: browserEnabled ? 'var(--aqua)' : 'var(--bg-elevated)',
             cursor: avail?.playwright_installed ? 'pointer' : 'default',
             position: 'relative', transition: 'background 0.2s',
             outline: '1px solid var(--border-1)',
@@ -1226,7 +1226,7 @@ function BrowserTestingCard() {
             style={{
               position: 'absolute', top: 3, borderRadius: '50%',
               width: 12, height: 12,
-              background: browserEnabled ? '#0d1117' : 'var(--text-4)',
+              background: browserEnabled ? 'var(--bg-code)' : 'var(--text-4)',
               left: browserEnabled ? 17 : 3,
               transition: 'left 0.2s',
             }}
@@ -1476,7 +1476,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
         <div className="flex items-center gap-2">
           <span
             className="w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ background: hasKey ? 'var(--aqua)' : '#0D3652' }}
+            style={{ background: hasKey ? 'var(--aqua)' : 'var(--border-primary)' }}
           />
           <span className="font-mono text-xs" style={{ color: 'var(--text-1)' }}>
             {displayName}
@@ -1516,7 +1516,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
               className="font-mono text-xs px-2 py-1 rounded-sm cursor-pointer"
               style={{
                 background: 'transparent',
-                border:     '1px solid #FF636330',
+                border:     '1px solid color-mix(in srgb, var(--danger) 19%, transparent)',
                 color:      'var(--danger)',
               }}
             >

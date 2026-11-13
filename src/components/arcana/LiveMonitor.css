@@ -106,7 +106,7 @@
 /* ── Agent live card ────────────────────────────────────────────────────────── */
 
 .agent-live-card {
-  background:    #111111;
+  background:    var(--bg-code);
   border:        1px solid var(--border-1);
   border-radius: 2px;
   padding:       10px 12px;
@@ -119,12 +119,12 @@
   box-sizing:    border-box;
 }
 .agent-live-card:hover {
-  border-color: var(--border-secondary, #222222);
+  border-color: var(--border-secondary);
 }
 
 /* State modifiers */
 .agent-live-card--active {
-  border-color: #1e1e1e;
+  border-color: var(--border-primary);
 }
 .agent-live-card--idle {
   opacity: 0.5;
@@ -158,7 +158,7 @@
 
 .card-agent-name {
   font-size:  11px;
-  color:      #888888;
+  color:      var(--text-muted);
   flex:       1;
   min-width:  0;
   overflow:   hidden;
@@ -169,7 +169,7 @@
 .card-role-badge {
   font-size:     9px;
   color:         var(--text-4);
-  background:    #161616;
+  background:    var(--bg-code);
   border:        1px solid var(--border-1);
   padding:       1px 6px;
   border-radius: 2px;
@@ -348,7 +348,7 @@
 /* ── Mini log tail ──────────────────────────────────────────────────────────── */
 
 .mini-log-tail {
-  background:    #161616;
+  background:    var(--bg-code);
   border-radius: 2px;
   padding:       6px 8px;
   overflow:      hidden;
@@ -375,7 +375,7 @@
   left:       0;
   right:      0;
   height:     18px;
-  background: linear-gradient(to bottom, #161616, transparent);
+  background: linear-gradient(to bottom, var(--bg-code), transparent);
   pointer-events: none;
   z-index:    1;
 }
@@ -403,7 +403,7 @@
   font-style: italic;
 }
 .log-line:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
 }
 
 .log-spinner {

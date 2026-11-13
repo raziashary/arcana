@@ -279,7 +279,7 @@ function SkillRow({ skill, needsSetup, onClick }: {
           {needsSetup && (
             <span
               className="flex items-center gap-1 text-xs px-1.5 rounded"
-              style={{ background: 'rgba(255,203,139,0.12)', color: 'var(--warning, #FFCB8B)', border: '1px solid rgba(255,203,139,0.25)' }}
+              style={{ background: 'rgba(255,203,139,0.12)', color: 'var(--warning)', border: '1px solid rgba(255,203,139,0.25)' }}
               title="Playwright is not installed. Go to Settings > Browser Testing to set it up."
             >
               <AlertTriangle size={10} />

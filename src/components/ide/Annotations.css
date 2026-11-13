@@ -48,7 +48,7 @@
   display:       flex;
   align-items:   center;
   gap:           2px;
-  background:    #161622;
+  background:    var(--bg-surface);
   border:        1px solid var(--border-1);
   border-radius: 4px;
   padding:       3px 4px;
@@ -90,7 +90,7 @@
   color: var(--text-3);
 }
 .selection-toolbar-btn--note:hover {
-  background:    rgba(255, 255, 255, 0.06);
+  background:    color-mix(in srgb, var(--text-primary) 6%, transparent);
   border-color:  var(--border-1);
   color:         var(--text-2);
 }
@@ -115,7 +115,7 @@
 }
 
 .ann-modal {
-  background:    #161622;
+  background:    var(--bg-surface);
   border:        1px solid var(--border-1);
   border-radius: 4px;
   width:         440px;
@@ -155,7 +155,7 @@
 .ann-modal-close:hover { color: var(--text-2); }
 
 .ann-modal-code-preview {
-  background:    #0f0f17;
+  background:    var(--bg-app);
   border-bottom: 1px solid var(--border-1);
   padding:       8px 14px;
   font-size:     10px;
@@ -208,7 +208,7 @@
 }
 
 .ann-modal-severity select {
-  background:  #0f0f17;
+  background:  var(--bg-app);
   border:      1px solid var(--border-1);
   border-radius: 2px;
   color:       var(--text-2);
@@ -241,7 +241,7 @@
   top:            0;
   bottom:         0;
   width:          280px;
-  background:     #0f0f17;
+  background:     var(--bg-app);
   border-left:    1px solid var(--border-1);
   display:        flex;
   flex-direction: column;
@@ -340,7 +340,7 @@
 }
 
 .ann-panel-code {
-  background:    #161622;
+  background:    var(--bg-surface);
   border:        1px solid var(--border-1);
   border-radius: 2px;
   padding:       6px 8px;

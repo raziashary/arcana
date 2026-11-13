@@ -115,7 +115,7 @@ export function QcRoiPanel() {
           padding: '1px 6px',
           borderRadius: 3,
           background: stats.in_flight > 0 ? 'var(--info)' : 'var(--bg-app)',
-          color: stats.in_flight > 0 ? '#000' : 'var(--text-2)',
+          color: stats.in_flight > 0 ? 'var(--text-on-accent)' : 'var(--text-2)',
           border: '1px solid var(--border-1)',
         }}>
           Reviewers: {stats.in_flight} / {stats.max_concurrent}

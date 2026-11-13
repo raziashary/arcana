@@ -322,3 +322,21 @@ Asked and answered on 2026-11-13, with the instruction to carry R3 through end t
 Asked and answered on 2026-11-13 while closing `P2-21`. The cap is built, tested and fail-closed (see the `P2-21` row), and a model it cannot price is refused. v1 keeps it **off by
 default** so a stop is never a surprise, and the key-entry step of first run (`P7-01..04`) says the cap exists and offers to enable it at the $50 default. If that step is cut, this
 decision must be revisited, since a paid-key app would then ship with the cap findable only in Settings.
+
+## D-019 · The v1 palette is the anchor's light one, defined once — 2026-11-13, Razi (ruling), mine (mapping)
+
+Asked on 2026-11-13 while building `P6-01/04`. The app carried **three palettes that disagreed**: the Industrial dark set in `globals.css` (`#0f0f17`, neon `#00FF88`), the
+Night Owl blues in `tailwind.config.js` and most of the dashboard (`#011627`, `#637777`), and `ui-anchor.md`'s light pastel set, which was never implemented. Razi chose to restyle to the
+**light palette**.
+
+- **Tokens:** `globals.css` `:root` is rewritten to the anchor's light values; the compat aliases (`--bg-1`, `--text-3`, ...) keep their names, so the 2,377 existing `var(--...)` uses flip without edits. Fifteen
+  names that components used but nothing defined (`--bg-3`, `--text-tertiary`, `--error`, ...) are now defined as aliases, each had been hiding behind a hex fallback. Tailwind's colours point at the variables.
+- **Contrast deviations from the anchor, named:** accent `#2D6CDF`, success `#3C7A12`, danger `#D64550`, and muted text as an alpha of the ink colour. The anchor's own Stellar Blue, Sunny Herb, Nova Coral and Comet Blue fail
+  as text on white (2.6 to 3:1); the anchor colour remains the fill or tint. `ui-anchor.md` records the table.
+- **Literals:** 569 hex literals in 61 component files became `var(--token)` by a script that placed each by CSS property and lightness or hue (old Night Owl and Industrial values by exact table), with
+  `color-mix` for the alpha forms and `--text-on-accent` for text on a solid fill; the on-fill cases were then reviewed by hand. The d3 graph and three.js cannot read a variable, so
+  **`src/styles/palette.ts` is the one module of literals** (the city's dark scene `CITY`, the categorical colours, graph edge colours, the Monaco `arcana-light` theme). D-016 said "a single city palette module"; the
+  scope is widened to every non-CSS consumer because the Graph tab and the editor had the same need. `TG-P6-04` allows hex only in the `:root` block and `palette.ts`.
+- **Not implemented, recorded in `ui-anchor.md`:** the pastel gradient shell, glass surfaces, the 7px shape rule and the motion table. The anchor's colours are shipped; its other sections remain intent.
+- **Verified:** the shell, Arcana, Settings and Logs tabs were rendered under a mock IPC layer and read as a coherent light UI (the Dashboard crashed under the mock's empty data, not from the change). The city
+  scene keeps its dark palette unchanged. Not verified: every tab and state, the code viewer, the graph against real data, and a contrast audit of each component. An independent design review is queued for the end of R3.

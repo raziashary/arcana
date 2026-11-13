@@ -23,9 +23,24 @@ Galaxy Veil       #EDECF9   surface-2
 
 **Semantic** — CTA `#CEF26D`, danger/Nova Coral `#FF696B`, info `#8DC2FF`.
 
-**App tokens:** `--app-background #FFFEF7`, `--app-surface #FFFFFF`, `--app-surface-2 #EDECF9`, `--app-border #DBDBFC`, text primary `#0E1131` / secondary `#2B4C75` / muted `#57A0F4`.
+**Shipped tokens (D-019, 2026-11-13).** `src/styles/globals.css` `:root` is the one place colour is defined (`TG-P6-04`; `TG-P6-01` fails on an undefined
+`var(--name)`). The values are the anchor's: `--bg-app #FFFEF7`, `--bg-surface #FFFFFF`, `--bg-code`/`--bg-2 #EDECF9`, `--border-primary #DBDBFC`,
+`--border-secondary #BEBDF7`, `--text-primary #0E1131`, `--text-secondary #2B4C75`. Where the anchor's colour fails contrast as **text** on white, the text role
+gets a darker variant of the same hue and the anchor colour stays the fill or tint:
 
-Light mode only — there is no dark palette.
+| Role | Token | Value | Why it differs from the anchor |
+|---|---|---|---|
+| Accent, links, focus | `--accent` | `#2D6CDF` | Stellar Blue `#4C9FFF` is 2.8:1 on white; this is about 5:1 |
+| Success, diff additions | `--success` | `#3C7A12` | Sunny Herb `#CEF26D` is unreadable as text; it is kept as `--cta` / `--success-fill` |
+| Danger | `--danger` | `#D64550` | Nova Coral `#FF696B` is about 3:1 as text |
+| Muted and dim text | `--text-muted`, `--text-dim` | `rgba(14,17,49,.62)`, `.42` | Comet Blue `#57A0F4` is 2.6:1; it is not used for text |
+| Text on a solid fill | `--text-on-accent` | `#FFFFFF` | |
+
+Literal colours exist only in `src/styles/palette.ts`, for the consumers that cannot read a CSS variable: the three.js city (a dark night scene with its own
+palette), the graph's categorical community colours, and the Monaco theme (`arcana-light`). The Tailwind config's colours point at the variables.
+
+Light mode only. **Not implemented in v1:** the pastel gradient page shell, glass surfaces, the 7px shape rule (the app uses 2px) and the motion table below. They
+are anchor intent, not shipped behaviour; the shipped code is the anchor.
 
 ## Page shell
 

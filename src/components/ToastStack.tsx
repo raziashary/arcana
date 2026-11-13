@@ -2,10 +2,10 @@ import { useEffect, useCallback } from 'react'
 import { useToastStore, type Toast } from '../stores/toastStore'
 
 const TYPE_STYLES: Record<Toast['type'], { bg: string; border: string; icon: string }> = {
-  info:    { bg: 'bg-[#00233B]', border: 'border-[#82AAFF]', icon: 'ℹ️' },
-  warning: { bg: 'bg-[#00233B]', border: 'border-[#FFCB8B]', icon: '⚠️' },
-  error:   { bg: 'bg-[#00233B]', border: 'border-[#FF6363]', icon: '❌' },
-  success: { bg: 'bg-[#00233B]', border: 'border-[#ADDB67]', icon: '✅' },
+  info:    { bg: 'bg-[color:var(--bg-surface)]', border: 'border-[color:var(--accent)]', icon: 'ℹ️' },
+  warning: { bg: 'bg-[color:var(--bg-surface)]', border: 'border-[color:var(--warning)]', icon: '⚠️' },
+  error:   { bg: 'bg-[color:var(--bg-surface)]', border: 'border-[color:var(--danger)]', icon: '❌' },
+  success: { bg: 'bg-[color:var(--bg-surface)]', border: 'border-[color:var(--success)]', icon: '✅' },
 }
 
 function ToastItem({ toast }: { toast: Toast }) {
@@ -24,17 +24,17 @@ function ToastItem({ toast }: { toast: Toast }) {
     >
       <span className="mt-0.5 text-sm" aria-hidden="true">{style.icon}</span>
       <div className="flex-1">
-        <p className="text-sm font-semibold text-[#D6DEEB]">{toast.title}</p>
-        <p className="text-xs text-[#637777]">{toast.message}</p>
+        <p className="text-sm font-semibold text-[color:var(--text-primary)]">{toast.title}</p>
+        <p className="text-xs text-[color:var(--text-muted)]">{toast.message}</p>
         {toast.workerSlug && (
-          <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-[#C792EA]">
+          <p className="mt-1 text-[10px] font-mono uppercase tracking-wider text-[color:var(--purple)]">
             {toast.workerSlug}
           </p>
         )}
       </div>
       <button
         onClick={() => removeToast(toast.id)}
-        className="text-xs text-[#637777] hover:text-[#D6DEEB]"
+        className="text-xs text-[color:var(--text-muted)] hover:text-[color:var(--text-primary)]"
         aria-label="Dismiss toast"
       >
         ✕

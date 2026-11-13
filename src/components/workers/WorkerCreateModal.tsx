@@ -143,7 +143,7 @@ export default function WorkerCreateModal({ onClose, onCreated }: WorkerCreateMo
                   <span key={r} style={{
                     fontFamily: 'monospace', fontSize: 10,
                     padding: '2px 8px', borderRadius: 3,
-                    background: 'rgba(255,255,255,0.06)',
+                    background: 'color-mix(in srgb, var(--text-primary) 6%, transparent)',
                     color: 'var(--text-2)',
                     display: 'flex', alignItems: 'center', gap: 4,
                   }}>
@@ -172,7 +172,7 @@ export default function WorkerCreateModal({ onClose, onCreated }: WorkerCreateMo
           </Field>
 
           {error && (
-            <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#FF6363', marginBottom: 12 }}>
+            <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--danger)', marginBottom: 12 }}>
               {error}
             </div>
           )}

@@ -126,7 +126,7 @@
 
 .subagent-row.selected {
   background: rgba(127, 219, 202, 0.08);
-  border-left: 2px solid var(--aqua, #7fdbca);
+  border-left: 2px solid var(--aqua);
 }
 
 .subagent-row-status {
@@ -134,11 +134,11 @@
 }
 
 .subagent-row-status.status-spawning,
-.subagent-row-status.status-idle       { color: #aab; }
-.subagent-row-status.status-running    { color: #5cf; }
-.subagent-row-status.status-completed  { color: #6c6; }
-.subagent-row-status.status-failed     { color: #e66; }
-.subagent-row-status.status-terminated { color: #caa; }
+.subagent-row-status.status-idle       { color: var(--text-primary); }
+.subagent-row-status.status-running    { color: var(--aqua); }
+.subagent-row-status.status-completed  { color: var(--success); }
+.subagent-row-status.status-failed     { color: var(--danger); }
+.subagent-row-status.status-terminated { color: var(--danger); }
 
 .subagent-row-id {
   font-family: var(--font-mono, monospace);
@@ -176,8 +176,8 @@
 
 .subagent-row-abort:hover {
   background: rgba(230, 80, 80, 0.15);
-  color: #e66;
-  border-color: #e66;
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 .subagent-monitor-detail {

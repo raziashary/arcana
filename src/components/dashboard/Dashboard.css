@@ -281,12 +281,12 @@
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #000;
+  color: var(--text-on-accent);
 }
 
 .btn-primary:hover {
-  background: #00CC70;
-  border-color: #00CC70;
+  background: var(--success);
+  border-color: var(--success);
 }
 
 .btn-secondary {

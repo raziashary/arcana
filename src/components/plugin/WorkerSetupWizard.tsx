@@ -130,8 +130,8 @@ const stepDot = (active: boolean, done: boolean): React.CSSProperties => ({
   width:        24,
   height:       24,
   borderRadius: '50%',
-  background:   done ? 'var(--success, #27ae60)' : active ? 'var(--accent)' : 'var(--bg-3, #3a3a3a)',
-  color:        done || active ? '#fff' : 'var(--text-3)',
+  background:   done ? 'var(--success)' : active ? 'var(--accent)' : 'var(--bg-3)',
+  color:        done || active ? 'var(--text-primary)' : 'var(--text-3)',
   display:      'flex',
   alignItems:   'center',
   justifyContent:'center',
@@ -155,7 +155,7 @@ const wizBtn = (variant: 'primary' | 'ghost'): React.CSSProperties => ({
   borderRadius: 8,
   border:       variant === 'ghost' ? '1px solid var(--border)' : 'none',
   background:   variant === 'primary' ? 'var(--accent)' : 'transparent',
-  color:        variant === 'primary' ? '#fff' : 'var(--text-2)',
+  color:        variant === 'primary' ? 'var(--text-on-accent)' : 'var(--text-2)',
   fontSize:     14,
   fontWeight:   500,
   cursor:       'pointer',
@@ -289,7 +289,7 @@ const WorkerSetupWizard: React.FC<Props> = ({ onClose }) => {
             </div>
 
             {error && (
-              <div style={{ color: 'var(--error, #e74c3c)', fontSize: 13 }}>⚠ {error}</div>
+              <div style={{ color: 'var(--danger)', fontSize: 13 }}>⚠ {error}</div>
             )}
 
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
@@ -343,7 +343,7 @@ const WorkerSetupWizard: React.FC<Props> = ({ onClose }) => {
               </button>
             </div>
 
-            <div style={{ background: 'rgba(39,174,96,0.08)', border: '1px solid var(--success, #27ae60)', borderRadius: 8, padding: 12, fontSize: 13, color: 'var(--text-2)' }}>
+            <div style={{ background: 'rgba(39,174,96,0.08)', border: '1px solid var(--success)', borderRadius: 8, padding: 12, fontSize: 13, color: 'var(--text-2)' }}>
               💡 Run the one-liner on the worker machine. It will download and run the setup script,
               install the <strong>{selectedType?.label}</strong> environment, and register the worker with this fleet.
             </div>

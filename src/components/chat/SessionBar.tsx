@@ -66,8 +66,8 @@ export function SessionBar() {
           onClick={handleNewSession}
           className="w-full py-2 px-3 rounded transition-colors"
           style={{
-            backgroundColor: "#1a73e8",
-            color: "#ffffff",
+            backgroundColor: "var(--accent)",
+            color: "var(--text-on-accent)",
             fontWeight: 500,
             border: "none",
             cursor: "pointer",
@@ -92,8 +92,8 @@ export function SessionBar() {
               className="p-3 border-b cursor-pointer transition-colors relative group"
               style={{
                 borderColor: "var(--border-1)",
-                backgroundColor: isActive ? "#1a73e820" : "transparent",
-                borderLeft: isActive ? "3px solid #1a73e8" : "3px solid transparent",
+                backgroundColor: isActive ? "color-mix(in srgb, var(--accent) 13%, transparent)" : "transparent",
+                borderLeft: isActive ? "3px solid var(--accent)" : "3px solid transparent",
               }}
             >
               {editingId === session.id ? (
@@ -109,13 +109,13 @@ export function SessionBar() {
                   }}
                   autoFocus
                   className="text-sm font-medium w-full bg-transparent border-b outline-none"
-                  style={{ color: "#ffffff", borderColor: "#1a73e8" }}
+                  style={{ color: "var(--text-primary)", borderColor: "var(--accent)" }}
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
                 <div
                   className="text-sm font-medium truncate"
-                  style={{ color: "#ffffff" }}
+                  style={{ color: "var(--text-primary)" }}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
                     handleRename(session.id, session.title || `Session ${session.id.slice(0, 6)}`);
@@ -124,10 +124,10 @@ export function SessionBar() {
                   {session.title || `Session ${session.id.slice(0, 6)}`}
                 </div>
               )}
-              <div className="text-xs mt-1" style={{ color: "#9ca3af" }}>
+              <div className="text-xs mt-1" style={{ color: "var(--text-primary)" }}>
                 {relativeTime}
               </div>
-              <div className="text-xs mt-1" style={{ color: "#6b7280" }}>
+              <div className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
                 ✓ {session.message_count || 0} msgs
               </div>
 

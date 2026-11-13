@@ -20,8 +20,8 @@ function formatDuration(ms: number | null): string {
 
 function rateColor(rate: number): string {
   if (rate >= 0.85) return 'var(--green)'
-  if (rate >= 0.60) return 'var(--yellow, #f5a623)'
-  return 'var(--red, #e53e3e)'
+  if (rate >= 0.60) return 'var(--warning)'
+  return 'var(--danger)'
 }
 
 export function WorkerAffinityPanel() {

@@ -37,7 +37,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           {copied ? <Check size={11} /> : <Copy size={11} />}{copied ? 'Copied' : 'Copy'}
         </button>
       </div>
-      <pre style={{ padding: '12px 14px', fontSize: 11, color: '#7EC8A4', lineHeight: 1.7, overflowX: 'auto', margin: 0, fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{code}</pre>
+      <pre style={{ padding: '12px 14px', fontSize: 11, color: 'var(--success)', lineHeight: 1.7, overflowX: 'auto', margin: 0, fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{code}</pre>
     </div>
   )
 }
@@ -74,7 +74,7 @@ function BlockRenderer({ block }: { block: Block }) {
             <tbody>
               {block.rows.map((row, ri) => (
                 <tr key={ri} style={{ borderBottom: '1px solid var(--border-1)' }}>
-                  {row.map((cell, ci) => <td key={ci} style={{ padding: '6px 10px', color: 'var(--text-muted)' }}><code style={{ background: ci === 0 ? 'var(--bg-card)' : 'transparent', padding: ci === 0 ? '1px 5px' : 0, borderRadius: 3, fontFamily: 'var(--font-mono)', fontSize: 11, color: ci === 0 ? '#7EC8A4' : 'var(--text-muted)' }}>{cell}</code></td>)}
+                  {row.map((cell, ci) => <td key={ci} style={{ padding: '6px 10px', color: 'var(--text-muted)' }}><code style={{ background: ci === 0 ? 'var(--bg-card)' : 'transparent', padding: ci === 0 ? '1px 5px' : 0, borderRadius: 3, fontFamily: 'var(--font-mono)', fontSize: 11, color: ci === 0 ? 'var(--success)' : 'var(--text-muted)' }}>{cell}</code></td>)}
                 </tr>
               ))}
             </tbody>

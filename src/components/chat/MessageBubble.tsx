@@ -45,7 +45,7 @@ export default function MessageBubble({ message, isLast, streaming }: Props) {
           style={isUser ? {
             background: 'var(--accent-muted)',
             border:     '1px solid var(--accent-border)',
-            color:      '#aaa',
+            color:      'var(--text-primary)',
           } : {
             background: 'var(--bg-card)',
             border:     '1px solid var(--border-1)',
@@ -58,7 +58,7 @@ export default function MessageBubble({ message, isLast, streaming }: Props) {
               components={{
                 code: ({ node, inline, children, className, ...props }: any) => (
                   inline ? (
-                    <code className="bg-opacity-20 px-1 py-0.5 rounded" style={{ background: 'rgba(255,255,255,0.1)' }} {...props}>{children}</code>
+                    <code className="bg-opacity-20 px-1 py-0.5 rounded" style={{ background: 'color-mix(in srgb, var(--text-primary) 10%, transparent)' }} {...props}>{children}</code>
                   ) : (
                     <pre className="bg-opacity-20 p-2 rounded overflow-x-auto" style={{ background: 'rgba(0,0,0,0.3)' }}>
                       <code {...props}>{children}</code>
@@ -176,7 +176,7 @@ function ToolMessageBubble({ message }: { message: ChatMessage }) {
                 style={{
                   color: 'var(--danger)',
                   borderLeft: `2px solid var(--danger)`,
-                  backgroundColor: '#FF006610',
+                  backgroundColor: 'color-mix(in srgb, var(--danger) 6%, transparent)',
                   fontSize: '11px',
                 }}
               >

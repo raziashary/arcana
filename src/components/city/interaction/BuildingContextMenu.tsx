@@ -2,6 +2,7 @@
 import { useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import type { GraphNode } from '../../../stores/graphStore'
+import { CITY } from '../../../styles/palette'
 
 interface BuildingContextMenuProps {
   nodeId: string
@@ -40,7 +41,7 @@ export function BuildingContextMenu({ nodeId, nodes, x, y, onClose }: BuildingCo
     left: x,
     top: y,
     zIndex: 1000,
-    background: '#1a1a1f',
+    background: CITY.menu,
     border: '1px solid rgba(255,255,255,0.12)',
     borderRadius: 6,
     padding: '4px 0',
@@ -48,7 +49,7 @@ export function BuildingContextMenu({ nodeId, nodes, x, y, onClose }: BuildingCo
     boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
     fontFamily: 'system-ui, sans-serif',
     fontSize: 12,
-    color: '#ccc',
+    color: CITY.ink,
   }
 
   const itemStyle: React.CSSProperties = {
@@ -59,7 +60,7 @@ export function BuildingContextMenu({ nodeId, nodes, x, y, onClose }: BuildingCo
     background: 'none',
     border: 'none',
     textAlign: 'left',
-    color: '#ccc',
+    color: CITY.ink,
     fontSize: 12,
     fontFamily: 'inherit',
   }
@@ -72,7 +73,7 @@ export function BuildingContextMenu({ nodeId, nodes, x, y, onClose }: BuildingCo
 
   const titleStyle: React.CSSProperties = {
     padding: '4px 16px 6px',
-    color: '#00ff88',
+    color: CITY.ok,
     fontSize: 11,
     fontWeight: 600,
     fontFamily: 'monospace',

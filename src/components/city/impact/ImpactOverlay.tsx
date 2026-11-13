@@ -5,6 +5,7 @@ import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
 import type { GraphNode, ImpactData, ImpactRisk } from '../../../stores/graphStore'
 import type { CityLayout } from '../layout/layoutTypes'
+import { CITY } from '../../../styles/palette'
 
 interface ImpactOverlayProps {
   nodes: GraphNode[]
@@ -13,13 +14,13 @@ interface ImpactOverlayProps {
 }
 
 const RISK_COLORS: Record<ImpactRisk, THREE.Color> = {
-  epicenter: new THREE.Color('#ffffff'),
-  high:      new THREE.Color('#ff2222'),
-  medium:    new THREE.Color('#ff8800'),
-  low:       new THREE.Color('#aaff00'),
-  test:      new THREE.Color('#00ff88'),
-  untested:  new THREE.Color('#ff3333'),
-  ghost:     new THREE.Color('#111111'),
+  epicenter: new THREE.Color(CITY.white),
+  high:      new THREE.Color(CITY.riskHigh),
+  medium:    new THREE.Color(CITY.riskMedium),
+  low:       new THREE.Color(CITY.riskLow),
+  test:      new THREE.Color(CITY.ok),
+  untested:  new THREE.Color(CITY.riskUntestedOverlay),
+  ghost:     new THREE.Color(CITY.panel),
 }
 
 const RISK_EMISSIVE_INTENSITY: Record<ImpactRisk, number> = {

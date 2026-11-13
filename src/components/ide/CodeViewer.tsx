@@ -12,6 +12,7 @@ import { useAnnotationStore, type Annotation } from '../../stores/annotationStor
 import { SelectionToolbar, type AnnotationIntent } from './SelectionToolbar'
 import { AnnotationModal } from './AnnotationModal'
 import { AnnotationPanel } from './AnnotationPanel'
+import { MONACO_THEME, MONACO_THEME_NAME } from '../../styles/palette'
 
 // Configure @monaco-editor/react to use the locally bundled monaco-editor
 // instead of loading it from a CDN. This is required because the Tauri CSP
@@ -93,33 +94,8 @@ export default function CodeViewer({ tabPath }: Props) {
   const handleMount: OnMount = (editor, monacoInst) => {
     editorRef.current = editor
 
-    monacoInst.editor.defineTheme('arcana-dark', {
-      base:    'vs-dark',
-      inherit: true,
-      rules: [
-        { token: '',          foreground: 'D6DEEB', background: '01111D' },
-        { token: 'comment',   foreground: '637777', fontStyle: 'italic'  },
-        { token: 'keyword',   foreground: '82AAFF'                       },
-        { token: 'string',    foreground: 'ECC48D'                       },
-        { token: 'number',    foreground: 'F78C6C'                       },
-        { token: 'type',      foreground: '7FDBCA'                       },
-        { token: 'function',  foreground: '82AAFF'                       },
-        { token: 'variable',  foreground: 'D6DEEB'                       },
-      ],
-      colors: {
-        'editor.background':                '#01111D',
-        'editor.foreground':                '#D6DEEB',
-        'editor.lineHighlightBackground':   '#022C4A',
-        'editorLineNumber.foreground':      '#3D5A6E',
-        'editorLineNumber.activeForeground':'#82AAFF',
-        'editorCursor.foreground':          '#82AAFF',
-        'editor.selectionBackground':       '#0B3A5C',
-        'editor.inactiveSelectionBackground':'#0B3A5C80',
-        'editorWidget.background':          '#00233B',
-        'editorWidget.border':              '#0D3652',
-      },
-    })
-    monacoInst.editor.setTheme('arcana-dark')
+    monacoInst.editor.defineTheme(MONACO_THEME_NAME, MONACO_THEME)
+    monacoInst.editor.setTheme(MONACO_THEME_NAME)
 
     // Track selection to show the floating toolbar
     editor.onDidChangeCursorSelection(() => {
@@ -183,7 +159,7 @@ export default function CodeViewer({ tabPath }: Props) {
           <button
             type="button"
             onClick={() => useIdeStore.getState().openFile(tab.relativePath)}
-            className="px-3 py-1.5 text-xs font-mono rounded border hover:bg-[var(--bg-hover)]"
+            className="px-3 py-1.5 text-xs font-mono rounded border hover:bg-[color:var(--bg-hover)]"
             style={{ borderColor: 'var(--border-1)', color: 'var(--text-2)' }}
           >
             Retry
@@ -206,11 +182,11 @@ export default function CodeViewer({ tabPath }: Props) {
   const showToolbar = selection !== null && modalIntent === null && activeId === null
 
   return (
-    <div className="flex-1 overflow-hidden" style={{ position: 'relative', background: '#01111D' }}>
+    <div className="flex-1 overflow-hidden" style={{ position: 'relative', background: 'var(--bg-card)' }}>
       <Editor
         value={tab.content.content}
         language={tab.content.language}
-        theme="arcana-dark"
+        theme={MONACO_THEME_NAME}
         onMount={handleMount}
         options={{
           readOnly:                true,

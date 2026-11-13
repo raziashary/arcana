@@ -6,6 +6,7 @@ import type { GraphNode, ImpactData } from '../../../stores/graphStore'
 import type { CityLayout } from '../layout/layoutTypes'
 import { testCoverageColor } from './buildingDimensions'
 import { getMaterialDef, IMPACT_COLORS } from './buildingMaterials'
+import { CITY } from '../../../styles/palette'
 
 interface BuildingInstancesProps {
   nodes: GraphNode[]
@@ -71,10 +72,10 @@ function KindInstances({ nodes, kind, layout, testedBySet, selectedNodeId, impac
         } else if (risk) {
           color.copy(IMPACT_COLORS[risk])
         } else {
-          color.set('#111111') // ghost
+          color.set(CITY.panel) // ghost
         }
       } else if (selectedNodeId === node.id) {
-        color.set('#ffffff')
+        color.set(CITY.white)
       } else {
         const tc = testCoverageColor(node.id, testedBySet)
         // Blend base material color with coverage tint (slight)

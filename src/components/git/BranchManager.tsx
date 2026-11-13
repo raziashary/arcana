@@ -121,7 +121,7 @@ interface BranchRowProps {
 function BranchRow({ name, isHead, upstream, ahead, behind, onCheckout, onDelete }: BranchRowProps) {
   return (
     <div
-      className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono hover:bg-[var(--bg-hover)] group"
+      className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono hover:bg-[color:var(--bg-hover)] group"
       style={{ color: isHead ? 'var(--accent)' : 'var(--text-2)' }}
     >
       {isHead

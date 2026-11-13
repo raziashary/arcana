@@ -262,7 +262,7 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
               <span style={{
                 fontFamily: 'monospace', fontSize: 9, padding: '2px 6px',
                 borderRadius: 3, background: 'rgba(130,170,255,0.08)',
-                border: '1px solid rgba(130,170,255,0.2)', color: '#82AAFF',
+                border: '1px solid rgba(130,170,255,0.2)', color: 'var(--accent)',
               }}>system</span>
             )}
           </div>
@@ -292,7 +292,7 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
         {showHistory && backups.length > 0 && (
           <div style={{
             padding: '12px 20px', borderBottom: '1px solid var(--border)',
-            background: 'rgba(255,255,255,0.02)',
+            background: 'color-mix(in srgb, var(--text-primary) 2%, transparent)',
           }}>
             <div style={{ fontFamily: 'monospace', fontSize: 10, color: 'var(--text-3)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
               Version History
@@ -300,7 +300,7 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
             {backups.map(b => (
               <div key={b.filename} style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                padding: '5px 0', borderBottom: '1px solid rgba(255,255,255,0.04)',
+                padding: '5px 0', borderBottom: '1px solid color-mix(in srgb, var(--text-primary) 4%, transparent)',
               }}>
                 <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text-2)' }}>
                   {b.timestamp}
@@ -391,7 +391,7 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
                       {generating ? 'Generating…' : 'Generate'}
                     </button>
                     {genError && (
-                      <span style={{ fontFamily: 'monospace', fontSize: 10, color: '#FF6363' }}>
+                      <span style={{ fontFamily: 'monospace', fontSize: 10, color: 'var(--danger)' }}>
                         {genError}
                       </span>
                     )}
@@ -431,7 +431,7 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
           {/* System recipe warning */}
           {isSystem && !forceEdit && (
             <div style={{
-              fontFamily: 'monospace', fontSize: 11, color: '#FFCB8B',
+              fontFamily: 'monospace', fontSize: 11, color: 'var(--warning)',
               padding: '8px 12px', borderRadius: 4, marginBottom: 14,
               background: 'rgba(255,203,139,0.06)', border: '1px solid rgba(255,203,139,0.2)',
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -441,8 +441,8 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
                 onClick={() => setForceEdit(true)}
                 style={{
                   fontFamily: 'monospace', fontSize: 10, padding: '2px 8px',
-                  border: '1px solid #FFCB8B', borderRadius: 3,
-                  background: 'transparent', color: '#FFCB8B', cursor: 'pointer',
+                  border: '1px solid var(--warning)', borderRadius: 3,
+                  background: 'transparent', color: 'var(--warning)', cursor: 'pointer',
                 }}
               >
                 I understand, edit anyway
@@ -543,7 +543,7 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
           </Field>
 
           {error && (
-            <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#FF6363', marginBottom: 10 }}>
+            <div style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--danger)', marginBottom: 10 }}>
               {error}
             </div>
           )}
@@ -557,8 +557,8 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
                   disabled={deleting}
                   style={{
                     fontFamily: 'monospace', fontSize: 11, padding: '5px 12px',
-                    border: '1px solid #AA3333', borderRadius: 4,
-                    background: 'transparent', color: '#FF6666', cursor: 'pointer',
+                    border: '1px solid var(--danger)', borderRadius: 4,
+                    background: 'transparent', color: 'var(--danger)', cursor: 'pointer',
                   }}
                 >
                   {deleting ? 'Deleting…' : 'Delete Recipe'}

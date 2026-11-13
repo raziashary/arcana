@@ -135,7 +135,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function Dot({ label, active, error }: { label: string; active: boolean; error?: boolean }) {
-  const dotColor = error ? 'var(--danger)' : active ? 'var(--accent)' : '#1A1A1A'
+  const dotColor = error ? 'var(--danger)' : active ? 'var(--accent)' : 'var(--dot-dim)'
   return (
     <div
       className="flex items-center gap-1.5 font-mono"

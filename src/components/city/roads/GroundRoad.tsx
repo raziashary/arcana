@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import type { GraphNode, GraphEdge } from '../../../stores/graphStore'
 import type { CityLayout, AggregateRoad } from '../layout/layoutTypes'
 import { aggregateImportRoads } from './roadAggregator'
+import { CITY } from '../../../styles/palette'
 
 interface GroundRoadProps {
   road: AggregateRoad
@@ -35,7 +36,7 @@ function GroundRoad({ road }: GroundRoadProps) {
         <boxGeometry args={[length, 0.08, width]} />
         <meshStandardMaterial
           color={color}
-          emissive="#5588ff"
+          emissive={CITY.roadImportsGlow}
           emissiveIntensity={1.2}
           roughness={0.55}
           metalness={0.25}
@@ -45,8 +46,8 @@ function GroundRoad({ road }: GroundRoadProps) {
       <mesh position={[0, 0.17, 0]} frustumCulled={false}>
         <boxGeometry args={[length * 0.96, 0.02, centerWidth]} />
         <meshStandardMaterial
-          color="#ffffff"
-          emissive="#aaccff"
+          color={CITY.white}
+          emissive={CITY.roadHighlightGlow}
           emissiveIntensity={2.0}
           roughness={0.3}
           metalness={0.1}
@@ -59,8 +60,8 @@ function GroundRoad({ road }: GroundRoadProps) {
 // ─── PerNodeGroundRoad: narrow typed road between two building positions ─────
 
 const PER_NODE_STYLES: Record<string, { color: string; emissive: string; width: number }> = {
-  IMPORTS_FROM: { color: '#4477ff', emissive: '#6699ff', width: 1.4 },
-  DEPENDS_ON:   { color: '#ddaa33', emissive: '#ffcc55', width: 1.0 },
+  IMPORTS_FROM: { color: CITY.link, emissive: CITY.roadImportsEmissive, width: 1.4 },
+  DEPENDS_ON:   { color: CITY.roadDepends, emissive: CITY.roadDependsGlow, width: 1.0 },
 }
 
 interface PerNodeGroundRoadProps {

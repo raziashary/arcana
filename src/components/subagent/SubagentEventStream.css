@@ -40,27 +40,27 @@
 .subagent-event-stream-status.status-spawning,
 .subagent-event-stream-status.status-idle {
   background: rgba(170, 170, 187, 0.2);
-  color: #aab;
+  color: var(--text-primary);
 }
 
 .subagent-event-stream-status.status-running {
   background: rgba(85, 204, 255, 0.18);
-  color: #5cf;
+  color: var(--aqua);
 }
 
 .subagent-event-stream-status.status-completed {
   background: rgba(102, 204, 102, 0.18);
-  color: #6c6;
+  color: var(--success);
 }
 
 .subagent-event-stream-status.status-failed {
   background: rgba(230, 102, 102, 0.18);
-  color: #e66;
+  color: var(--danger);
 }
 
 .subagent-event-stream-status.status-terminated {
   background: rgba(204, 170, 170, 0.18);
-  color: #caa;
+  color: var(--danger);
 }
 
 .subagent-event-stream-close {
@@ -118,15 +118,15 @@
 }
 
 .subagent-event.tool-start {
-  color: var(--aqua, #7fdbca);
+  color: var(--aqua);
 }
 
 .subagent-event.tool-end {
-  color: #6c6;
+  color: var(--success);
 }
 
 .subagent-event.tool-end.error {
-  color: #e66;
+  color: var(--danger);
 }
 
 .subagent-event-output {
@@ -142,7 +142,7 @@
 }
 
 .subagent-event.final {
-  color: #6c6;
+  color: var(--success);
   font-weight: 600;
   border-top: 1px dashed var(--border);
   padding-top: 8px;
@@ -160,14 +160,14 @@
   letter-spacing: 0.5px;
 }
 
-.subagent-event.status.status-completed { color: #6c6; }
-.subagent-event.status.status-failed    { color: #e66; }
-.subagent-event.status.status-running   { color: #5cf; }
+.subagent-event.status.status-completed { color: var(--success); }
+.subagent-event.status.status-failed    { color: var(--danger); }
+.subagent-event.status.status-running   { color: var(--aqua); }
 
 .subagent-event.error {
-  color: #e66;
+  color: var(--danger);
   background: rgba(230, 102, 102, 0.08);
   padding: 6px 8px;
   border-radius: 4px;
-  border-left: 2px solid #e66;
+  border-left: 2px solid var(--danger);
 }

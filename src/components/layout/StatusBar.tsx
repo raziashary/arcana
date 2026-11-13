@@ -73,7 +73,7 @@ export default function StatusBar() {
             <span
               title={`MCP disconnected: ${mcpDisconnected.join(', ')}`}
               style={{
-                color:      'var(--danger, #ff6b6b)',
+                color:      'var(--danger)',
                 fontWeight: 600,
                 letterSpacing: '0.03em',
               }}

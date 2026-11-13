@@ -84,7 +84,7 @@ export default function TabBar() {
                   e.stopPropagation()
                   closeTab(tab.relativePath)
                 }}
-                className="p-0.5 rounded hover:bg-[var(--bg-hover)] inline-flex items-center focus:outline-none"
+                className="p-0.5 rounded hover:bg-[color:var(--bg-hover)] inline-flex items-center focus:outline-none"
                 style={{ opacity: isActive ? 0.7 : 0 }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '1' }}
                 onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = isActive ? '0.7' : '0' }}

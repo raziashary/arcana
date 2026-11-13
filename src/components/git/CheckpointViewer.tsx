@@ -60,7 +60,7 @@ export default function CheckpointViewer({ filePath }: Props) {
           {list.map((c) => (
             <div
               key={c.id}
-              className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono hover:bg-[var(--bg-hover)] group"
+              className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono hover:bg-[color:var(--bg-hover)] group"
               style={{ color: 'var(--text-2)' }}
             >
               <Clock size={10} style={{ color: 'var(--text-3)' }} />

@@ -179,21 +179,21 @@ export default function FileTree() {
         <div className="flex items-center gap-1">
           <button
             onClick={() => setNewItem({ parentDir: '', type: 'file', value: '' })}
-            className="p-1 rounded hover:bg-[var(--bg-hover)]"
+            className="p-1 rounded hover:bg-[color:var(--bg-hover)]"
             title="New File"
           >
             <FilePlus size={11} style={{ color: 'var(--text-3)' }} />
           </button>
           <button
             onClick={() => setNewItem({ parentDir: '', type: 'dir', value: '' })}
-            className="p-1 rounded hover:bg-[var(--bg-hover)]"
+            className="p-1 rounded hover:bg-[color:var(--bg-hover)]"
             title="New Folder"
           >
             <FolderPlus size={11} style={{ color: 'var(--text-3)' }} />
           </button>
           <button
             onClick={() => void refreshTree()}
-            className="p-1 rounded hover:bg-[var(--bg-hover)]"
+            className="p-1 rounded hover:bg-[color:var(--bg-hover)]"
             title="Refresh tree"
           >
             <RefreshCw
@@ -298,7 +298,7 @@ function MenuItem({
   return (
     <button
       onClick={onClick}
-      className="w-full flex items-center gap-2 px-3 py-1 text-left hover:bg-[var(--bg-hover)]"
+      className="w-full flex items-center gap-2 px-3 py-1 text-left hover:bg-[color:var(--bg-hover)]"
       style={{ color: danger ? 'var(--danger)' : 'var(--text-2)' }}
     >
       {icon && <span style={{ color: danger ? 'var(--danger)' : 'var(--text-3)' }}>{icon}</span>}
@@ -418,7 +418,7 @@ function TreeRow({
             onDrop={e      => void onDrop(e, node.relative_path)}
             onClick={() => onToggle(node.relative_path)}
             onContextMenu={e => onContextMenu(e, node)}
-            className="w-full flex items-center gap-1 py-0.5 pr-2 text-left hover:bg-[var(--bg-hover)]"
+            className="w-full flex items-center gap-1 py-0.5 pr-2 text-left hover:bg-[color:var(--bg-hover)]"
             style={rowStyle}
           >
             {isExpanded
@@ -500,7 +500,7 @@ function TreeRow({
       onDragStart={() => onDragStart(node.relative_path)}
       onClick={() => void onOpen(node.relative_path)}
       onContextMenu={e => onContextMenu(e, node)}
-      className="w-full flex items-center gap-1 py-0.5 pr-2 text-left hover:bg-[var(--bg-hover)]"
+      className="w-full flex items-center gap-1 py-0.5 pr-2 text-left hover:bg-[color:var(--bg-hover)]"
       style={rowStyle}
     >
       <span style={{ width: 10 }} />

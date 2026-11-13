@@ -1,5 +1,6 @@
 // RoadHoverTooltip.tsx — Road hover tooltip HTML overlay (placeholder for future road hover)
 import type { AggregateRoad } from '../layout/layoutTypes'
+import { CITY } from '../../../styles/palette'
 
 interface RoadHoverTooltipProps {
   road: AggregateRoad | null
@@ -21,14 +22,14 @@ export function RoadHoverTooltip({ road, x, y }: RoadHoverTooltipProps) {
       borderRadius: 5,
       padding: '6px 10px',
       fontSize: 11,
-      color: '#ccc',
+      color: CITY.ink,
       fontFamily: 'monospace',
       pointerEvents: 'none',
       boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
     }}>
-      <div style={{ color: '#4477FF', fontWeight: 600, marginBottom: 3 }}>IMPORTS_FROM</div>
+      <div style={{ color: CITY.link, fontWeight: 600, marginBottom: 3 }}>IMPORTS_FROM</div>
       <div>District {road.srcCommunity} → District {road.tgtCommunity}</div>
-      <div style={{ color: '#666', marginTop: 2 }}>{road.edgeCount} edge{road.edgeCount !== 1 ? 's' : ''}</div>
+      <div style={{ color: CITY.inkDim, marginTop: 2 }}>{road.edgeCount} edge{road.edgeCount !== 1 ? 's' : ''}</div>
     </div>
   )
 }

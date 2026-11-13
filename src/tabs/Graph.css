@@ -192,7 +192,7 @@
 }
 
 .graph-aggregation-icon {
-  color: #4E79A7;
+  color: var(--accent);
   font-size: 13px;
   flex-shrink: 0;
 }
@@ -323,7 +323,7 @@
 /* ── Canvas area ──────────────────────────────────────── */
 .graph-canvas {
   flex: 1;
-  background: #0A0A0A;
+  background: var(--bg-code);
   border-right: 1px solid var(--border-1);
   overflow: hidden;
   position: relative;
@@ -363,7 +363,7 @@
   width: 100%;
   height: 100%;
   display: block;
-  background: #0A0A0A;
+  background: var(--bg-code);
 }
 
 /* ── Search results dropdown ──────────────────────────── */
@@ -484,13 +484,13 @@
 /* ── Node tooltip ─────────────────────────────────────── */
 .graph-tooltip {
   position: fixed;
-  background: #111111;
-  border: 1px solid #222222;
+  background: var(--bg-code);
+  border: 1px solid var(--border-primary);
   border-radius: 2px;
   padding: 6px 10px;
   font-size: 11px;
   font-family: 'IBM Plex Mono', monospace;
-  color: #888888;
+  color: var(--text-muted);
   pointer-events: none;
   z-index: 100;
   max-width: 280px;
@@ -499,13 +499,13 @@
 
 .tooltip-name {
   font-size: 12px;
-  color: #F0F0F0;
+  color: var(--text-bright);
   margin-bottom: 2px;
 }
 
-.tooltip-meta { color: #666666; }
-.tooltip-path { color: #4477FF; margin-top: 2px; }
-.tooltip-degree { color: #888888; }
+.tooltip-meta { color: var(--text-dim); }
+.tooltip-path { color: var(--info); margin-top: 2px; }
+.tooltip-degree { color: var(--text-muted); }
 
 /* ── Context menu ─────────────────────────────────────── */
 .graph-context-menu {
@@ -607,7 +607,7 @@
 .community-name {
   font-size: 11px;
   font-family: 'IBM Plex Mono', monospace;
-  color: #888888;
+  color: var(--text-muted);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -636,7 +636,7 @@
 .node-inspector-header {
   font-size: 14px;
   font-weight: 600;
-  color: #F0F0F0;
+  color: var(--text-bright);
   margin-bottom: 8px;
   word-break: break-all;
   line-height: 1.3;
@@ -660,7 +660,7 @@
 
 .badge-kind {
   background: rgba(68, 119, 255, 0.15);
-  color: #4477FF;
+  color: var(--info);
 }
 
 .badge-lang {
@@ -669,12 +669,12 @@
 }
 
 .badge-community {
-  color: #888888;
+  color: var(--text-muted);
 }
 
 .node-inspector-path {
   font-size: 11px;
-  color: #4477FF;
+  color: var(--info);
   font-family: 'IBM Plex Mono', monospace;
   margin-bottom: 6px;
   word-break: break-all;
@@ -692,7 +692,7 @@
 }
 
 .node-inspector-stat span {
-  color: #888888;
+  color: var(--text-muted);
 }
 
 .node-inspector-section {
@@ -867,7 +867,7 @@
 .graph-sidebar::-webkit-scrollbar-thumb:hover,
 .communities-list::-webkit-scrollbar-thumb:hover,
 .node-inspector-edge-list::-webkit-scrollbar-thumb:hover {
-  background: #333333;
+  background: var(--bg-2);
 }
 
 /* ── SVG node classes (D3-managed) ───────────────────── */
@@ -878,7 +878,7 @@
 }
 
 .graph-node-selected {
-  stroke: #FFFFFF !important;
+  stroke: var(--border-secondary) !important;
   stroke-width: 2px !important;
 }
 
@@ -903,13 +903,13 @@
 .analysis-btns .btn-small.active {
   background: rgba(0, 255, 136, 0.12);
   border-color: rgba(0, 255, 136, 0.4);
-  color: #00ff88;
+  color: var(--accent);
 }
 
 /* Analysis results panel */
 .analysis-panel {
   margin-top: 8px;
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 8%, transparent);
   border-radius: 6px;
   background: rgba(0,0,0,0.25);
   overflow: hidden;
@@ -920,33 +920,33 @@
   align-items: center;
   justify-content: space-between;
   padding: 6px 10px;
-  background: rgba(255,255,255,0.04);
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--text-primary) 6%, transparent);
 }
 
 .analysis-panel-title {
   font-size: 11px;
   font-weight: 600;
-  color: #cccccc;
+  color: var(--text-primary);
   letter-spacing: 0.04em;
 }
 
 .analysis-panel-close {
   background: none;
   border: none;
-  color: #666;
+  color: var(--text-dim);
   cursor: pointer;
   font-size: 11px;
   padding: 0 2px;
   line-height: 1;
 }
-.analysis-panel-close:hover { color: #aaa; }
+.analysis-panel-close:hover { color: var(--text-primary); }
 
 .analysis-panel-loading,
 .analysis-panel-empty {
   padding: 12px 10px;
   font-size: 11px;
-  color: #555;
+  color: var(--text-dim);
   text-align: center;
 }
 
@@ -960,27 +960,27 @@
   align-items: center;
   gap: 6px;
   padding: 6px 10px;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: 1px solid color-mix(in srgb, var(--text-primary) 4%, transparent);
   cursor: pointer;
   font-size: 11px;
 }
-.analysis-panel-item:hover { background: rgba(255,255,255,0.04); }
+.analysis-panel-item:hover { background: color-mix(in srgb, var(--text-primary) 4%, transparent); }
 .analysis-panel-item:last-child { border-bottom: none; }
 
 .analysis-item-rank {
-  color: #555;
+  color: var(--text-dim);
   min-width: 22px;
   font-size: 10px;
 }
 .analysis-item-name {
   flex: 1;
-  color: #d0d0d0;
+  color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .analysis-item-meta {
-  color: #666;
+  color: var(--text-dim);
   font-size: 10px;
   white-space: nowrap;
 }
@@ -997,7 +997,7 @@
   width: 100%;
 }
 .analysis-conn-node {
-  color: #4477ff;
+  color: var(--info);
   cursor: pointer;
   font-size: 10px;
   overflow: hidden;
@@ -1006,10 +1006,10 @@
   max-width: 90px;
 }
 .analysis-conn-node:hover { text-decoration: underline; }
-.analysis-conn-arrow { color: #555; font-size: 10px; }
+.analysis-conn-arrow { color: var(--text-dim); font-size: 10px; }
 .analysis-conn-why {
   font-size: 10px;
-  color: #666;
+  color: var(--text-dim);
   line-height: 1.3;
 }
 
@@ -1022,13 +1022,13 @@
   font-size: 9px;
   padding: 1px 5px;
   border-radius: 3px;
-  background: rgba(255,255,255,0.06);
-  color: #777;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 .analysis-question-text {
-  color: #c0c0c0;
+  color: var(--text-primary);
   font-size: 11px;
   line-height: 1.35;
 }
@@ -1038,7 +1038,7 @@
   overflow-y: auto;
   padding: 10px;
   font-size: 10px;
-  color: #aaa;
+  color: var(--text-primary);
   white-space: pre-wrap;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   line-height: 1.5;
@@ -1047,7 +1047,7 @@
 /* ── View toggle pill (City / Graph) ──────────────────── */
 .view-toggle-pill {
   display: flex;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid color-mix(in srgb, var(--text-primary) 12%, transparent);
   border-radius: 6px;
   overflow: hidden;
   flex-shrink: 0;
@@ -1058,7 +1058,7 @@
   padding: 4px 12px;
   background: transparent;
   border: none;
-  color: #666;
+  color: var(--text-dim);
   cursor: pointer;
   font-size: 11px;
   font-family: 'IBM Plex Mono', monospace;
@@ -1067,13 +1067,13 @@
 }
 
 .view-toggle-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.06);
-  color: #aaa;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
+  color: var(--text-primary);
 }
 
 .view-toggle-btn.active {
   background: rgba(0, 255, 136, 0.15);
-  color: #00ff88;
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -1083,13 +1083,13 @@
 }
 
 .view-toggle-btn + .view-toggle-btn {
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-left: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
 }
 
 /* ── Analysis panel empty state ────────────────────────── */
 .analysis-panel-empty {
   padding: 12px;
-  color: #555;
+  color: var(--text-dim);
   font-size: 11px;
   text-align: center;
 }

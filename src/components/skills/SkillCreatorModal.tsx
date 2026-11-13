@@ -162,7 +162,7 @@ export default function SkillCreatorModal({ onClose }: Props) {
             onClick={handleCreate}
             disabled={loading}
             className="px-3 py-1.5 rounded text-xs font-mono disabled:opacity-50"
-            style={{ background: 'var(--accent)', color: '#011627' }}
+            style={{ background: 'var(--accent)', color: 'var(--bg-app)' }}
           >
             {loading ? 'Creating...' : 'Create Skill'}
           </button>

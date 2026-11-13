@@ -44,7 +44,7 @@ export function GlobResultsDisplay({ data }: GlobResultsDisplayProps) {
     <div className="rounded p-3" style={{ backgroundColor: "var(--surface-bg)", border: "1px solid var(--border-primary)" }}>
       {/* Summary */}
       <div className="mb-3" style={{ color: "var(--text-secondary)" }}>
-        <div className="font-semibold mb-1">Pattern: <code style={{ backgroundColor: "#ffffff10", padding: "2px 6px", borderRadius: "3px" }}>{data.pattern}</code></div>
+        <div className="font-semibold mb-1">Pattern: <code style={{ backgroundColor: "color-mix(in srgb, var(--bg-surface) 6%, transparent)", padding: "2px 6px", borderRadius: "3px" }}>{data.pattern}</code></div>
         <div className="text-sm">
           Found <strong>{data.total_files}</strong> files
         </div>

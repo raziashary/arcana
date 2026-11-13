@@ -8,6 +8,7 @@ import type { GraphNode, ImpactData } from '../../../stores/graphStore'
 import type { BuildingLayout } from '../layout/layoutTypes'
 import { IMPACT_COLORS } from './buildingMaterials'
 import { communityColor } from '../layout/cityLayout'
+import { CITY } from '../../../styles/palette'
 
 interface GodNodeBuildingProps {
   node: GraphNode
@@ -28,8 +29,8 @@ export function GodNodeBuilding({ node, layout, isSelected, impactData }: GodNod
   // Determine color in impact mode
   const impactRisk = impactData?.affected.get(node.id)?.risk
   const color = impactData
-    ? (node.id === impactData.epicenterId ? '#ffffff' : impactRisk ? IMPACT_COLORS[impactRisk].getStyle() : '#111111')
-    : (isSelected ? '#ffffff' : baseColor)
+    ? (node.id === impactData.epicenterId ? CITY.white : impactRisk ? IMPACT_COLORS[impactRisk].getStyle() : CITY.panel)
+    : (isSelected ? CITY.white : baseColor)
 
   // Animate beacon pulse
   useFrame(({ clock }) => {

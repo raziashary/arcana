@@ -32,10 +32,10 @@ const badgeStyle = (variant: BadgeVariant): React.CSSProperties => ({
     info:    'rgba(52,152,219,0.15)',
   } as Record<BadgeVariant, string>)[variant],
   color: ({
-    success: 'var(--success, #27ae60)',
-    error:   'var(--error, #e74c3c)',
-    warning: 'var(--warning, #f39c12)',
-    info:    'var(--info, #3498db)',
+    success: 'var(--success)',
+    error:   'var(--danger)',
+    warning: 'var(--warning)',
+    info:    'var(--info)',
   } as Record<BadgeVariant, string>)[variant],
 })
 
@@ -111,7 +111,7 @@ const s: Record<string, React.CSSProperties> = {
     borderRadius: 8,
     border:       'none',
     background:   'var(--accent)',
-    color:        '#fff',
+    color:        'var(--text-on-accent)',
     fontSize:     13,
     cursor:       'pointer',
     fontWeight:   500,
@@ -335,7 +335,7 @@ const ITDashboard: React.FC = () => {
                             {isVerifying ? '…' : 'Verify'}
                           </button>
                           <button
-                            style={{ ...s.iconBtn, color: 'var(--error, #e74c3c)' }}
+                            style={{ ...s.iconBtn, color: 'var(--danger)' }}
                             onClick={async () => {
                               if (!confirm(`Remove ${p.name}?`)) return
                               await uninstallPlugin(p.name)
@@ -402,7 +402,7 @@ const ITDashboard: React.FC = () => {
                             marginRight: 4,
                             padding: '2px 6px',
                             borderRadius: 8,
-                            background: 'var(--bg-3, #2a2a2a)',
+                            background: 'var(--bg-code)',
                             fontSize: 11,
                             color: 'var(--text-3)',
                           }}

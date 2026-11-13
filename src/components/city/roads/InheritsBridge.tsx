@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import * as THREE from 'three'
 import type { GraphNode, GraphEdge } from '../../../stores/graphStore'
 import type { CityLayout } from '../layout/layoutTypes'
+import { CITY } from '../../../styles/palette'
 
 interface InheritsBridgeProps {
   sourcePos: THREE.Vector3
@@ -28,8 +29,8 @@ export function InheritsBridge({ sourcePos, targetPos }: InheritsBridgeProps) {
   return (
     <mesh geometry={geometry} castShadow frustumCulled={false}>
       <meshStandardMaterial
-        color="#9966cc"
-        emissive="#3d1166"
+        color={CITY.bridgeInherits}
+        emissive={CITY.bridgeInheritsGlow}
         emissiveIntensity={0.4}
         metalness={0.4}
         roughness={0.6}
@@ -57,8 +58,8 @@ export function TestedByRoad({ sourcePos, targetPos }: TestedByRoadProps) {
   return (
     <mesh geometry={geometry} frustumCulled={false}>
       <meshStandardMaterial
-        color="#cc6622"
-        emissive="#882200"
+        color={CITY.bridgeImplements}
+        emissive={CITY.bridgeImplementsGlow}
         emissiveIntensity={0.4}
         transparent
         opacity={0.80}

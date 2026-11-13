@@ -111,7 +111,7 @@ function PhaseRow({ summary }: { summary: PhaseSummary }) {
           {summary.phase}
         </span>
         {summary.milestone && (
-          <PhaseBadge label={summary.milestone} color="#7FDBCA" />
+          <PhaseBadge label={summary.milestone} color="var(--aqua)" />
         )}
       </div>
 
@@ -133,7 +133,7 @@ function PhaseRow({ summary }: { summary: PhaseSummary }) {
           <span style={{ color: 'var(--accent)' }}>{summary.in_progress_tasks}▶</span>
         )}
         {summary.blocked_tasks > 0 && (
-          <span style={{ color: '#F59E0B' }}>{summary.blocked_tasks}⊘</span>
+          <span style={{ color: 'var(--warning)' }}>{summary.blocked_tasks}⊘</span>
         )}
       </div>
 
@@ -146,7 +146,7 @@ function PhaseRow({ summary }: { summary: PhaseSummary }) {
         ) : pct > 0 ? (
           <PhaseBadge label={`${pct}%`} color="var(--accent)" />
         ) : (
-          <PhaseBadge label="ready" color="#82AAFF" />
+          <PhaseBadge label="ready" color="var(--accent)" />
         )}
       </div>
     </div>
@@ -227,7 +227,7 @@ export function EpicPhaseView({ epic }: EpicPhaseViewProps) {
         }
 
         {/* Epic badge */}
-        <PhaseBadge label="epic" color="#C3A6FF" />
+        <PhaseBadge label="epic" color="var(--purple)" />
 
         {/* Title */}
         <span
@@ -315,7 +315,7 @@ export function EpicsSection({ tasks }: { tasks: Task[] }) {
         onClick={() => setExpanded(e => !e)}
       >
         <div className="flex items-center gap-2">
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#C3A6FF', display: 'inline-block' }} />
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--purple)', display: 'inline-block' }} />
           <span style={{ fontSize: '11px', color: 'var(--text-2)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
             Epics
           </span>
@@ -323,7 +323,7 @@ export function EpicsSection({ tasks }: { tasks: Task[] }) {
             style={{
               fontSize: '9px',
               background: 'rgba(195,166,255,0.15)',
-              color: '#C3A6FF',
+              color: 'var(--purple)',
               padding: '1px 6px',
               borderRadius: 4,
               fontFamily: 'monospace',

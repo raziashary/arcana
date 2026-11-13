@@ -128,7 +128,7 @@ export default function SkillParameterModal({ skill, onExecute, onClose }: Props
             onClick={handleExecute}
             disabled={executing}
             className="flex items-center gap-2 px-4 py-2 rounded text-xs font-mono font-semibold"
-            style={{ background: 'var(--accent)', color: '#011627', opacity: executing ? 0.6 : 1 }}
+            style={{ background: 'var(--accent)', color: 'var(--bg-app)', opacity: executing ? 0.6 : 1 }}
           >
             <Play size={13} />
             {executing ? 'Executing…' : 'Execute'}

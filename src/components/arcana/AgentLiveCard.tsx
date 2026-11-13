@@ -26,14 +26,14 @@ const STATUS_DOT_COLORS: Record<string, string> = {
   active:        'var(--accent)',
   idle:          'var(--info)',
   error:         'var(--danger)',
-  paused:        '#555555',
+  paused:        'var(--text-dim)',
   starting:      'var(--warning)',
   // no_provider: amber — the worker is not waiting for work, it is blocked
   //   until an LLM provider key is configured. Distinct from ordinary idle so
   //   the user can tell "this needs me" from "this is fine".
   no_provider:   'var(--warning)',
 }
-const UNKNOWN_DOT_COLOR = '#555555'      // gray — never seen alive
+const UNKNOWN_DOT_COLOR = 'var(--text-dim)'      // gray — never seen alive
 
 // Doc 01 Phase 3 — short, friendly model-name pill.
 // Workers tend to be configured with the full registry key
@@ -158,8 +158,8 @@ export function AgentLiveCard({ agentId }: Props) {
               fontSize:      9,
               padding:       '1px 5px',
               marginLeft:    4,
-              background:    'var(--warning, #FFCB8B)',
-              color:         '#000',
+              background:    'var(--warning)',
+              color:         'var(--text-dim)',
               borderRadius:  6,
               fontWeight:    700,
               cursor:        'pointer',
@@ -204,7 +204,7 @@ export function AgentLiveCard({ agentId }: Props) {
               borderRadius: '3px',
               cursor:     'pointer',
               background: qcReviewCount > 0 ? 'var(--info)' : 'var(--bg-surface)',
-              color:      qcReviewCount > 0 ? '#000' : 'var(--text-2)',
+              color:      qcReviewCount > 0 ? 'var(--text-on-accent)' : 'var(--text-2)',
               border:     '1px solid var(--border-1)',
               letterSpacing: '0.05em',
             }}

@@ -32,8 +32,8 @@ export function UpdateToast() {
         fixed bottom-4 right-4 z-50 flex items-center gap-3 rounded-lg px-4 py-3 shadow-lg
         border text-sm max-w-sm animate-in slide-in-from-bottom-2
         ${isCritical
-          ? 'bg-orange-950 border-orange-700 text-orange-100'
-          : 'bg-gray-900 border-gray-700 text-gray-100'}
+          ? 'bg-[color:var(--warning-muted)] border-[color:var(--warning)] text-[color:var(--text-primary)]'
+          : 'bg-[color:var(--bg-surface)] border-[color:var(--border-secondary)] text-[color:var(--text-primary)]'}
       `}
       role="alert"
       aria-live="polite"
@@ -69,8 +69,8 @@ export function UpdateToast() {
           className={`
             text-xs font-medium px-3 py-1.5 rounded-md transition-colors
             ${isCritical
-              ? 'bg-orange-600 hover:bg-orange-500 text-white'
-              : 'bg-blue-600 hover:bg-blue-500 text-white'}
+              ? 'bg-[color:var(--warning)] hover:opacity-90 text-[color:var(--text-on-accent)]'
+              : 'bg-[color:var(--accent)] hover:opacity-90 text-[color:var(--text-on-accent)]'}
           `}
         >
           Update

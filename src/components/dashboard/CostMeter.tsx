@@ -39,7 +39,7 @@ const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget,
 
   // Calculate budget progress
   const budgetPercent = (summary.today_cost / dailyBudget) * 100;
-  const budgetColor = budgetPercent > 90 ? '#FF6363' : budgetPercent > 75 ? '#FFCB8B' : '#7FDBCA';
+  const budgetColor = budgetPercent > 90 ? 'var(--danger)' : budgetPercent > 75 ? 'var(--warning)' : 'var(--aqua)';
 
   // Derive real provider breakdown from tokenUsage.by_provider.
   // Approximate cost rates (USD per 1M tokens) — used only for share computation, not absolute cost.
@@ -87,13 +87,13 @@ const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget,
 
           {/* Budget Progress Bar */}
           <div style={{ marginTop: '12px' }}>
-            <div style={{ fontSize: '10px', color: '#637777', marginBottom: '4px' }}>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginBottom: '4px' }}>
               Budget: ${summary.today_cost.toFixed(2)} / ${dailyBudget.toFixed(2)}
             </div>
             <div style={{
               width: '100%',
               height: '6px',
-              background: '#0D3652',
+              background: 'var(--border-primary)',
               borderRadius: '2px',
               overflow: 'hidden',
             }}>
@@ -120,10 +120,10 @@ const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget,
               marginTop: '8px',
               width: '100%',
               padding: '6px 8px',
-              background: '#0B3A5C',
-              border: '1px solid #1A527A',
+              background: 'var(--bg-selected)',
+              border: '1px solid var(--border-secondary)',
               borderRadius: '2px',
-              color: '#637777',
+              color: 'var(--text-muted)',
               fontSize: '11px',
               cursor: 'pointer',
               display: 'flex',
@@ -153,21 +153,21 @@ const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget,
           zIndex: 1000,
         }}>
           <div style={{
-            background: '#00233B',
-            border: '1px solid #0D3652',
+            background: 'var(--bg-surface)',
+            border: '1px solid var(--border-primary)',
             borderRadius: '4px',
             padding: '20px',
             maxWidth: '400px',
             width: '90%',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, color: '#D6DEEB' }}>Cost Breakdown</h3>
+              <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>Cost Breakdown</h3>
               <button
                 onClick={() => setShowDrilldown(false)}
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#637777',
+                  color: 'var(--text-muted)',
                   cursor: 'pointer',
                   fontSize: '20px',
                 }}
@@ -183,15 +183,15 @@ const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget,
                   display: 'flex',
                   justifyContent: 'space-between',
                   padding: '8px 0',
-                  borderBottom: '1px solid #0D3652',
+                  borderBottom: '1px solid var(--border-primary)',
                   fontSize: '12px',
                 }}>
-                  <span style={{ color: '#D6DEEB' }}>{item.provider}</span>
+                  <span style={{ color: 'var(--text-primary)' }}>{item.provider}</span>
                   <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                    <span style={{ color: '#82AAFF', minWidth: '60px', textAlign: 'right' }}>
+                    <span style={{ color: 'var(--accent)', minWidth: '60px', textAlign: 'right' }}>
                       ${item.cost.toFixed(2)}
                     </span>
-                    <span style={{ color: '#637777', minWidth: '40px', textAlign: 'right' }}>
+                    <span style={{ color: 'var(--text-muted)', minWidth: '40px', textAlign: 'right' }}>
                       {item.percentage}%
                     </span>
                   </div>
@@ -206,7 +206,7 @@ const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget,
               padding: '8px 0',
               fontSize: '12px',
               fontWeight: 'bold',
-              color: '#ECC48D',
+              color: 'var(--gold)',
             }}>
               <span>Total</span>
               <span>${summary.today_cost.toFixed(2)}</span>
@@ -218,10 +218,10 @@ const CostMeter: React.FC<CostMeterProps> = ({ summary, prediction, dailyBudget,
                 marginTop: '16px',
                 width: '100%',
                 padding: '8px',
-                background: '#0B3A5C',
-                border: '1px solid #1A527A',
+                background: 'var(--bg-selected)',
+                border: '1px solid var(--border-secondary)',
                 borderRadius: '2px',
-                color: '#637777',
+                color: 'var(--text-muted)',
                 cursor: 'pointer',
                 fontSize: '12px',
               }}

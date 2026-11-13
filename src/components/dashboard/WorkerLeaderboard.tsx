@@ -54,8 +54,8 @@ const WorkerLeaderboard: React.FC = () => {
 
   const getTrendIcon = (trend?: number) => {
     if (!trend) return null;
-    if (trend > 0) return <TrendingUp size={12} style={{ color: '#7FDBCA' }} />;
-    if (trend < 0) return <TrendingDown size={12} style={{ color: '#FF6363' }} />;
+    if (trend > 0) return <TrendingUp size={12} style={{ color: 'var(--aqua)' }} />;
+    if (trend < 0) return <TrendingDown size={12} style={{ color: 'var(--danger)' }} />;
     return null;
   };
 
@@ -84,13 +84,13 @@ const WorkerLeaderboard: React.FC = () => {
                     <span className="stat">{worker.successRate}% success</span>
                     {getTrendIcon(worker.successTrend)}
                     {worker.successTrend && (
-                      <span style={{ fontSize: '10px', color: worker.successTrend > 0 ? '#7FDBCA' : '#FF6363' }}>
+                      <span style={{ fontSize: '10px', color: worker.successTrend > 0 ? 'var(--aqua)' : 'var(--danger)' }}>
                         {getTrendLabel(worker.successTrend)}
                       </span>
                     )}
                   </div>
                   <span className="stat">{worker.avgDuration}m avg</span>
-                  <span className="stat" style={{ color: '#ECC48D' }}>
+                  <span className="stat" style={{ color: 'var(--gold)' }}>
                     ${worker.costPerTask.toFixed(2)}/task
                   </span>
                 </div>
@@ -98,11 +98,11 @@ const WorkerLeaderboard: React.FC = () => {
               {worker.efficiencyRank === 1 && (
                 <div style={{
                   padding: '2px 6px',
-                  background: '#7FDBCA20',
-                  border: '1px solid #7FDBCA',
+                  background: 'color-mix(in srgb, var(--aqua) 13%, transparent)',
+                  border: '1px solid var(--aqua)',
                   borderRadius: '2px',
                   fontSize: '9px',
-                  color: '#7FDBCA',
+                  color: 'var(--aqua)',
                   whiteSpace: 'nowrap',
                 }}>
                   Most Efficient

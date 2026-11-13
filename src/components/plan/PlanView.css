@@ -56,7 +56,7 @@
 
 .plan-status-abandoned {
   background: rgba(255, 99, 99, 0.2);
-  color: #ff6363;
+  color: var(--danger);
 }
 
 .plan-view-close {
