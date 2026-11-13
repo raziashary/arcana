@@ -62,26 +62,26 @@
   --border:           #DBDBFC;
 
   /* Accent system */
-  --accent:           #2D6CDF;   /* active states, links, focus: Stellar Blue darkened for text contrast */
+  --accent:           #2763CE;   /* active states, links, focus: Stellar Blue darkened for text contrast */
   --accent-muted:     rgba(76,159,255,0.12);   /* tints, hover */
   --accent-border:    rgba(76,159,255,0.35);
   --accent-dim:       rgba(76,159,255,0.45);   /* input focus ring */
-  --accent-rgb:       45, 108, 223;            /* for rgba(var(--accent-rgb), a) */
-  --aqua:             #2D6CDF;
+  --accent-rgb:       39, 99, 206;             /* for rgba(var(--accent-rgb), a) */
+  --aqua:             #2763CE;
   --cta:              #CEF26D;   /* Sunny Herb: primary call-to-action fill; text on it is --text-primary */
   --success:          #3C7A12;   /* valid, done, added: Sunny Herb darkened for text */
   --success-fill:     #CEF26D;
-  --danger:           #D64550;   /* errors, denied, destructive: Nova Coral darkened for text */
+  --danger:           #C23440;   /* errors, denied, destructive: Nova Coral darkened for text */
   --danger-muted:     rgba(255,105,107,0.12);
-  --warning:          #A15C00;   /* in-progress, blocked */
+  --warning:          #9A5700;   /* in-progress, blocked */
   --warning-muted:    rgba(255,170,0,0.14);
-  --info:             #2F6FB5;   /* tool names, keywords */
+  --info:             #2B69AD;   /* tool names, keywords */
   --info-muted:       rgba(141,194,255,0.18);
   --purple:           #7B4FA3;   /* special accents (Nebula Purple, lightened) */
   --purple-muted:     rgba(190,189,247,0.25);
   --gold:             #8A5A00;   /* cost numbers */
   --green-add:        #3C7A12;   /* diff additions */
-  --red-del:          #D64550;   /* diff deletions */
+  --red-del:          #C23440;   /* diff deletions */
   --add-bg:           rgba(206,242,109,0.28);
   --del-bg:           rgba(255,105,107,0.12);
   --text-on-accent:   #FFFFFF;   /* text on a solid --accent or --danger fill */
@@ -90,12 +90,12 @@
   --text-primary:     #0E1131;   /* Deep Space Navy */
   --text-secondary:   #2B4C75;   /* Orbital Blue */
   --text-muted:       rgba(14,17,49,0.62);   /* labels, column headers */
-  --text-dim:         rgba(14,17,49,0.42);   /* inactive items, timestamps */
+  --text-dim:         rgba(14,17,49,0.50);   /* inactive items, timestamps */
   --text-bright:      #0E1131;   /* code, diff, terminal content */
   --text-1:           #0E1131;
   --text-2:           #2B4C75;
   --text-3:           rgba(14,17,49,0.62);
-  --text-4:           rgba(14,17,49,0.42);
+  --text-4:           rgba(14,17,49,0.50);
 
   /* Fonts & radius */
   --font-mono:        'IBM Plex Mono', monospace;

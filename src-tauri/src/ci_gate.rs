@@ -7131,6 +7131,117 @@ fn effect() { ToolEffect::Execute }"#;
         }
     }
 
+    /// `TG-P6-12` (P6-01, D-019) — the text colours stay readable. Every text token
+    /// must reach WCAG AA (4.5:1) on every surface token it can sit on, and the dim
+    /// token (timestamps, inactive items) must reach 3:1. The tokens are read from
+    /// the `:root` block, so changing a value in `globals.css` is what is measured.
+    #[test]
+    fn tg_p6_12_text_tokens_meet_contrast_on_every_surface() {
+        let css = read_source(&repo_root().join("src/styles/globals.css"));
+        let root_start = css.find(":root").expect(":root block");
+        let root = &css[root_start
+            ..root_start
+                + css[root_start..]
+                    .find(
+                        "
+}",
+                    )
+                    .expect("end of :root")];
+        let token = |name: &str| -> String {
+            let key = format!("--{name}:");
+            let line = root
+                .lines()
+                .find(|l| l.trim_start().starts_with(&key))
+                .unwrap_or_else(|| panic!("token --{name} is not defined in :root"));
+            let value = line.trim_start()[key.len()..]
+                .split(';')
+                .next()
+                .unwrap()
+                .trim();
+            value.to_string()
+        };
+        // (r, g, b, alpha)
+        fn parse(value: &str) -> (f64, f64, f64, f64) {
+            if let Some(hex) = value.strip_prefix('#') {
+                let n = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap() as f64;
+                return (n(0), n(2), n(4), 1.0);
+            }
+            let inner = value
+                .strip_prefix("rgba(")
+                .and_then(|v| v.strip_suffix(')'))
+                .unwrap_or_else(|| panic!("unsupported colour {value}"));
+            let p: Vec<f64> = inner
+                .split(',')
+                .map(|x| x.trim().parse().unwrap())
+                .collect();
+            (p[0], p[1], p[2], p[3])
+        }
+        fn luminance(c: (f64, f64, f64)) -> f64 {
+            let ch = |x: f64| {
+                let x = x / 255.0;
+                if x <= 0.03928 {
+                    x / 12.92
+                } else {
+                    ((x + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * ch(c.0) + 0.7152 * ch(c.1) + 0.0722 * ch(c.2)
+        }
+        let ratio = |fg: &str, bg: &str| -> f64 {
+            let b = parse(&token(bg));
+            let f = parse(&token(fg));
+            let mixed = (
+                f.3 * f.0 + (1.0 - f.3) * b.0,
+                f.3 * f.1 + (1.0 - f.3) * b.1,
+                f.3 * f.2 + (1.0 - f.3) * b.2,
+            );
+            let (l1, l2) = (luminance(mixed), luminance((b.0, b.1, b.2)));
+            (l1.max(l2) + 0.05) / (l1.min(l2) + 0.05)
+        };
+
+        let surfaces = ["bg-app", "bg-surface", "bg-card", "bg-code", "bg-2"];
+        let mut failures = Vec::new();
+        for text in [
+            "text-primary",
+            "text-secondary",
+            "text-muted",
+            "accent",
+            "success",
+            "danger",
+            "warning",
+            "info",
+            "purple",
+        ] {
+            for surface in surfaces {
+                let r = ratio(text, surface);
+                if r < 4.5 {
+                    failures.push(format!("{text} on {surface}: {r:.2}:1 (needs 4.5)"));
+                }
+            }
+        }
+        for surface in surfaces {
+            let r = ratio("text-dim", surface);
+            if r < 3.0 {
+                failures.push(format!("text-dim on {surface}: {r:.2}:1 (needs 3.0)"));
+            }
+        }
+        let on_accent = ratio("text-on-accent", "accent");
+        if on_accent < 4.5 {
+            failures.push(format!(
+                "text-on-accent on accent: {on_accent:.2}:1 (needs 4.5)"
+            ));
+        }
+        assert!(
+            failures.is_empty(),
+            "contrast below the floor:
+{}",
+            failures.join(
+                "
+"
+            )
+        );
+    }
+
     /// `TG-P6-03` (P6-02) — the renderer loads no font or stylesheet from outside
     /// the app. IBM Plex is bundled (`src/assets/fonts`, SIL OFL), so neither CSP
     /// (`tauri.conf.json`, and the `<meta>` in `index.html`, which both apply) names

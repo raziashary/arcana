@@ -30,10 +30,11 @@ gets a darker variant of the same hue and the anchor colour stays the fill or ti
 
 | Role | Token | Value | Why it differs from the anchor |
 |---|---|---|---|
-| Accent, links, focus | `--accent` | `#2D6CDF` | Stellar Blue `#4C9FFF` is 2.8:1 on white; this is about 5:1 |
+| Accent, links, focus | `--accent` | `#2763CE` | Stellar Blue `#4C9FFF` is 2.8:1 on white; this is 5.5:1 on the page and 4.8:1 on the `--bg-2` tint |
 | Success, diff additions | `--success` | `#3C7A12` | Sunny Herb `#CEF26D` is unreadable as text; it is kept as `--cta` / `--success-fill` |
-| Danger | `--danger` | `#D64550` | Nova Coral `#FF696B` is about 3:1 as text |
-| Muted and dim text | `--text-muted`, `--text-dim` | `rgba(14,17,49,.62)`, `.42` | Comet Blue `#57A0F4` is 2.6:1; it is not used for text |
+| Danger | `--danger` | `#C23440` | Nova Coral `#FF696B` is about 3:1 as text; this is 5.4:1 on the page and 4.7:1 on `--bg-2` |
+| Warning, info | `--warning`, `--info` | `#9A5700`, `#2B69AD` | each at least 4.8:1 on every surface token |
+| Muted and dim text | `--text-muted`, `--text-dim` | `rgba(14,17,49,.62)`, `.50` | Comet Blue `#57A0F4` is 2.6:1; it is not used for text. Muted is 4.9:1 or better; dim is 3.2:1 or better and is for timestamps and inactive items only, never for text that must be read |
 | Text on a solid fill | `--text-on-accent` | `#FFFFFF` | |
 
 Literal colours exist only in `src/styles/palette.ts`, for the consumers that cannot read a CSS variable: the three.js city (a dark night scene with its own
