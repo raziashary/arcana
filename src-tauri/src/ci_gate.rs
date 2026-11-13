@@ -7128,4 +7128,95 @@ fn effect() { ToolEffect::Execute }"#;
             "agentStore lost the listener release or the cost recording"
         );
     }
+
+    /// `TG-P6-03` (P6-02) — the renderer loads no font or stylesheet from outside
+    /// the app. IBM Plex is bundled (`src/assets/fonts`, SIL OFL), so neither CSP
+    /// (`tauri.conf.json`, and the `<meta>` in `index.html`, which both apply) names
+    /// a font CDN, `font-src` is `'self'`, and no frontend source or stylesheet
+    /// references one. Before this the app fetched Google Fonts at runtime and
+    /// fell back to system fonts offline.
+    #[test]
+    fn tg_p6_03_the_renderer_loads_no_external_font_or_style_origin() {
+        let conf: serde_json::Value =
+            serde_json::from_str(&read_source(&repo_root().join("src-tauri/tauri.conf.json")))
+                .expect("parse tauri.conf.json");
+        let tauri_csp = conf["app"]["security"]["csp"]
+            .as_str()
+            .expect("tauri.conf.json defines a CSP")
+            .to_string();
+        let html = read_source(&repo_root().join("index.html"));
+        let meta_csp = html
+            .split("Content-Security-Policy")
+            .nth(1)
+            .and_then(|rest| rest.split("content=\"").nth(1))
+            .and_then(|rest| rest.split('"').next())
+            .expect("index.html defines a CSP meta tag")
+            .to_string();
+
+        for (name, csp) in [("tauri.conf.json", &tauri_csp), ("index.html", &meta_csp)] {
+            let directive = |prefix: &str| {
+                csp.split(';')
+                    .map(str::trim)
+                    .find(|d| d.starts_with(prefix))
+                    .unwrap_or_else(|| panic!("{name}: CSP lacks {prefix}"))
+                    .to_string()
+            };
+            assert_eq!(directive("font-src"), "font-src 'self'", "{name}");
+            assert!(
+                !directive("style-src").contains("http"),
+                "{name}: style-src names an external origin: {}",
+                directive("style-src")
+            );
+        }
+
+        let mut offenders = Vec::new();
+        for (name, text) in frontend_sources() {
+            if text.contains("fonts.googleapis.com") || text.contains("fonts.gstatic.com") {
+                offenders.push(name);
+            }
+        }
+        let mut css = Vec::new();
+        fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("css") {
+                    out.push(path);
+                }
+            }
+        }
+        walk(&repo_root().join("src"), &mut css);
+        assert!(
+            css.len() > 3,
+            "the stylesheet scan found {} files",
+            css.len()
+        );
+        for file in css {
+            let text = read_source(&file);
+            if text.contains("fonts.googleapis.com") || text.contains("fonts.gstatic.com") {
+                offenders.push(file.display().to_string());
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "these files load a font from a CDN: {offenders:?}"
+        );
+        assert!(
+            !html.contains("fonts.googleapis.com"),
+            "index.html still links Google Fonts"
+        );
+        for file in [
+            "ibm-plex-mono-latin-400-normal.woff2",
+            "ibm-plex-mono-latin-500-normal.woff2",
+            "ibm-plex-sans-latin-400-normal.woff2",
+            "ibm-plex-sans-latin-500-normal.woff2",
+            "OFL.txt",
+        ] {
+            assert!(
+                repo_root().join("src/assets/fonts").join(file).is_file(),
+                "{file} is missing from src/assets/fonts"
+            );
+        }
+    }
 }

@@ -55,19 +55,11 @@ Shadow is deliberately soft: `0 6px 22px rgba(46,76,117,0.07), 0 1px 2px rgba(46
 
 ## Typography
 
-Three faces, all SIL OFL, loaded from Google Fonts:
-
-| Use | Font | Size | Weight |
-|---|---|---|---|
-| Product title | Urbanist | 18–20px | 600 |
-| Section title | Urbanist | 20–24px | 600–700 |
-| Card title | Urbanist | 15–17px | 600 |
-| Body copy | Urbanist | 14–16px | 400–500 |
-| Metadata / labels | Urbanist | 12–13px | 500 |
-| **Buttons** | **Manrope** | 14–16px | 500–600 |
-| **Code / IDs / logs** | **Roboto Mono** | 12–13px | 400–500 |
-
-Rules: no thin weights in dense UI; Roboto Mono **only** for technical values (JSON, IDs, timestamps, logs); never use website display sizes inside the tool.
+**Shipped (D-016, 2026-11-13): IBM Plex, bundled.** Two faces, SIL OFL, files in `src/assets/fonts/` (Latin subset, 400 and 500), declared with
+`@font-face` in `src/styles/globals.css`; no font is fetched at runtime and both CSPs allow `font-src 'self'` only (`TG-P6-03`). The app's
+`--font-sans` is IBM Plex Sans and `--font-mono` is IBM Plex Mono: Plex Sans for interface text, Plex Mono **only** for technical values
+(JSON, IDs, timestamps, logs, code). The Urbanist/Manrope/Roboto Mono table this section used to hold was never implemented; the shipped code is the
+anchor, so it was replaced. Rules that still hold: no thin weights in dense UI; never use website display sizes inside the tool.
 
 ## Shape — one locked rule
 

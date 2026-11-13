@@ -290,3 +290,18 @@ causes partly wrong. What changed in the plan, and what I did:
 - **Counts re-derived from source (2026-11-13):** 255 registered commands, 206 distinct `invoke` names in non-test frontend code;
   709 hex literals in 80 files (plan: 75); 37 `listen` names; dead listeners and the 3,700 orphaned lines were not recounted by
   the audit (event names are Rust constants, so a literal search is invalid; "orphan" is undefined).
+
+## D-016 · Razi's R3 rulings: bundle IBM Plex, one city palette, mock-provider proof, decide dead commands later — 2026-11-13, Razi
+
+Asked and answered on 2026-11-13, after the D-015 audit.
+
+- **Font: bundle IBM Plex.** Four Latin woff2 files (Mono 400/500, Sans 400/500, 70 KB in all) and the OFL licence were downloaded from the
+  `@fontsource` packages on jsDelivr (v5.1.0, packaging of IBM's open-source Plex) into `src/assets/fonts/`. `globals.css` declares them with `@font-face`;
+  the Google Fonts link and import are gone; both CSPs now say `font-src 'self'` and `style-src` has no external origin. `TG-P6-03` pins this
+  (it fails if a CDN font reference returns). `ui-anchor.md` Typography is rewritten to match the shipped fonts. Non-Latin text falls back to system fonts.
+- **Hex gate scope: exempt through one palette module.** When P6-01/04 are built, literal hex is allowed only in the token file and a single city
+  palette module (three.js colours); everything else uses tokens.
+- **First-run proof (P7-01..04): a mock-provider automated test, plus one manual run with a real key.** The manual run needs a key from Razi and
+  is not run unattended; suites stay free of live credentials.
+- **The 49 uncalled commands: decide after the P6/P7 rows.** `TG-P6-11` keeps them as a ratchet; deletion happens at the end of R3 for those still unused.
+
