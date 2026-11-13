@@ -20,6 +20,7 @@ import { useRuntimeConfigStore } from '../stores/runtimeConfigStore'
 import HooksSettings from '../components/settings/HooksSettings'
 import UpdateSettings from '../components/settings/UpdateSettings'
 import McpToolBrowser from '../components/mcp/McpToolBrowser'
+import { confirmDestructive } from '../utils/confirmDestructive'
 
 export default function SettingsTab() {
   const store          = useSettingsStore()
@@ -1643,6 +1644,10 @@ function ModelConfigSection({ modelId }: { modelId: string }) {
   }
 
   const handleReset = async () => {
+    if (!confirmDestructive(
+      `Reset the settings for ${modelId}`,
+      'Your saved overrides for this model are removed and the defaults apply.',
+    )) return
     await cfgStore.resetConfig(modelId)
     const fresh = cfgStore.getConfig(modelId)
     setDraft(fresh)

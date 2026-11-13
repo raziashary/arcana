@@ -33,6 +33,7 @@ import { EpicsSection } from '../components/dashboard/EpicPhaseView'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import '../components/arcana/LiveMonitor.css'
 import { dbElapsedClock, isDbTimestampToday, parseDbTimestamp } from '../utils/dbTime'
+import { confirmDestructive } from '../utils/confirmDestructive'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1284,7 +1285,13 @@ export default function ArcanaTab() {
                 colId={col.colId}
                 label={col.label}
                 tasks={col.tasks}
-                onDelete={deleteTask}
+                onDelete={(id) => {
+                  const title = tasks.find(t => t.id === id)?.title ?? `task ${id}`
+                  if (confirmDestructive(
+                    `Delete the task "${title}"`,
+                    'The task and its history are removed from the board.',
+                  )) void deleteTask(id)
+                }}
               />
             </div>
           ))}

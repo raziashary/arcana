@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Check, GitBranch, Plus, Trash2 } from 'lucide-react'
 import { useGitStore } from '../../stores/gitStore'
+import { confirmDestructive } from '../../utils/confirmDestructive'
 
 export default function BranchManager() {
   const branches        = useGitStore((s) => s.branches)
@@ -65,7 +66,12 @@ export default function BranchManager() {
               ahead={b.ahead}
               behind={b.behind}
               onCheckout={() => void checkoutBranch(b.name)}
-              onDelete={() => void deleteBranch(b.name, false)}
+              onDelete={() => {
+                if (confirmDestructive(
+                  `Delete the local branch "${b.name}"`,
+                  'Commits that exist only on this branch become unreachable.',
+                )) void deleteBranch(b.name, false)
+              }}
             />
           ))}
         </Section>

@@ -16,6 +16,7 @@ import {
 } from '../../stores/hookStore'
 import HookLogViewer from '../hooks/HookLogViewer'
 import HooksInfoModal from '../hooks/HooksInfoModal'
+import { confirmDestructive } from '../../utils/confirmDestructive'
 
 // ── Static template definitions ───────────────────────────────────────────────
 
@@ -284,7 +285,12 @@ export default function HooksSettings() {
               onToggleExpand={() => setExpandedId(id => id === hook.id ? null : hook.id)}
               onEnable={()    => store.enableHook(hook.id)}
               onDisable={()   => store.disableHook(hook.id)}
-              onRemove={()    => store.removeHook(hook.id)}
+              onRemove={()    => {
+                if (confirmDestructive(
+                  `Delete the hook "${hook.name}"`,
+                  'It stops running and its configuration is removed.',
+                )) store.removeHook(hook.id)
+              }}
               onOpenTest={()  => setTestHookId(hook.id)}
             />
           ))}

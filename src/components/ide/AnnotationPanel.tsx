@@ -5,6 +5,7 @@
 import { useState } from 'react'
 import { useAnnotationStore, type Annotation } from '../../stores/annotationStore'
 import { useUiStore } from '../../stores/uiStore'
+import { confirmDestructive } from '../../utils/confirmDestructive'
 import './Annotations.css'
 
 interface AnnotationPanelProps {
@@ -35,6 +36,10 @@ export function AnnotationPanel({ annotation }: AnnotationPanelProps) {
   }
 
   async function handleDelete() {
+    if (!confirmDestructive(
+      `Delete this annotation on ${annotation.filePath}`,
+      'The note and any response to it are removed.',
+    )) return
     await remove(annotation.id)
   }
 

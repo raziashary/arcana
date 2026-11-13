@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Clock, History, RotateCcw, Trash2 } from 'lucide-react'
 import { useGitStore, type CheckpointInfo } from '../../stores/gitStore'
 import { formatDistanceToNow } from 'date-fns'
+import { confirmDestructive } from '../../utils/confirmDestructive'
 
 interface Props {
   /// When provided, restricts the timeline to a single file path.
@@ -97,7 +98,12 @@ export default function CheckpointViewer({ filePath }: Props) {
                     <RotateCcw size={11} style={{ color: 'var(--accent)' }} />
                   </button>
                   <button
-                    onClick={() => void deleteCheckpoint(c.id)}
+                    onClick={() => {
+                      if (confirmDestructive(
+                        `Delete this checkpoint of ${c.file_path}`,
+                        'The saved snapshot is removed, so you can no longer restore the file to that point.',
+                      )) void deleteCheckpoint(c.id)
+                    }}
                     className="opacity-0 group-hover:opacity-100"
                     title="Delete checkpoint"
                     aria-label="Delete checkpoint"

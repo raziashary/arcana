@@ -7219,4 +7219,55 @@ fn effect() { ToolEffect::Execute }"#;
             );
         }
     }
+
+    /// `TG-P7-12` (P7-12..14, D-017) — a destructive UI action asks first. v1 has
+    /// no undo, so the confirmation is the only protection. Each row is a UI call
+    /// that deletes something with no other prompt, and `confirmDestructive(`
+    /// must appear shortly before it in the same file. The helper itself must
+    /// name what is lost and say it cannot be undone. The two-click buttons
+    /// (clear tasks, clear logs, delete worker) and the `confirm()` sites that
+    /// existed already are not listed; this pins the seven that had nothing.
+    #[test]
+    fn tg_p7_12_destructive_actions_ask_before_they_act() {
+        let root = repo_root();
+        let helper = read_source(&root.join("src/utils/confirmDestructive.ts"));
+        assert!(
+            helper.contains("window.confirm(") && helper.contains("cannot be undone"),
+            "confirmDestructive must show a dialog that says the action cannot be undone"
+        );
+        for (file, call) in [
+            (
+                "src/components/git/CheckpointViewer.tsx",
+                "deleteCheckpoint(c.id)",
+            ),
+            (
+                "src/components/ide/AnnotationPanel.tsx",
+                "remove(annotation.id)",
+            ),
+            (
+                "src/components/memory/MemorySidebar.tsx",
+                "deleteTopic(t.topic)",
+            ),
+            (
+                "src/components/settings/HooksSettings.tsx",
+                "store.removeHook(hook.id)",
+            ),
+            (
+                "src/components/git/BranchManager.tsx",
+                "deleteBranch(b.name, false)",
+            ),
+            ("src/tabs/ArcanaPanel.tsx", "deleteTask(id)"),
+            ("src/tabs/Settings.tsx", "cfgStore.resetConfig(modelId)"),
+        ] {
+            let src = read_source(&root.join(file));
+            let at = src
+                .find(call)
+                .unwrap_or_else(|| panic!("{file} no longer contains `{call}`; update the gate"));
+            let window_start = at.saturating_sub(500);
+            assert!(
+                src[window_start..at].contains("confirmDestructive("),
+                "{file}: `{call}` is not preceded by confirmDestructive(...); a destructive action must ask first"
+            );
+        }
+    }
 }

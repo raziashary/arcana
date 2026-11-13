@@ -305,3 +305,14 @@ Asked and answered on 2026-11-13, after the D-015 audit.
   is not run unattended; suites stay free of live credentials.
 - **The 49 uncalled commands: decide after the P6/P7 rows.** `TG-P6-11` keeps them as a ratchet; deletion happens at the end of R3 for those still unused.
 
+## D-017 · Razi's R3 rulings: confirm without undo, delete the inert graph code, delete uncalled commands, define orphans — 2026-11-13, Razi
+
+Asked and answered on 2026-11-13, with the instruction to carry R3 through end to end.
+
+- **Destructive actions (P7-12..14): confirm only, no undo in v1.** Each unconfirmed destructive action asks first and states what is lost. Checkpoint-backed undo
+  (`git/checkpoint.rs`) is not wired; it goes to the post-ship backlog.
+- **Delete `graph_tools.rs` and `graph_prompts.rs`** (unregistered since R2, superseded by `graph_query_tools.rs`), with their `mod` lines. The four parked tool ideas stay
+  in `HARDENING_BACKLOG.md` section G.
+- **The 49 uncalled commands: delete those with no caller anywhere** (no frontend, CLI or test). A command that looks like a planned v1 UI is kept and listed to Razi.
+  `TG-P6-11`'s list shrinks to match.
+- **Orphaned frontend code: "orphan" means a non-test file not imported, directly or transitively, from the app entry.** Those files are deleted, and the commit body lists them.

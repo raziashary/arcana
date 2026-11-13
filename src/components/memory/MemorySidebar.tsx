@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useMemoryStore, SemanticFact, ProceduralMemory } from '../../stores/memoryStore';
 import { MemoryStats } from './MemoryStats';
+import { confirmDestructive } from '../../utils/confirmDestructive';
 
 // ─── Timeline tab ─────────────────────────────────────────────────────────────
 
@@ -261,7 +262,15 @@ const ProceduralTab: React.FC = () => {
                 <button onClick={() => handleEdit(t)} title="Edit">
                   <Edit3 size={12} />
                 </button>
-                <button onClick={() => deleteTopic(t.topic)} title="Delete">
+                <button
+                  onClick={() => {
+                    if (confirmDestructive(
+                      `Delete the memory topic "${t.title}"`,
+                      'Everything the agent remembered under this topic is removed.',
+                    )) deleteTopic(t.topic)
+                  }}
+                  title="Delete"
+                >
                   <Trash2 size={12} />
                 </button>
               </div>
