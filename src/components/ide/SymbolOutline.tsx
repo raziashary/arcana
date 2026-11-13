@@ -36,7 +36,7 @@ export default function SymbolOutline() {
 
   if (!activeTab) {
     return (
-      <EmptyState>No file selected</EmptyState>
+      <EmptyState>Open a file to see its symbols.</EmptyState>
     )
   }
 

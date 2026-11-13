@@ -46,7 +46,7 @@ function EmptyWidget({ label }: { label: string }) {
       gap:        6,
     }}>
       <span style={{ opacity: 0.6 }}>—</span>
-      <span>{label}: no data yet</span>
+      <span>{label}: not loaded. Arcana retries every minute.</span>
     </div>
   )
 }

@@ -71,7 +71,7 @@ const WorkerLeaderboard: React.FC = () => {
       </div>
       <div className="widget-content">
         {workers.length === 0 ? (
-          <div className="no-data-placeholder">No session data yet</div>
+          <div className="no-data-placeholder">No worker has finished a task yet. Rankings appear after the first one.</div>
         ) : null}
         <div className="leaderboard-list">
           {workers.map((worker) => (

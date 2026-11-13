@@ -798,7 +798,7 @@ export default function LogsTab() {
           {visibleLines.length === 0 && !loading && (
           <div style={{ padding: '24px 20px', color: 'var(--text-4)', fontFamily: 'monospace', fontSize: 11, textAlign: 'center' }}>
             {lines.length === 0
-              ? 'No log entries yet. The log file will appear after the first app startup with this version.'
+              ? 'No log entries yet. They appear here as you use Arcana; send a message in Chat to create some.'
               : 'No lines match the current filter.'
             }
           </div>

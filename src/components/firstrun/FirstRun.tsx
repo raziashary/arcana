@@ -215,7 +215,7 @@ export default function FirstRun() {
               {workspaceDir ? 'Change' : 'Select folder'}
             </button>
           </div>
-          <p style={{ marginTop: 6, fontSize: 12, color: 'var(--text-dim)' }}>The agent reads and edits files only inside this folder.</p>
+          <p style={{ marginTop: 6, fontSize: 12, color: 'var(--text-dim)' }}>Arcana reads and edits files only inside this folder.</p>
           {workspaceError && <p role="alert" style={{ marginTop: 6, fontSize: 12, color: 'var(--danger)' }}>{workspaceError} Pick a different folder.</p>}
         </section>
 

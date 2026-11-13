@@ -73,7 +73,7 @@ export function LiveMonitorSection() {
       {!isMonitorCollapsed && (
         <div className="live-monitor-grid">
           {agentList.length === 0 ? (
-            <div className="lm-empty">No agents initialised — start a worker to see live data</div>
+            <div className="lm-empty">Nothing is running. Start a worker to see its activity here.</div>
           ) : (
             agentList.map(agent => (
               <AgentLiveCard key={agent.agent_id} agentId={agent.agent_id} />

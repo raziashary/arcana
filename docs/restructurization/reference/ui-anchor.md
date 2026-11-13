@@ -127,3 +127,16 @@ Status dots carry state via `status-dot complete | running | failed | waiting`; 
 Dashboard, not website: compact overview first, click-to-inspect, sidebar navigation rather than a top anchor bar, no repeated "Expand" button on every card, graph sections stay full-width. There's also an accessibility block at the end of `styles.css` (V3 §19) covering focus rings and `prefers-reduced-motion`.
 
 Sections beyond §3 spec the layout itself — §4 global frame, §5 header, §6 module nav, §7 sidebar, §9 run summary, §10 pipeline matrix, §11 inspector, §15 quality audit, §16 event log — if you need the per-component geometry rather than the tokens.
+
+## Vocabulary (P7-15)
+
+One word per thing in anything the user reads. "Agent" is an internal and event-name word (`agent:done`, `agent_loop_start`) and does not appear in interface copy.
+
+| Word | Means | Not |
+|---|---|---|
+| **Arcana** | the assistant you chat with (the PA); also the app | "the agent", "the AI" |
+| **Session** | one chat conversation with Arcana, in a workspace folder | "thread", "chat" as a noun for the object |
+| **Worker** | a named fleet member that picks up tasks | "agent", "bot" |
+| **Task** | a unit of work assigned to a worker, with its own budget | "job", "ticket" |
+| **Run** | one execution of a recipe by a worker | "execution" |
+| **Recipe** | the saved instructions a worker runs | "script", "workflow" |

@@ -93,7 +93,7 @@ export default function HookLogViewer({ hookId, limit = 50 }: Props) {
       {/* Log rows */}
       {filtered.length === 0 ? (
         <div className="text-xs py-4 text-center" style={{ color: 'var(--text-3)' }}>
-          {store.logs.length === 0 ? 'No hook executions yet' : `No ${filter} executions`}
+          {store.logs.length === 0 ? 'No hook has run yet. Enable a hook under Settings, Hooks and it is logged here when a tool call triggers it.' : `No ${filter} executions`}
         </div>
       ) : (
         <div className="space-y-1">
