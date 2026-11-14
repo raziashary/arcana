@@ -66,24 +66,12 @@ function WorkerRow({
   const handleModelChange = async (model: string) => {
     setSavingModel(true)
     try {
-      // The _sync variant validates the worker exists and returns a message
-      // the UI can toast; the plain one writes and returns nothing.
-      const result = await invoke<{
-        db_updated: boolean
-        sync_status: string
-        message: string
-        model: string
-      }>('update_worker_model_sync', { workerId: worker.id, model })
-      
+      // The database write is the change; the engine reads the row on its next tick.
+      await invoke('update_worker_model', { workerId: worker.id, model })
       onModelChange(worker.id, model)
-      
-      // Show toast based on sync status
-      const toastType: ToastType = 
-        result.sync_status === 'synced' ? 'success' :
-        result.sync_status === 'pending' ? 'warning' : 'error'
-      onModelSyncResult(result.message, toastType)
+      onModelSyncResult(`Model updated to ${model} — active on the next tick`, 'success')
     } catch (e) {
-      console.error('update_worker_model_sync failed:', e)
+      console.error('update_worker_model failed:', e)
       onModelSyncResult(`Failed to update model: ${e}`, 'error')
     } finally {
       setSavingModel(false)

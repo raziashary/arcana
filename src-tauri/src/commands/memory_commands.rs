@@ -4,11 +4,9 @@
 //
 // Command groups:
 //   Episodic  — get_session_timeline
-//   Semantic  — recall_facts, store_fact_cmd, update_fact_cmd, deactivate_fact,
-//               get_user_preferences, search_semantic
-//   Procedural — get_memory_md, save_memory_md, list_memory_topics,
-//               get_memory_topic, save_memory_topic, delete_memory_topic,
-//               search_procedural
+//   Semantic  — recall_facts, store_fact_cmd, update_fact_cmd, deactivate_fact
+//   Procedural — get_memory_md, list_memory_topics, get_memory_topic,
+//               save_memory_topic, delete_memory_topic
 //   Cross-tier — search_memory, get_memory_stats
 //
 // NOTE: store_user_message_cmd / store_agent_response_cmd are intentionally

@@ -29,19 +29,6 @@ pub struct CreateWorkerOutput {
     pub slug: String,
 }
 
-/// Result of updating a worker's model.
-#[derive(Debug, Serialize)]
-pub struct UpdateModelSyncResult {
-    /// Database update succeeded
-    pub db_updated: bool,
-    /// Orchestrator sync status: "synced", "pending", or "failed"
-    pub sync_status: String,
-    /// Human-readable message for toast
-    pub message: String,
-    /// The model that was requested
-    pub model: String,
-}
-
 // ─── Commands ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -112,7 +99,12 @@ pub fn update_worker_status(worker_id: i64, status: String) -> Result<()> {
 
 #[tauri::command]
 pub fn update_worker_model(worker_id: i64, model: String) -> Result<()> {
-    WorkersDb::open()?.update_model(worker_id, &model)
+    let db = WorkersDb::open()?;
+    // Existence guard, not a read: `update_model` on a missing id is a silent no-op in
+    // SQLite, so without this the UI would report a change for a worker that does not exist.
+    db.get_by_id(worker_id)?
+        .ok_or_else(|| ArcanaError::Agent(format!("Worker id={worker_id} not found")))?;
+    db.update_model(worker_id, &model)
 }
 
 #[tauri::command]

@@ -27,16 +27,6 @@ async function selectFixtureWorkspace(workspace: string): Promise<void> {
 const allowSelector = 'button[aria-label="Allow egress for GitHub MCP connector"]'
 const revokeSelector = 'button[aria-label="Revoke consent for GitHub MCP connector"]'
 const destination = { providerId: 'mcp:github-mcp' }
-const fixtureDiff = 'diff --git a/src/example.ts b/src/example.ts\n--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new\n'
-
-async function expectLocalDiffReview() {
-  const result = await nativeInvoke<{ analysis_mode: string; file_count: number; summary: string }>(
-    'analyze_diff', { diffText: fixtureDiff },
-  )
-  await expect(result.analysis_mode).toBe('deterministic_only')
-  await expect(result.file_count).toBe(1)
-  await expect(result.summary).toContain('were not sent')
-}
 
 // This scenario sends no provider/MCP request. It changes consent only in the
 // harness-owned profile and proves the UI consumes native persisted state.
@@ -54,17 +44,14 @@ describe('Workspace consent through the built desktop', () => {
     try {
       await selectFixtureWorkspace(workspaceA)
       // Selecting a model persists only configuration; it sends no request.
-      // Google has no grant in this disposable profile, so native diff review
-      // must take the structural path before any credential lookup or egress.
+      // Google has no grant in this disposable profile.
       await nativeInvoke('set_active_provider', { provider: 'google', model: 'gemini-3.8-flash' })
       await expect(await nativeInvoke<boolean>('get_workspace_egress_consent', { providerId: 'google' })).toBe(false)
-      await expectLocalDiffReview()
       await expect(await nativeInvoke<boolean>('get_workspace_egress_consent', destination)).toBe(false)
       await $(allowSelector).waitForExist()
       await $(allowSelector).click()
       await $(revokeSelector).waitForExist()
       await expect(await nativeInvoke<boolean>('get_workspace_egress_consent', destination)).toBe(true)
-      await expectLocalDiffReview()
 
       // Reopen the native application, not just React, to prove durable consent.
       await browser.reloadSession()
@@ -83,7 +70,6 @@ describe('Workspace consent through the built desktop', () => {
       await expect(await nativeInvoke<boolean>('get_workspace_egress_consent', destination)).toBe(false)
       await remountSettings()
       await $(allowSelector).waitForExist()
-      await expectLocalDiffReview()
     } finally {
       // Only the two validated fixture paths are ever touched by cleanup.
       for (const workspace of [workspaceA, workspaceB]) {

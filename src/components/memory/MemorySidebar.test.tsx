@@ -5,6 +5,7 @@ const invoke = vi.hoisted(() => vi.fn())
 vi.mock('@tauri-apps/api/core', () => ({ invoke }))
 
 import { MemorySidebar } from './MemorySidebar'
+import type { EpisodicMemory } from '../../stores/memoryStore'
 
 describe('MemorySidebar', () => {
   it('shows the session timeline and the tier counts the backend returns', async () => {
@@ -14,7 +15,11 @@ describe('MemorySidebar', () => {
       }
       if (cmd === 'get_session_timeline') {
         return [
-          { id: 1, session_id: 's1', role: 'user', turn_index: 1, content: 'Add a retry to the provider call', tokens_in: 120, tokens_out: 0, cost_usd: 0, summary_type: null },
+          {
+            id: 'm1', session_id: 's1', turn_index: 1, role: 'user', content: 'Add a retry to the provider call',
+            model: null, cost_usd: 0, tokens_in: 120, tokens_out: 0, thinking: null, tool_calls: null,
+            working_dir: null, summary_type: null, metadata: null, created_at: '2026-11-14T08:00:00Z',
+          } satisfies EpisodicMemory,
         ]
       }
       return []

@@ -282,7 +282,7 @@ export function EpicPhaseView({ epic }: EpicPhaseViewProps) {
             </div>
           ) : summaries.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '8px 0', color: 'var(--text-4)', fontSize: 10 }}>
-              No phases yet — add subtasks via create_phased_task
+              No phases yet
             </div>
           ) : (
             summaries.map(s => (

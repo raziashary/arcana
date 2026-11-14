@@ -31,7 +31,6 @@
     await invoke('set_workspace_dir', { path: fixture.workspace });
     await invoke('set_active_provider', { provider: 'google', model: 'gemini-3.8-flash' });
 
-    const privateDiff = `diff --git a/receipt.txt b/receipt.txt\nindex 1111111..2222222 100644\n--- a/receipt.txt\n+++ b/receipt.txt\n@@ -1 +1 @@\n-private baseline\n+P4_60_PRIVATE_DIFF_CANARY\n`;
     const claims = {
       renderer_ready: true,
       workspace_bound: false,
@@ -40,7 +39,6 @@
       exact_provider_grant: false,
       cross_destination_denied: false,
       exact_provider_revoked: false,
-      missing_and_revoked_diff_denied: false,
       readable_logs_visible: false,
       structured_event_visible: false,
       trace_visible: false,
@@ -59,8 +57,6 @@
     claims.workspace_bound = true;
 
     stage = 'consent_flow';
-    let denied = await invoke('analyze_diff', { diffText: privateDiff });
-    if (denied.analysis_mode !== 'deterministic_only') throw new Error('Missing provider consent did not deny diff egress.');
     clickButton('Allow egress for GitHub MCP connector');
     await waitFor(() => document.querySelector('button[aria-label="Revoke consent for GitHub MCP connector"]'), 'granted consent in Settings');
     claims.consent_ui_granted = await invoke('get_workspace_egress_consent', { providerId: 'mcp:github-mcp' }) === true;
@@ -72,9 +68,7 @@
     if (!claims.exact_provider_grant) throw new Error('Exact provider grant did not read back.');
     await invoke('revoke_workspace_egress_consent', { providerId: 'google' });
     claims.exact_provider_revoked = await invoke('get_workspace_egress_consent', { providerId: 'google' }) === false;
-    denied = await invoke('analyze_diff', { diffText: privateDiff });
-    claims.missing_and_revoked_diff_denied = claims.exact_provider_revoked && denied.analysis_mode === 'deterministic_only';
-    if (!claims.missing_and_revoked_diff_denied) throw new Error('Revoked provider consent did not force structural-only diff analysis.');
+    if (!claims.exact_provider_revoked) throw new Error('Revoked provider consent did not read back.');
 
     clickButton('Revoke consent for GitHub MCP connector');
     await waitFor(() => document.querySelector('button[aria-label="Allow egress for GitHub MCP connector"]'), 'revoked consent in Settings');

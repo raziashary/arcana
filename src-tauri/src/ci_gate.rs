@@ -6926,7 +6926,8 @@ fn effect() { ToolEffect::Execute }"#;
     /// Every string-literal command name the frontend passes to `invoke`, with
     /// the file that does it. Test files are excluded.
     fn frontend_invocations() -> Vec<(String, String)> {
-        let invoke = regex::Regex::new(r#"\binvoke(?:<[^()\n]*>)?\(\s*['"]([a-z0-9_]+)['"]"#)
+        // The generic may span lines (`invoke<{\n a: T\n}>('cmd', ..)`); `[^()]` cannot cross a call.
+        let invoke = regex::Regex::new(r#"\binvoke(?:<[^()]*>)?\(\s*['"]([a-z0-9_]+)['"]"#)
             .expect("invoke pattern");
         let mut found = Vec::new();
         for (name, text) in frontend_sources() {
@@ -7187,19 +7188,44 @@ fn effect() { ToolEffect::Execute }"#;
             };
             0.2126 * ch(c.0) + 0.7152 * ch(c.1) + 0.0722 * ch(c.2)
         }
-        let ratio = |fg: &str, bg: &str| -> f64 {
-            let b = parse(&token(bg));
+        // Contrast of token `fg` drawn over an opaque background colour.
+        let ratio_on = |fg: &str, b: (f64, f64, f64)| -> f64 {
             let f = parse(&token(fg));
             let mixed = (
                 f.3 * f.0 + (1.0 - f.3) * b.0,
                 f.3 * f.1 + (1.0 - f.3) * b.1,
                 f.3 * f.2 + (1.0 - f.3) * b.2,
             );
-            let (l1, l2) = (luminance(mixed), luminance((b.0, b.1, b.2)));
+            let (l1, l2) = (luminance(mixed), luminance(b));
             (l1.max(l2) + 0.05) / (l1.min(l2) + 0.05)
         };
+        let opaque = |name: &str| -> (f64, f64, f64) {
+            let b = parse(&token(name));
+            (b.0, b.1, b.2)
+        };
+        let ratio = |fg: &str, bg: &str| ratio_on(fg, opaque(bg));
+        // The hover and selection tints are translucent: text sits on them composited over
+        // the page or a card, so they are measured that way. (Over the lavender `bg-code`
+        // the tints leave coloured text a little under 4.5; code blocks have no row hover.)
+        let tinted = |tint: &str, base: &str| -> (f64, f64, f64) {
+            let (t, b) = (parse(&token(tint)), opaque(base));
+            (
+                t.3 * t.0 + (1.0 - t.3) * b.0,
+                t.3 * t.1 + (1.0 - t.3) * b.1,
+                t.3 * t.2 + (1.0 - t.3) * b.2,
+            )
+        };
 
-        let surfaces = ["bg-app", "bg-surface", "bg-card", "bg-code", "bg-2"];
+        let mut backgrounds: Vec<(String, (f64, f64, f64))> =
+            ["bg-app", "bg-surface", "bg-card", "bg-code", "bg-2"]
+                .iter()
+                .map(|s| (s.to_string(), opaque(s)))
+                .collect();
+        for tint in ["bg-selected", "bg-hover"] {
+            for base in ["bg-app", "bg-surface"] {
+                backgrounds.push((format!("{tint} over {base}"), tinted(tint, base)));
+            }
+        }
         let mut failures = Vec::new();
         for text in [
             "text-primary",
@@ -7212,15 +7238,15 @@ fn effect() { ToolEffect::Execute }"#;
             "info",
             "purple",
         ] {
-            for surface in surfaces {
-                let r = ratio(text, surface);
+            for (surface, rgb) in &backgrounds {
+                let r = ratio_on(text, *rgb);
                 if r < 4.5 {
                     failures.push(format!("{text} on {surface}: {r:.2}:1 (needs 4.5)"));
                 }
             }
         }
-        for surface in surfaces {
-            let r = ratio("text-dim", surface);
+        for (surface, rgb) in &backgrounds {
+            let r = ratio_on("text-dim", *rgb);
             if r < 3.0 {
                 failures.push(format!("text-dim on {surface}: {r:.2}:1 (needs 3.0)"));
             }

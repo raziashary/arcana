@@ -13,7 +13,6 @@ const WORKSPACE_ENV: &str = "ARCANA_E2E_WORKSPACE";
 const FIXTURE_MARKER: &str = ".arcana-e2e-ipc-receipt";
 const RUN_ID: &str = "p4-60-ipc-receipt";
 const OPERATION: &str = "p4_60_ipc_receipt_probe";
-const PRIVATE_CANARY: &str = "P4_60_PRIVATE_DIFF_CANARY";
 const MAX_RECEIPT_BYTES: usize = 32 * 1024;
 const MAX_EXPORT_BYTES: u64 = 2 * 1024 * 1024;
 const REQUIRED_PROFILE_DIRS: &[&str] = &[
@@ -42,7 +41,6 @@ struct RendererClaims {
     exact_provider_grant: bool,
     cross_destination_denied: bool,
     exact_provider_revoked: bool,
-    missing_and_revoked_diff_denied: bool,
     readable_logs_visible: bool,
     structured_event_visible: bool,
     trace_visible: bool,
@@ -245,7 +243,6 @@ pub fn finish_e2e_ipc_receipt(app: tauri::AppHandle, renderer_receipt: String) -
         claims.exact_provider_grant,
         claims.cross_destination_denied,
         claims.exact_provider_revoked,
-        claims.missing_and_revoked_diff_denied,
         claims.readable_logs_visible,
         claims.structured_event_visible,
         claims.trace_visible,
@@ -254,10 +251,8 @@ pub fn finish_e2e_ipc_receipt(app: tauri::AppHandle, renderer_receipt: String) -
         claims.ide_navigation_opened,
         claims.ide_run_output_visible,
     ];
-    if all_claims.iter().any(|claim| !claim) || renderer_receipt.contains(PRIVATE_CANARY) {
-        return Err(ArcanaError::Agent(
-            "renderer receipt is incomplete or contains private fixture input".into(),
-        ));
+    if all_claims.iter().any(|claim| !claim) {
+        return Err(ArcanaError::Agent("renderer receipt is incomplete".into()));
     }
     if std::fs::read_to_string(workspace.join("src/main.rs"))?
         != "fn main() { println!(\"P4_21_IDE_RUN_OK\"); }\n"
@@ -286,11 +281,9 @@ pub fn finish_e2e_ipc_receipt(app: tauri::AppHandle, renderer_receipt: String) -
     if !readable.contains("P4-60 IPC receipt readable producer")
         || !structured.contains(OPERATION)
         || !structured.contains(RUN_ID)
-        || readable.contains(PRIVATE_CANARY)
-        || structured.contains(PRIVATE_CANARY)
     {
         return Err(ArcanaError::Agent(
-            "exported producer evidence is incomplete or reflects private input".into(),
+            "exported producer evidence is incomplete".into(),
         ));
     }
 

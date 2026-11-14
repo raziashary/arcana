@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAgentLiveStore } from './agentLiveStore'
 import { useDashboardStore } from './dashboardStore'
 
@@ -21,7 +21,10 @@ vi.mock('@tauri-apps/api/event', () => ({
   }),
 }))
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn(async () => []) }))
+const backend = vi.hoisted(() => ({ cap: { enabled: true, limit_usd: 5 } }))
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async (cmd: string) => (cmd === 'get_daily_cap' ? backend.cap : [])),
+}))
 
 function emit(name: string, payload: unknown) {
   bus.handlers.get(name)?.forEach(handler => handler({ payload }))
@@ -64,5 +67,47 @@ describe('events that arrive while no tab is mounted', () => {
 
     expect(bus.live - before).toBe(oneSet)
     store.stopRealtimeUpdates()
+  })
+
+  // The listener runs from launch, so its threshold is the user's cap, read at start,
+  // not the store's literal seed.
+  describe('cost updates against the daily cap', () => {
+    beforeEach(() => useDashboardStore.setState({ budgetAlerts: [], realtimeEnabled: false }))
+
+    it('raise an alert at the cap the user set, not at the seed', async () => {
+      backend.cap = { enabled: true, limit_usd: 5 }
+      const store = useDashboardStore.getState()
+      await store.startRealtimeUpdates()
+
+      emit('cost:update', { total_today: 4, tokens_in: 1, tokens_out: 1 })
+      expect(useDashboardStore.getState().budgetAlerts).toHaveLength(0)
+      emit('cost:update', { total_today: 6, tokens_in: 1, tokens_out: 1 })
+
+      const alerts = useDashboardStore.getState().budgetAlerts
+      expect(alerts).toHaveLength(1)
+      expect(alerts[0].budget_limit).toBe(5)
+      store.stopRealtimeUpdates()
+    })
+
+    it('raise nothing while the cap is switched off', async () => {
+      backend.cap = { enabled: false, limit_usd: 5 }
+      const store = useDashboardStore.getState()
+      await store.startRealtimeUpdates()
+
+      emit('cost:update', { total_today: 500, tokens_in: 1, tokens_out: 1 })
+
+      expect(useDashboardStore.getState().budgetAlerts).toHaveLength(0)
+      store.stopRealtimeUpdates()
+    })
+
+    it('keep only the most recent alerts', () => {
+      const { addBudgetAlert } = useDashboardStore.getState()
+      for (let i = 0; i < 80; i += 1) {
+        addBudgetAlert({ id: `a${i}`, timestamp: '', type: 'warning', message: '', current_cost: i, budget_limit: 1 })
+      }
+      const alerts = useDashboardStore.getState().budgetAlerts
+      expect(alerts).toHaveLength(50)
+      expect(alerts[alerts.length - 1].id).toBe('a79')
+    })
   })
 })

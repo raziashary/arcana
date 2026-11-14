@@ -1,6 +1,6 @@
 // Tauri commands — Skills system. Phase 3.1
-// list_skills, get_skill, search_skills, skills_by_category,
-// execute_skill, validate_skill_parameters, reload_skills, import_skill
+// get_skill, search_skills, skills_by_category,
+// execute_skill, validate_skill_parameters, reload_skills
 //
 // SkillRegistry is managed as Arc<SkillRegistry> — thread-safe via internal RwLock.
 

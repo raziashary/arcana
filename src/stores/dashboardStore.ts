@@ -152,6 +152,7 @@ export interface ExportResult {
 let realtimeUnlisteners: Array<() => void> = [];
 // True while `startRealtimeUpdates` awaits its listeners, so a second call cannot register a second set.
 let realtimeStarting = false;
+const MAX_BUDGET_ALERTS = 50;
 
 // Doc 02 Phase 3.1 — uniform error extraction for the per-invoke catches.
 // Tauri rejects with either a string (the Rust error chain stringified) or
@@ -356,8 +357,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
   },
 
   addBudgetAlert: (alert: BudgetAlert) => {
-    const current = get().budgetAlerts;
-    set({ budgetAlerts: [...current, alert] });
+    // Bounded: the listener now runs for the whole app session, not while Dashboard is open.
+    set({ budgetAlerts: [...get().budgetAlerts, alert].slice(-MAX_BUDGET_ALERTS) });
   },
 
   clearBudgetAlerts: () => {
@@ -369,9 +370,13 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
     realtimeStarting = true;
 
     try {
+      // The alert threshold is the user's cap, not the literal seed: App starts this at launch,
+      // before Dashboard (the other place that loads it) has ever mounted.
+      await get().loadDailyCap();
+
       // Listen for cost update events — event name matches EVT_COST_UPDATE in events.rs
       const costUnlistener = await listen<CostUpdatePayload>('cost:update', (event) => {
-        const { summary, dailyBudget } = get();
+        const { summary, dailyBudget, dailyBudgetEnabled } = get();
 
         // Optimistically update summary so widgets reflect the new spend immediately
         // without waiting for the next full refreshDashboard() poll.
@@ -397,8 +402,8 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
           });
         }
 
-        // Budget alert check
-        if (event.payload.total_today > dailyBudget) {
+        // Budget alert check — only against a cap the user turned on.
+        if (dailyBudgetEnabled && event.payload.total_today > dailyBudget) {
           const alert: BudgetAlert = {
             id: `alert-${Date.now()}`,
             timestamp: new Date().toISOString(),

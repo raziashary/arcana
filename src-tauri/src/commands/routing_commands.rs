@@ -1,5 +1,5 @@
 // Routing commands — Tauri commands for the Semantic Task Routing feature.
-// Exposes suggest_worker_for_task and get_worker_affinity_stats to the frontend.
+// Exposes get_worker_affinity_stats to the frontend.
 
 use crate::errors::Result;
 use crate::routing::{TaskRouter, WorkerAffinityStats};
