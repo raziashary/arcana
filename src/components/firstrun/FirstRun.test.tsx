@@ -13,7 +13,9 @@ const SECRET = 'sk-test-0123456789abcdef'
 
 const model = { id: 'm1', name: 'M1', context_window: 1, supports_vision: false, cost_in_per_1m: 0, cost_out_per_1m: 0 }
 let hasKey = false
-let setKeyResult: unknown = { ok: true, masked_last4: 'cdef', validated: true }
+let setKeyResult: unknown = { ok: true, masked_last4: 'cdef' }
+let vaultInfo: unknown = { label: 'Windows Credential Manager', note: 'Protected by the operating system.', is_os_keychain: true }
+let activeProviderError: Error | null = null
 
 function backend() {
   invoke.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
@@ -21,6 +23,10 @@ function backend() {
       case 'list_providers':
         return [{ id: 'google', name: 'Google', status: 'disconnected', has_key: hasKey, models: [model, model] }]
       case 'get_active_provider': return ['google', 'm1']
+      case 'set_active_provider':
+        if (activeProviderError) throw activeProviderError
+        return null
+      case 'vault_backend_info': return vaultInfo
       case 'get_workspace_dir': return ''
       case 'set_provider_key':
         if (setKeyResult instanceof Error) throw setKeyResult
@@ -36,7 +42,9 @@ function backend() {
 
 beforeEach(() => {
   hasKey = false
-  setKeyResult = { ok: true, masked_last4: 'cdef', validated: true }
+  setKeyResult = { ok: true, masked_last4: 'cdef' }
+  vaultInfo = { label: 'Windows Credential Manager', note: 'Protected by the operating system.', is_os_keychain: true }
+  activeProviderError = null
   invoke.mockReset()
   backend()
   useSettingsStore.setState({
@@ -58,20 +66,44 @@ describe('FirstRun', () => {
     render(<FirstRun />)
     await enterKey()
 
-    await waitFor(() => expect(screen.getByText('Google accepted the key.')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Google accepted the key. Stored in Windows Credential Manager.')).toBeInTheDocument())
     expect(invoke).toHaveBeenCalledWith('set_provider_key', { provider: 'google', apiKey: SECRET })
     expect(invoke).toHaveBeenCalledWith('set_active_provider', { provider: 'google', model: 'm1' })
     expect(document.body.textContent).not.toContain(SECRET)
     expect(screen.queryByDisplayValue(SECRET)).toBeNull()
   })
 
-  it('says so when the key was stored without a check, instead of claiming it was verified', async () => {
-    setKeyResult = { ok: true, masked_last4: 'cdef', validated: false }
+  it('refuses an unreachable provider as a connection problem, saves nothing, and does not call it a bad key', async () => {
+    setKeyResult = new Error('Could not reach google, so the key has NOT been saved. Check your internet connection and try again.')
     render(<FirstRun />)
     await enterKey()
 
-    await waitFor(() => expect(screen.getByText(/could not be reached to check it/)).toBeInTheDocument())
-    expect(screen.queryByText(/accepted the key/)).toBeNull()
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toMatch(/Could not reach google/)
+    expect(alert.textContent).not.toMatch(/Copy the whole key again/)
+    expect(hasKey).toBe(false)
+    expect(invoke).not.toHaveBeenCalledWith('set_active_provider', expect.anything())
+  })
+
+  it('says where the key went, and warns when that is the encrypted-file fallback', async () => {
+    vaultInfo = { label: 'Encrypted file (~/.arcana/config/vault.enc)', note: 'No system keyring was available.', is_os_keychain: false }
+    render(<FirstRun />)
+    await enterKey()
+
+    const status = await screen.findByRole('status')
+    expect(status.textContent).toMatch(/Stored in Encrypted file/)
+    expect(status.textContent).toMatch(/No system keyring was available/)
+  })
+
+  it('says the key was saved when only making the provider active failed', async () => {
+    activeProviderError = new Error('disk full')
+    render(<FirstRun />)
+    await enterKey()
+
+    const status = await screen.findByRole('status')
+    expect(status.textContent).toMatch(/accepted the key and it is saved/)
+    expect(status.textContent).toMatch(/could not be made the active provider: disk full/)
+    expect(screen.queryByDisplayValue(SECRET)).toBeNull()
   })
 
   it('names the next action when the provider rejects the key, without echoing it', async () => {
@@ -89,7 +121,7 @@ describe('FirstRun', () => {
     render(<FirstRun />)
     expect(screen.getByRole('button', { name: 'Start' })).toBeDisabled()
     await enterKey()
-    await screen.findByText('Google accepted the key.')
+    await screen.findByText(/Google accepted the key\./)
     fireEvent.click(screen.getByRole('button', { name: 'Select folder' }))
     await waitFor(() => expect(useWorkspaceStore.getState().workspaceDir).toBe('C:/projects/demo'))
 

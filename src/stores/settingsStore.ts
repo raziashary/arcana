@@ -26,6 +26,12 @@ export const PA_MODES: { value: PAMode; label: string; description: string; icon
   },
 ]
 
+/** Outcome of a provider connection test: `ok` is the verdict, `text` is what to show. */
+export interface ProviderCheck {
+  ok: boolean
+  text: string
+}
+
 export interface ProviderInfo {
   id:      string
   name:    string
@@ -54,9 +60,9 @@ interface SettingsState {
 
   loadProviders:         () => Promise<void>
   setActiveProvider:     (provider: string, model: string) => Promise<void>
-  testProvider:          (provider: string) => Promise<string>
-  /** Resolves `validated: true` only when the provider confirmed the key before it was stored. */
-  storeProviderKey:      (provider: string, key: string) => Promise<{ validated: boolean }>
+  testProvider:          (provider: string) => Promise<ProviderCheck>
+  /** Resolves only after the provider confirmed the key and it was stored; rejects with a fixed message otherwise. */
+  storeProviderKey:      (provider: string, key: string) => Promise<void>
   deleteProviderKey:     (provider: string) => Promise<void>
   loadSystemPrompt:      () => Promise<void>
   setSystemPrompt:       (prompt: string | null) => Promise<void>
@@ -101,23 +107,24 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   testProvider: async (provider) => {
-    const status = await invoke<string>('test_provider_connection', { provider })
+    // ProviderStatus serialises as "connected" | "disconnected" | "testing" | { error: text }.
+    const status = await invoke<string | { error: string }>('test_provider_connection', { provider })
+    const check: ProviderCheck = typeof status === 'string'
+      ? { ok: status === 'connected', text: status === 'connected' ? 'Connected.' : `Status: ${status}.` }
+      : { ok: false, text: status.error }
     set(s => ({
       providers: s.providers.map(p =>
-        p.id === provider ? { ...p, status: status.toLowerCase() } : p
+        p.id === provider ? { ...p, status: typeof status === 'string' ? status : 'error' } : p
       ),
     }))
-    return status
+    return check
   },
 
   storeProviderKey: async (provider, key) => {
     // Inbound only: set_provider_key returns a confirmation and a last-4 mask,
     // never the key. There is deliberately no command to read one back.
-    const result = await invoke<{ ok: boolean; masked_last4: string; validated: boolean }>(
-      'set_provider_key', { provider, apiKey: key },
-    )
+    await invoke<{ ok: boolean; masked_last4: string }>('set_provider_key', { provider, apiKey: key })
     await get().loadProviders()
-    return { validated: result.validated === true }
   },
 
   deleteProviderKey: async (provider) => {

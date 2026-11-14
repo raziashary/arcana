@@ -11,8 +11,11 @@ import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore, type ProviderInfo } from '../../stores/settingsStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useDashboardStore } from '../../stores/dashboardStore'
 
 export const DEFAULT_CAP_USD = 50
+
+interface VaultBackendInfo { label: string; note: string; is_os_keychain: boolean }
 
 /** True when a key is stored for some provider and a workspace folder is chosen. */
 export function isSetupComplete(providers: ProviderInfo[], workspaceDir: string): boolean {
@@ -23,7 +26,7 @@ export function isSetupComplete(providers: ProviderInfo[], workspaceDir: string)
 export function keyFailureMessage(providerName: string, raw: string, key: string): string {
   const scrubbed = key ? raw.split(key).join('••••') : raw
   const why = scrubbed.trim() || 'The key could not be saved.'
-  const rejected = /not accepted|NOT been saved|did not confirm/i.test(why)
+  const rejected = /not accepted/i.test(why)
   const next = rejected
     ? `Copy the whole key again from ${providerName}'s console and check that it was created for ${providerName}.`
     : 'Try again, or add the key later under Settings, Providers.'
@@ -95,21 +98,43 @@ export default function FirstRun() {
     setChecking(true)
     setKeyNote(null)
     try {
-      const { validated } = await storeProviderKey(selected.id, entered)
-      const model = defaultModel(selected)
-      if (model) await setActiveProvider(selected.id, model)
+      try {
+        await storeProviderKey(selected.id, entered)
+      } catch (e) {
+        const raw = e instanceof Error ? e.message : String(e)
+        setKeyNote({ tone: 'error', text: keyFailureMessage(selected.name, raw, entered) })
+        return
+      }
+
+      // The provider accepted the key and it is stored; the field is done with it.
       setKey('')
-      setKeyNote(
-        validated
-          ? { tone: 'ok', text: `${selected.name} accepted the key.` }
-          : {
-              tone: 'warn',
-              text: `Saved, but ${selected.name} could not be reached to check it. Your first message will show whether it works.`,
-            },
-      )
-    } catch (e) {
-      const raw = e instanceof Error ? e.message : String(e)
-      setKeyNote({ tone: 'error', text: keyFailureMessage(selected.name, raw, entered) })
+      const model = defaultModel(selected)
+      let activeFailure = ''
+      try {
+        if (model) await setActiveProvider(selected.id, model)
+      } catch (e) {
+        activeFailure = e instanceof Error ? e.message : String(e)
+      }
+
+      // Where the key went is the vault's own answer, not an assumption: without a system
+      // credential store it is an encrypted file, which protects less.
+      let store: VaultBackendInfo | null = null
+      try {
+        store = await invoke<VaultBackendInfo>('vault_backend_info')
+      } catch {
+        store = null
+      }
+      const where = store ? ` Stored in ${store.label}.` : ''
+      if (activeFailure) {
+        setKeyNote({
+          tone: 'warn',
+          text: `${selected.name} accepted the key and it is saved,${where} but it could not be made the active provider: ${activeFailure} Pick it under Settings, Providers.`,
+        })
+      } else if (store && !store.is_os_keychain) {
+        setKeyNote({ tone: 'warn', text: `${selected.name} accepted the key.${where} ${store.note}` })
+      } else {
+        setKeyNote({ tone: 'ok', text: `${selected.name} accepted the key.${where}` })
+      }
     } finally {
       setChecking(false)
     }
@@ -122,6 +147,7 @@ export default function FirstRun() {
       if (capOn) {
         try {
           await invoke('set_daily_cap', { enabled: true, limitUsd: capUsd })
+          void useDashboardStore.getState().loadDailyCap()
         } catch (e) {
           const raw = e instanceof Error ? e.message : String(e)
           setStartError(`The spend limit was not saved: ${raw} Change the limit above, or untick it, then press Start again.`)
@@ -158,7 +184,7 @@ export default function FirstRun() {
           Welcome to Arcana
         </h1>
         <p style={{ marginTop: 6, marginBottom: 22, fontSize: 14, lineHeight: 1.5, color: 'var(--text-muted)' }}>
-          Arcana runs on your own provider key. It goes into the Windows credential vault and is never shown again.
+          Arcana runs on your own provider key. It is checked with the provider, kept on this PC and never shown again.
         </p>
 
         {/* 1 — key */}

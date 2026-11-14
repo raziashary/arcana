@@ -55,11 +55,6 @@ pub struct VaultWriteResult {
     /// The last four characters of the stored secret. Empty when the secret is
     /// too short for a mask to reveal proportionally little.
     pub masked_last4: String,
-    /// Whether the provider confirmed the key before it was stored. `false` when it
-    /// was stored without a live check (the provider could not be reached, or the
-    /// secret is a GitHub PAT, which is not checked here). The UI must not say
-    /// "verified" unless this is `true`.
-    pub validated: bool,
 }
 
 /// Presence of one vault entry. Deliberately has no value field.
@@ -175,40 +170,50 @@ pub async fn set_provider_key(provider: String, api_key: String) -> Result<Vault
         // provider we cannot construct is a key we can never use.
         let candidate = arcana_core::provider::factory::build(&provider, trimmed.clone())?;
 
-        let validated = match super::settings_commands::check_provider_metadata_connection(
-            candidate.as_ref(),
-            true,
-        )
-        .await
+        // A key is stored only after the provider confirms it. When the provider cannot
+        // be reached the key is NOT stored: an offline user is told it is the connection,
+        // and the unchecked key never becomes the active credential. The text returned
+        // is fixed here (`key_check_failure`); provider response text never reaches the UI.
+        match super::settings_commands::check_provider_metadata_connection(candidate.as_ref(), true)
+            .await
         {
-            Ok(arcana_core::provider::ProviderStatus::Connected) => true,
+            Ok(arcana_core::provider::ProviderStatus::Connected) => {}
             Ok(arcana_core::provider::ProviderStatus::Error(why)) => {
-                return Err(crate::errors::ArcanaError::Vault(format!(
-                    "That key was not accepted by {provider}, so it has NOT been saved: {why}"
+                return Err(crate::errors::ArcanaError::Vault(key_check_failure(
+                    &provider, &why,
                 )));
             }
-            Ok(other) => {
-                return Err(crate::errors::ArcanaError::Vault(format!(
-                    "{provider} did not confirm the key ({other:?}); it has NOT been saved."
+            Ok(_) | Err(_) => {
+                return Err(crate::errors::ArcanaError::Vault(key_check_failure(
+                    &provider, "",
                 )));
             }
-            Err(_) => {
-                // A network failure is not a bad key, and refusing to store on a
-                // transient error would leave a user offline unable to configure
-                // the app at all. Stored, with the uncertainty stated.
-                tracing::warn!(
-                    "Could not reach the provider to validate the key; storing it unvalidated."
-                );
-                false
-            }
-        };
+        }
 
         VaultManager::store(&provider_key(&provider), &trimmed)?;
         Ok(VaultWriteResult {
             ok: true,
             masked_last4: masked_last4(&trimmed),
-            validated,
         })
+    }
+}
+
+/// What the user is told when a key could not be confirmed. `provider` is an id that
+/// `provider::factory::build` already accepted; `why` is the adapter's status text and
+/// is only compared, never copied into the result. The adapters report exactly
+/// `Invalid API key` for a 401/403 and `Connection failed` for a transport failure.
+#[cfg(not(feature = "e2e-ipc-receipt"))]
+fn key_check_failure(provider: &str, why: &str) -> String {
+    match why {
+        "Invalid API key" => format!(
+            "That key was not accepted by {provider}, so it has NOT been saved."
+        ),
+        "Connection failed" => format!(
+            "Could not reach {provider}, so the key has NOT been saved. Check your internet connection and try again."
+        ),
+        _ => format!(
+            "{provider} did not confirm the key, so it has NOT been saved. Try again in a moment."
+        ),
     }
 }
 
@@ -249,7 +254,6 @@ pub fn set_github_pat(pat: String) -> Result<VaultWriteResult> {
         Ok(VaultWriteResult {
             ok: true,
             masked_last4: masked_last4(trimmed),
-            validated: false,
         })
     }
 }
@@ -388,6 +392,27 @@ mod tests {
     fn mask_handles_multibyte_secrets_without_panicking() {
         // Byte slicing here would panic on a char boundary.
         assert_eq!(masked_last4("kéyßµ-ünïcødé"), "cødé");
+    }
+
+    /// An unreachable provider is reported as the connection, a rejected key as the key,
+    /// and anything else generically. Provider text never appears in the result.
+    #[test]
+    fn key_check_failure_names_the_cause_and_never_echoes_provider_text() {
+        let offline = key_check_failure("anthropic", "Connection failed");
+        assert!(offline.contains("Could not reach anthropic"), "{offline}");
+        assert!(!offline.contains("not accepted"), "{offline}");
+        assert!(offline.contains("NOT been saved"), "{offline}");
+
+        let rejected = key_check_failure("openai", "Invalid API key");
+        assert!(rejected.contains("not accepted by openai"), "{rejected}");
+
+        let planted = "planted-private-body sk-live-123 HTTP 500";
+        let other = key_check_failure("groq", planted);
+        assert!(
+            !other.contains("planted-private-body") && !other.contains("sk-live-123"),
+            "{other}"
+        );
+        assert!(other.contains("NOT been saved"), "{other}");
     }
 
     #[test]

@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { CheckCircle, XCircle, RefreshCw, Eye, EyeOff, RotateCcw, Save, Brain, FolderOpen, X, AlertTriangle, Globe } from 'lucide-react'
+import { useDashboardStore } from '../stores/dashboardStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import type { HookConfig } from '../stores/hookStore'
 import { useWorkerStore } from '../stores/workerStore'
@@ -550,6 +551,8 @@ function DailyCapCard() {
       })
       setEnabled(cap.enabled)
       setLimit(cap.limit_usd)
+      // The cost-alert listener in the dashboard store compares against this cap.
+      void useDashboardStore.getState().loadDailyCap()
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e) {
@@ -1249,7 +1252,7 @@ function ProviderCard({ providerId }: { providerId: string }) {
   const [key,        setKey]        = useState('')
   const [showKey,    setShowKey]    = useState(false)
   const [testing,    setTesting]    = useState(false)
-  const [testResult, setTestResult] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<{ text: string; tone: 'ok' | 'warn' | 'error' } | null>(null)
   const [saving,     setSaving]     = useState(false)
 
   if (!provider) return null
@@ -1257,9 +1260,6 @@ function ProviderCard({ providerId }: { providerId: string }) {
   const isActive      = store.activeProvider === providerId
   const displayName   = provider.name
   const hasKey        = provider.has_key
-  // "Connected" is the Test result and "verified" the save result; "saved, but" is a stored key nobody could check.
-  const testOk        = !!testResult && /connected|verified and saved/i.test(testResult)
-  const testUnchecked = !!testResult && /^Key saved, but/i.test(testResult)
   const defaultModel  = provider.models[1]?.id ?? provider.models[0]?.id ?? ''
 
   // P2-72. Three defects lived in the previous nine lines:
@@ -1281,23 +1281,30 @@ function ProviderCard({ providerId }: { providerId: string }) {
     setSaving(true)
     setTestResult(null)
     try {
-      const { validated } = await store.storeProviderKey(providerId, key.trim())
+      await store.storeProviderKey(providerId, key.trim())
+    } catch (e) {
+      // Shown, not logged. The backend's message is fixed text that says why the
+      // key was not saved (rejected, or the provider could not be reached).
+      const message = e instanceof Error ? e.message : String(e)
+      setTestResult({ text: message || 'The key could not be saved.', tone: 'error' })
+      setSaving(false)
+      return
+    }
 
-      // Only now — the key exists and the provider accepted it.
+    // The key is stored and the provider accepted it; the field is done with it.
+    setKey('')
+    try {
       if (!isActive && defaultModel) {
         await store.setActiveProvider(providerId, defaultModel)
       }
-      setKey('')
-      // Only claim a check that happened: offline, the backend stores the key unchecked.
-      setTestResult(validated
-        ? 'Key verified and saved.'
-        : `Key saved, but ${displayName} could not be reached to check it. Press Test once you are online.`)
+      setTestResult({ text: 'Key verified and saved.', tone: 'ok' })
     } catch (e) {
-      // Shown, not logged. The backend's message says what the provider
-      // actually rejected, which is the only useful thing the user can act on.
-      const message = e instanceof Error ? e.message : String(e)
-      setTestResult(message || 'The key could not be saved.')
-      console.error('Failed to save key:', e)
+      // Saved is saved: say so, and say what did not happen.
+      const reason = e instanceof Error ? e.message : String(e)
+      setTestResult({
+        tone: 'warn',
+        text: `The key was saved, but ${displayName} could not be made the active provider: ${reason} Pick it in the list below.`,
+      })
     } finally {
       setSaving(false)
     }
@@ -1313,10 +1320,10 @@ function ProviderCard({ providerId }: { providerId: string }) {
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await store.testProvider(providerId)
-      setTestResult(result)
+      const check = await store.testProvider(providerId)
+      setTestResult({ text: check.text, tone: check.ok ? 'ok' : 'error' })
     } catch (e: unknown) {
-      setTestResult(`Error: ${e instanceof Error ? e.message : String(e)}`)
+      setTestResult({ text: `Error: ${e instanceof Error ? e.message : String(e)}`, tone: 'error' })
     } finally {
       setTesting(false)
     }
@@ -1393,13 +1400,13 @@ function ProviderCard({ providerId }: { providerId: string }) {
       {testResult && (
         <div
           className="flex items-center gap-1.5 font-sans text-xs"
-          style={{ color: testOk ? 'var(--accent)' : testUnchecked ? 'var(--warning)' : 'var(--danger)' }}
+          style={{ color: testResult.tone === 'ok' ? 'var(--accent)' : testResult.tone === 'warn' ? 'var(--warning)' : 'var(--danger)' }}
         >
-          {testOk
+          {testResult.tone === 'ok'
             ? <CheckCircle size={12} />
             : <XCircle    size={12} />
           }
-          {testResult}
+          {testResult.text}
         </div>
       )}
 

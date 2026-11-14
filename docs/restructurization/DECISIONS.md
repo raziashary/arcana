@@ -389,10 +389,35 @@ Session creation fails without a workspace folder, so a key-only first run would
 shown in the Chat tab while no session exists and the setup is incomplete (no stored key or no folder): **1 key, 2 folder, 3 daily limit**, then **Start**.
 
 - **Key:** a password field with no "show" toggle; the backend checks it with the provider before storing it, and the field clears on success. Failure text names the
-  next action and is scrubbed of the key. `set_provider_key` gained `validated: bool` (false when the provider could not be reached, or for the GitHub PAT, which is not
-  checked there) so no screen claims a check that did not happen.
+  next action and is scrubbed of the key. `set_provider_key` briefly gained `validated: bool`; **D-024 removed it**: an unreachable provider now refuses the save, so a stored key is always one the provider confirmed.
 - **Daily limit (D-018):** the checkbox is **ticked at $50** and editable. D-018 said the cap ships off by default and first run offers it; a ticked box the user must pass
   through, with the sentence saying what it does, is the offer. Unticking leaves the stored setting untouched. If Razi prefers it unticked, it is one default.
 - **Deleted:** `has_provider_key` (the fifth "planned v1 UI" command), since first run reads `has_key` from the provider list; the closed vault-IPC list in `vault_commands.rs`
   was updated deliberately. This shrinks the outbound vault surface.
 - **Proof and gaps:** see `P7-01..04` in `SHIP_PLAN.md`. The vault change is one added boolean; the end-of-R3 independent review is asked to read the key path.
+
+## D-024 · End-of-R3 independent review: what it found and what changed — 2026-11-14, Razi (offline key policy), mine (the rest)
+
+Two read-only reviews ran over the 12 R3 commits (implementation, and the first-run key path). Everything below was checked against the cited files before it was acted on.
+
+- **Offline key policy (Razi):** when the provider cannot be reached, saving a key is **refused**, not stored unchecked. The earlier "stored, with the uncertainty stated"
+  path was unreachable anyway: every adapter reports a transport failure as `ProviderStatus::Error("Connection failed")`, so an offline user was told their key was
+  wrong. `set_provider_key` now returns fixed text (`key_check_failure`): "not accepted" only for `Invalid API key`, "Could not reach {provider}... check your internet connection" for
+  `Connection failed`, and a generic "did not confirm" otherwise. Provider text is compared, never echoed. `validated` is gone from `VaultWriteResult` (D-023 amended).
+- **First run says where the key went:** the line "goes into the Windows credential vault" was a claim the code does not keep (`VaultManager::store` falls back to an
+  encrypted file if the keychain write fails). First run now reads `vault_backend_info` after a save, says "Stored in {label}", and shows the backend's own warning when it is
+  the encrypted-file fallback. Residual: `vault_backend_info` probes by a read, so a keychain whose write alone fails can still report the keychain (`HARDENING_BACKLOG.md`).
+- **A regression I caused:** `update_worker_model_sync` had a live caller (`WorkerTable.tsx`) and was deleted as "uncalled". `TG-P6-10`/`TG-P6-11` missed it because the invoke
+  scanner could not match a generic type argument that spans lines. The scanner now matches those; the table calls `update_worker_model`, which gained the existence check
+  the deleted command had, and `UpdateModelSyncResult` is deleted. So the D-017 deletion was 40 uncalled commands plus this one folded into its sibling.
+- **A regression I caused, e2e:** `analyze_diff` was deleted while `e2e/specs/workspace-consent.spec.ts` and the `p4-60` receipt probe invoked it, so the `e2e-smoke` job would
+  have failed. The three diff-review calls and the `missing_and_revoked_diff_denied` claim (and its canary) are removed. What is lost: the native proof that diff review stays
+  structural without consent. The agent-side tool keeps its own consent gate and tests (`analyze_diff_tool.rs`).
+- **Cost alert:** moving the listener to `App` made it compare against the literal $50 seed until Dashboard first loaded the cap, and fire when the cap was off. It now reads the
+  cap at start, refreshes it when Settings or first run changes it, fires only for an enabled cap, and keeps the last 50. **Still true:** nothing in `src` reads `budgetAlerts`,
+  so no user sees the alert yet; surfacing it is the toast work (`P7-05..08`).
+- **Settings key flow:** a failure after the key was stored (making the provider active) now says the key was saved; the Test result is a typed `{text, tone}` instead of a
+  regex over the text ("disconnected" matched "connected"), and `testProvider` no longer throws on an error status.
+- **Stale text fixed:** the in-app Docs tab no longer documents the deleted Default Worker Budget, `list_skills`, `import_skill`; the empty epic view no longer names `create_phased_task`; three module headers. The contrast gate now also measures the hover and selection tints over the page and cards.
+- **Left as is:** `masked_last4` is returned but unused by the frontend (INV-12 gate checks only return types); dashboard refresh now runs app-wide on worker events
+  (unmeasured, `HARDENING_BACKLOG.md`); some Memory modifier classes have no CSS rule (cosmetic).
