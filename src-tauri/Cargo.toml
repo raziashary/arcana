@@ -76,13 +76,14 @@ toml = "0.8"
 # Cron expression parsing (for recipe scheduler)
 cron = "0.12"
 
-# Native file/folder picker dialogs (for workspace dir selection)
-# Pinned to v0.14 with NO tokio feature. rfd's default xdg-portal feature enables
-# ashpd/async-std; adding features= ["tokio"] also enables ashpd/tokio — ashpd
-# compile_error!()s when both runtimes are active simultaneously. Dropping the tokio
-# feature is safe: AsyncFileDialog spawns its dialog on a dedicated thread and the
-# resulting Future is executor-agnostic, so .await works fine in a tokio context.
-rfd = { version = "0.14" }
+# Native file/folder picker dialogs (for workspace dir selection).
+# 0.16 with the gtk3 backend and no default features, the same as tauri-plugin-dialog
+# asks for, so one rfd is built and ashpd (xdg-portal) is not in the graph at all.
+# rfd 0.14 pulled ashpd 0.8.1, whose never-type fallback code a current stable
+# rustc rejects, which failed `cargo clippy` on Linux CI from 2026-11-12.
+# AsyncFileDialog runs its dialog on its own thread and the Future is
+# executor-agnostic, so .await works in a tokio context.
+rfd = { version = "0.16", default-features = false, features = ["gtk3"] }
 
 # git2-rs — Phase 3 (already declared to lock dep version)
 
