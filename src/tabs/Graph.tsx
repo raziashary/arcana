@@ -165,7 +165,8 @@ export default function GraphTab() {
     loadGraphStats()
     const unsub = listen('graph:updated', () => loadGraphStats())
     return () => { unsub.then(fn => fn()) }
-  }, [])
+    // loadGraphStats reads workspaceDir, so the load re-runs when it arrives.
+  }, [workspaceDir])
 
   useEffect(() => {
     const unsub = listen<BuildProgress>('graph:build_progress', (event) => {
@@ -623,6 +624,14 @@ export default function GraphTab() {
 
   const loadGraphStats = async () => {
     if (isLoadingStats) return
+    // No workspace is an ordinary first-run state, not an error: the backend
+    // refuses an empty path, so skip the call and show the empty graph.
+    if (!workspaceDir) {
+      setStats(null)
+      setGraphData(null)
+      setCommunities([])
+      return
+    }
     setIsLoadingStats(true)
     try {
       const graphStats = await invoke<GraphStats>('get_graph_stats', { repoPath: workspaceDir })

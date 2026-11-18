@@ -331,10 +331,10 @@ export const useAgentLiveStore = create<AgentLiveStore>((set, get) => ({
       listen<AgentStatusChangePayload>('agent:status-change',
         e => store.handleStatusChange(e.payload))
     )
-    unlisteners.push(
-      listen<AgentErrorPayload>('agent:error',
-        e => store.handleError(e.payload))
-    )
+    // No `agent:error` listener: the only emitter sends `{session_id, message, kind}`
+    // (arcana-core events.rs), which carries no `agent_id`, so a handler here
+    // could never find an agent. Subagent errors arrive through the subagent
+    // event bridge below and reach `handleError` from there.
 
     // Fleet workers do not emit the agent:* events above — those come from
     // the interactive chat path. Without bridging worker activity into the

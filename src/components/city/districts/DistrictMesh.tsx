@@ -19,8 +19,12 @@ function districtLabel(name: string, id: number): string {
   }
   const lower = name.toLowerCase()
   if (map[lower]) return map[lower]
-  // module paths → "EXTERNAL MODULES"
-  if (lower.startsWith('module-c:') || lower.startsWith('module-/')) return 'EXTERNAL MODULES'
+  // A graph built before the naming fix carries a file path in the name
+  // ("module-c:\work\src\city\a.ts"). Show the folder, not one label for every district.
+  if (/[\\/]/.test(name)) {
+    const parts = name.split(/[\\/]/).filter(Boolean)
+    return (parts.length > 1 ? parts[parts.length - 2] : parts[0]).toUpperCase()
+  }
   // Convert kebab-case community names to ALL CAPS label
   return name.toUpperCase().replace(/-/g, ' ')
 }

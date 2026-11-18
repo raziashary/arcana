@@ -320,8 +320,19 @@ pub fn name_community(
     members: &[String],
     all_nodes: &[crate::graph::store::GraphNode],
 ) -> Result<String> {
+    Ok(community_label(members, all_nodes))
+}
+
+/// A short readable name for a community: its busiest directory, then the
+/// class most members belong to, else the commonest word in their names.
+///
+/// Paths are read with either separator, because the extractor stores the
+/// path as the platform spells it. The "class" a top-level symbol belongs to
+/// is its own file (`parent_name == file_path`), which is not a class: counting
+/// it named every community after a whole file path (`module-c:\work\src\a.ts`).
+fn community_label(members: &[String], all_nodes: &[crate::graph::store::GraphNode]) -> String {
     if members.is_empty() {
-        return Ok("unnamed".to_string());
+        return "unnamed".to_string();
     }
 
     let member_set: HashSet<_> = members.iter().cloned().collect();
@@ -334,9 +345,9 @@ pub fn name_community(
     // Find most common directory prefix
     let mut dir_counts: HashMap<String, usize> = HashMap::new();
     for node in &member_nodes {
-        if let Some(idx) = node.file_path.rfind('/') {
-            let dir = node.file_path[..idx].to_string();
-            *dir_counts.entry(dir).or_insert(0) += 1;
+        let path = node.file_path.replace('\\', "/");
+        if let Some(idx) = path.rfind('/') {
+            *dir_counts.entry(path[..idx].to_string()).or_insert(0) += 1;
         }
     }
 
@@ -350,14 +361,16 @@ pub fn name_community(
     let mut class_counts: HashMap<String, usize> = HashMap::new();
     for node in &member_nodes {
         if let Some(parent) = &node.parent_name {
-            *class_counts.entry(parent.clone()).or_insert(0) += 1;
+            if parent != &node.file_path {
+                *class_counts.entry(parent.clone()).or_insert(0) += 1;
+            }
         }
     }
 
     if let Some((class_name, count)) = class_counts.iter().max_by_key(|(_, c)| *c) {
         if *count as f32 / members.len() as f32 > 0.4 {
             let class_short = class_name.split("::").last().unwrap_or(class_name);
-            return Ok(format!("{}-{}", prefix, class_short.to_lowercase()));
+            return format!("{}-{}", prefix, class_short.to_lowercase());
         }
     }
 
@@ -378,7 +391,7 @@ pub fn name_community(
         .map(|(kw, _)| kw.clone())
         .unwrap_or_else(|| "core".to_string());
 
-    Ok(format!("{}-{}", prefix, keyword))
+    format!("{}-{}", prefix, keyword)
 }
 
 pub fn run_clustering(store: &GraphStore) -> Result<Vec<Community>> {
@@ -452,5 +465,72 @@ impl Clusterer {
     pub fn cluster_graph() -> Result<()> {
         // TODO: Implement Leiden clustering
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::store::GraphNode;
+
+    fn node(name: &str, file: &str, parent: Option<&str>) -> GraphNode {
+        GraphNode {
+            rowid: 0,
+            kind: "Function".into(),
+            name: name.into(),
+            qualified_name: format!("{file}::{name}"),
+            file_path: file.into(),
+            line_start: 1,
+            line_end: 1,
+            language: "typescript".into(),
+            parent_name: parent.map(str::to_string),
+            params: None,
+            return_type: None,
+            modifiers: None,
+            is_test: false,
+            file_hash: String::new(),
+            community: None,
+            community_name: None,
+            agent_author: None,
+            task_id: None,
+            worker_locked: false,
+            worktree: None,
+        }
+    }
+
+    fn members(nodes: &[GraphNode]) -> Vec<String> {
+        nodes.iter().map(|n| n.qualified_name.clone()).collect()
+    }
+
+    #[test]
+    fn a_community_is_named_for_its_directory_not_for_a_file_path() {
+        // Both spellings of one layout, symbols whose parent is their own file.
+        for (file, expected_dir) in [
+            ("C:\\work\\src\\tabs\\graph.tsx", "tabs-"),
+            ("/home/dev/src/tabs/graph.tsx", "tabs-"),
+        ] {
+            let nodes = vec![
+                node("renderCity", file, Some(file)),
+                node("renderCity2", file, Some(file)),
+                node("renderCity3", file, Some(file)),
+            ];
+            let name = community_label(&members(&nodes), &nodes);
+            assert!(name.starts_with(expected_dir), "{file} gave {name}");
+            assert!(
+                !name.contains('\\') && !name.contains('/') && !name.contains(':'),
+                "a name must not carry a path: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_real_class_still_names_its_community() {
+        let file = "C:\\work\\src\\store\\cart.ts";
+        let nodes = vec![
+            node("add", file, Some("Cart")),
+            node("remove", file, Some("Cart")),
+            node("total", file, Some("Cart")),
+        ];
+        assert_eq!(community_label(&members(&nodes), &nodes), "store-cart");
     }
 }
