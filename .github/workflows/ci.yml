@@ -78,8 +78,17 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+      # On failure the compiler errors (not the ~400 warnings) are repeated as one
+      # annotation, readable without signing in to download the job log. The
+      # step was red from 2026-11-12 with only "exit code 101" visible.
       - name: Clippy
-        run: cargo clippy --workspace --all-targets
+        shell: bash
+        run: |
+          if ! cargo clippy --workspace --all-targets 2>&1 | tee clippy.log; then
+            detail=$(awk '/^error/ {n=8} n>0 && c<120 {print substr($0,1,400); n--; c++}' clippy.log | awk 'BEGIN{ORS="%0A"} {print}')
+            echo "::error title=Clippy errors::$detail"
+            exit 1
+          fi
 
       # --all-targets, not --lib: integration tests under src-tauri/tests/ must
       # actually run. With --lib they are silently skipped and the job is green.
