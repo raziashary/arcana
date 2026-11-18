@@ -159,7 +159,7 @@ export function AgentLiveCard({ agentId }: Props) {
               padding:       '1px 5px',
               marginLeft:    4,
               background:    'var(--warning)',
-              color:         'var(--text-dim)',
+              color:         'var(--text-on-accent)',
               borderRadius:  6,
               fontWeight:    700,
               cursor:        'pointer',
