@@ -22,7 +22,9 @@
 // So the emitters live here. There is no way to emit a terminal event without
 // going through the guard, and therefore no way to emit two.
 
-use crate::events::{emit_agent_done, emit_agent_error, AgentDonePayload, AgentErrorPayload};
+use crate::events::{
+    emit_agent_done, emit_agent_error, AgentDonePayload, AgentErrorKind, AgentErrorPayload,
+};
 
 /// Guarantees exactly one terminal event for a run.
 ///
@@ -62,6 +64,15 @@ impl TerminalEventGuard {
 
     /// The run failed. Consumes the guard's obligation.
     pub fn error(&mut self, message: impl Into<String>) {
+        self.finish_with(AgentErrorKind::Failed, message.into());
+    }
+
+    /// The user stopped the run. Same single terminal event, typed so it is not shown as a failure.
+    pub fn cancelled(&mut self, message: impl Into<String>) {
+        self.finish_with(AgentErrorKind::Cancelled, message.into());
+    }
+
+    fn finish_with(&mut self, kind: AgentErrorKind, message: String) {
         if self.fired {
             tracing::error!(
                 "a second terminal event was suppressed for session {}",
@@ -72,7 +83,8 @@ impl TerminalEventGuard {
         self.fired = true;
         emit_agent_error(AgentErrorPayload {
             session_id: self.session_id.clone(),
-            message: message.into(),
+            message,
+            kind,
         });
     }
 
@@ -101,6 +113,7 @@ impl Drop for TerminalEventGuard {
         emit_agent_error(AgentErrorPayload {
             session_id: self.session_id.clone(),
             message: "The turn ended without reporting a result.".to_string(),
+            kind: AgentErrorKind::Failed,
         });
     }
 }
@@ -136,6 +149,26 @@ mod tests {
         g.done(payload("s2"));
         g.error("and again");
         assert!(g.has_fired(), "still exactly one");
+    }
+
+    #[test]
+    fn a_cancelled_run_reports_once_and_is_typed_apart_from_a_failure() {
+        let mut g = TerminalEventGuard::new("s3c");
+        g.cancelled("The run was cancelled.");
+        assert!(g.has_fired());
+        g.error("and then a failure");
+        assert!(g.has_fired(), "still exactly one");
+
+        let wire = |kind| {
+            serde_json::to_value(AgentErrorPayload {
+                session_id: "s".into(),
+                message: "m".into(),
+                kind,
+            })
+            .unwrap()
+        };
+        assert_eq!(wire(AgentErrorKind::Cancelled)["kind"], "cancelled");
+        assert_eq!(wire(AgentErrorKind::Failed)["kind"], "failed");
     }
 
     #[test]

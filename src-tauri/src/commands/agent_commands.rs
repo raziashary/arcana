@@ -216,6 +216,7 @@ pub async fn send_message(
                 arcana_core::events::emit_agent_error(arcana_core::events::AgentErrorPayload {
                     session_id: session_id_c.clone(),
                     message: format!("Unsupported provider: {provider_id_c}"),
+                    kind: arcana_core::events::AgentErrorKind::Failed,
                 });
                 let mut s = state_clone.lock_tolerant();
                 if let Some(agent) = s.agents.get_mut(&session_id_c) {

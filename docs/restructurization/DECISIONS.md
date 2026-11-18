@@ -421,3 +421,10 @@ Two read-only reviews ran over the 12 R3 commits (implementation, and the first-
 - **Stale text fixed:** the in-app Docs tab no longer documents the deleted Default Worker Budget, `list_skills`, `import_skill`; the empty epic view no longer names `create_phased_task`; three module headers. The contrast gate now also measures the hover and selection tints over the page and cards.
 - **Left as is:** `masked_last4` is returned but unused by the frontend (INV-12 gate checks only return types); dashboard refresh now runs app-wide on worker events
   (unmeasured, `HARDENING_BACKLOG.md`); some Memory modifier classes have no CSS rule (cosmetic).
+
+## D-025 · A cancel is typed, and the daily-limit alert becomes a toast — 2026-11-18, mine
+
+- **Typed cancel (`P7-09..11`):** the chat told a Stop from a failure by matching the engine's fixed sentence, so any failure whose text began with that sentence would be drawn as "Stopped.", and a reworded engine message would turn every Stop into a red error. `agent:error` now carries `kind`
+  (`failed` or `cancelled`); the engine's two cancel exits call `TerminalEventGuard::cancelled`, every other exit stays `failed`, and `isCancellation` is deleted. A second terminal event is still suppressed. This is an addition to one payload both ends ship together, not a contract an outside consumer has.
+- **Daily-limit toast (`P7-05..08`):** D-024 found that nothing showed the cost alert. It now raises one toast per day, cap and severity (a warning past the cap, an error past 110% of it) that says what to do (raise or turn off the limit in Settings). The alert array stays, bounded.
+- **Not changed:** the other error classes are still matched by text (`HARDENING_BACKLOG.md`).

@@ -281,10 +281,20 @@ pub struct AgentDonePayload {
     pub cost_usd: f64,
 }
 
+/// Why a turn ended without a result. A cancel is the user's own Stop, not a failure, so
+/// the UI must not draw it as one; it used to tell them apart by matching the message text.
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentErrorKind {
+    Failed,
+    Cancelled,
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct AgentErrorPayload {
     pub session_id: String,
     pub message: String,
+    pub kind: AgentErrorKind,
 }
 
 #[derive(Debug, Serialize, Clone)]

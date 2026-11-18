@@ -379,7 +379,7 @@ impl AgentEngine {
                 mgr.abort_children_of(session_id).await;
             }
             turn_timer.set_outcome("cancelled");
-            terminal.error("The run was cancelled before it started.");
+            terminal.cancelled("The run was cancelled before it started.");
             return Err(ArcanaError::Cancelled);
         }
 
@@ -1420,7 +1420,7 @@ impl AgentEngine {
 
         if cancelled_during_run {
             turn_timer.set_outcome("cancelled");
-            terminal.error("The run was cancelled.");
+            terminal.cancelled("The run was cancelled.");
             return Err(ArcanaError::Cancelled);
         }
 

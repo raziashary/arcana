@@ -2,6 +2,7 @@
 import { create } from 'zustand';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { useToastStore } from './toastStore';
 
 // Matches CostUpdatePayload in events.rs (EVT_COST_UPDATE = "cost:update")
 interface CostUpdatePayload {
@@ -153,6 +154,8 @@ let realtimeUnlisteners: Array<() => void> = [];
 // True while `startRealtimeUpdates` awaits its listeners, so a second call cannot register a second set.
 let realtimeStarting = false;
 const MAX_BUDGET_ALERTS = 50;
+// One toast per crossing (per day, cap and severity): `cost:update` keeps arriving above the cap.
+let lastBudgetToastKey = '';
 
 // Doc 02 Phase 3.1 — uniform error extraction for the per-invoke catches.
 // Tauri rejects with either a string (the Rust error chain stringified) or
@@ -413,6 +416,17 @@ export const useDashboardStore = create<DashboardState>((set, get) => ({
             budget_limit: dailyBudget,
           };
           get().addBudgetAlert(alert);
+
+          const toastKey = `${new Date().toDateString()}|${dailyBudget}|${alert.type}`;
+          if (toastKey !== lastBudgetToastKey) {
+            lastBudgetToastKey = toastKey;
+            useToastStore.getState().addToast({
+              title: 'Daily spend limit reached',
+              message: `Today's spend is $${event.payload.total_today.toFixed(2)} against your $${dailyBudget.toFixed(2)} limit. Raise or turn off the limit in Settings, Daily Spend Ceiling.`,
+              type: alert.type === 'critical' ? 'error' : 'warning',
+              durationMs: 12000,
+            });
+          }
         }
       });
 

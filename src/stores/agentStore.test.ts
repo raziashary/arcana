@@ -173,11 +173,18 @@ describe('a failed turn is always shown', () => {
     expect(useAgentStore.getState().messages.at(-1)?.role).toBe('assistant')
   })
 
+  it('shows a failure whose text mentions a cancel as a failure: the kind decides, not the words', async () => {
+    await useAgentStore.getState().setupListeners('session-1')
+    useAgentStore.getState().startStreaming('session-1')
+    emit('agent:error', { session_id: 'session-1', message: 'The run was cancelled.', kind: 'failed' })
+    expect(useAgentStore.getState().messages.at(-1)?.content).toMatch(/^Error: The run was cancelled/)
+  })
+
   it('shows a stopped turn as "Stopped.", not as an error', async () => {
     await useAgentStore.getState().setupListeners('session-1')
     useAgentStore.getState().startStreaming('session-1')
     emit('agent:token', { session_id: 'session-1', text: 'Half an answer' })
-    emit('agent:error', { session_id: 'session-1', message: 'The run was cancelled.' })
+    emit('agent:error', { session_id: 'session-1', message: 'The run was cancelled.', kind: 'cancelled' })
     const contents = useAgentStore.getState().messages.map(m => m.content)
     expect(contents).toContain('Half an answer')
     expect(contents.at(-1)).toBe('Stopped.')

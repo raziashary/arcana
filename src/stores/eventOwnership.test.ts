@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAgentLiveStore } from './agentLiveStore'
 import { useDashboardStore } from './dashboardStore'
+import { useToastStore } from './toastStore'
 
 // A stand-in for Tauri's event bus: handlers by event name, and a count of the
 // ones still registered.
@@ -72,7 +73,10 @@ describe('events that arrive while no tab is mounted', () => {
   // The listener runs from launch, so its threshold is the user's cap, read at start,
   // not the store's literal seed.
   describe('cost updates against the daily cap', () => {
-    beforeEach(() => useDashboardStore.setState({ budgetAlerts: [], realtimeEnabled: false }))
+    beforeEach(() => {
+      useDashboardStore.setState({ budgetAlerts: [], realtimeEnabled: false })
+      useToastStore.getState().clearAll()
+    })
 
     it('raise an alert at the cap the user set, not at the seed', async () => {
       backend.cap = { enabled: true, limit_usd: 5 }
@@ -81,11 +85,18 @@ describe('events that arrive while no tab is mounted', () => {
 
       emit('cost:update', { total_today: 4, tokens_in: 1, tokens_out: 1 })
       expect(useDashboardStore.getState().budgetAlerts).toHaveLength(0)
-      emit('cost:update', { total_today: 6, tokens_in: 1, tokens_out: 1 })
+      emit('cost:update', { total_today: 5.2, tokens_in: 1, tokens_out: 1 })
 
       const alerts = useDashboardStore.getState().budgetAlerts
       expect(alerts).toHaveLength(1)
       expect(alerts[0].budget_limit).toBe(5)
+
+      // The user sees it, once: further updates above the cap add alerts but no second toast.
+      emit('cost:update', { total_today: 5.4, tokens_in: 1, tokens_out: 1 })
+      const toasts = useToastStore.getState().toasts
+      expect(toasts).toHaveLength(1)
+      expect(toasts[0].type).toBe('warning')
+      expect(toasts[0].message).toContain('$5.20 against your $5.00 limit')
       store.stopRealtimeUpdates()
     })
 
@@ -97,6 +108,7 @@ describe('events that arrive while no tab is mounted', () => {
       emit('cost:update', { total_today: 500, tokens_in: 1, tokens_out: 1 })
 
       expect(useDashboardStore.getState().budgetAlerts).toHaveLength(0)
+      expect(useToastStore.getState().toasts).toHaveLength(0)
       store.stopRealtimeUpdates()
     })
 
