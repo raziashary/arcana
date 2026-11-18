@@ -87,11 +87,8 @@ jobs:
       - name: Clippy
         shell: bash
         run: |
-          set +e
-          cargo clippy --workspace --all-targets 2>&1 | tee clippy.log
-          code=${PIPESTATUS[0]}
-          if [ "$code" -ne 0 ]; then
-            echo "::error::clippy exited $code after $(wc -l < clippy.log) log lines"
+          if ! cargo clippy --workspace --all-targets --color never 2>&1 | tee clippy.log; then
+            echo "::error::clippy failed after $(wc -l < clippy.log) log lines"
             grep -E '^error|panicked at|internal compiler error|could not compile' clippy.log | head -9 | cut -c1-300 | while IFS= read -r l; do echo "::error::$l"; done
             tail -n 10 clippy.log | cut -c1-300 | while IFS= read -r l; do echo "::notice::$l"; done
             exit 1
