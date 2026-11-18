@@ -153,11 +153,11 @@ Goal: a new user reaches a working agent turn, errors are visible, nothing is lo
 
 | Task | Scope | Proof |
 |---|---|---|
-| `P9-05` v1 | Windows installer (`installers/wix/`) builds, installs, launches | Smoke |
+| `P9-05` v1 | Windows installer builds, installs, launches. **Corrected 2026-11-18 (D-026):** it is the NSIS installer from the Tauri bundler (`bundle.targets`), driven by `installers/wix/build-msi.ps1` (the directory name is historical; no WiX is used). A release build needs `ARCANA_UPDATE_PUBKEY`, or `ARCANA_ALLOW_NO_UPDATER=1` for v1 | Smoke |
 | `P9-09`, `P9-10` v1 | No `.py`, sidecar or dev `.env` inside the installer; installed size recorded | Gate |
 | `P9-15` v1 | **Headline acceptance** on a clean Windows machine, from the shipped installer: install, enter key, hand over a task, receive a build-verified artifact (`S9-01`, `S9-03`) | Smoke |
 | `P9-02` | Windows code-signing certificate (Razi's action). Without it the installer works but shows a SmartScreen warning, which matters now that the whole company runs Windows. **Approved 2026-11-04 (D-009):** the build signs when a certificate is supplied and ships unsigned until then | — |
-| `P9-03`, `P9-04`, `P9-11..14` | Production updater key, signed updates, rollback: **ship v1 with the updater inert** (the README already says no feed exists). `S9-02` goes with it | — |
+| `P9-03`, `P9-04`, `P9-11..14` | Production updater key, signed updates, rollback: **ship v1 with the updater inert** (the README already says no feed exists). `S9-02` goes with it. **Done 2026-11-18 (D-026):** the release build compiles with no key only when `ARCANA_ALLOW_NO_UPDATER=1` is set | — |
 | `P9-01`, `P9-06..08`, `P9-16` | Apple/Linux installers, notarisation, cross-platform parity: backlog | — |
 
 ## 5. Status snapshot

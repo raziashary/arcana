@@ -85,18 +85,8 @@ if (Test-Path $DistDir) {
     Remove-Item -Path $DistDir -Recurse -Force
 }
 
-# WiX v4 (installed as dotnet tool or standalone)
-$wixInstalled = (Get-Command "wix" -ErrorAction SilentlyContinue) -or
-                (Get-Command "heat" -ErrorAction SilentlyContinue)
-if (-not $wixInstalled) {
-    Write-Host "  Installing WiX v4 as dotnet tool..." -ForegroundColor Yellow
-    try {
-        dotnet tool install --global wix
-    } catch {
-        Write-Error "Failed to install WiX v4: $_"
-        exit 1
-    }
-}
+# The installer is the NSIS one the Tauri bundler produces (`bundle.targets` in
+# tauri.conf.json); no WiX toolset is used, so none is installed here.
 
 if (-not $Version) {
     $Version = Get-CargoVersion
@@ -145,7 +135,12 @@ $env:ARCANA_CHANNEL = $Channel
 # it fails to compile on purpose, rather than shipping a binary that refuses
 # every update it is offered.
 if (-not $env:ARCANA_UPDATE_PUBKEY) {
-    Write-Host "  ARCANA_UPDATE_PUBKEY not set - this build cannot verify updates" -ForegroundColor Yellow
+    if ($env:ARCANA_ALLOW_NO_UPDATER -eq "1") {
+        Write-Host "  ARCANA_ALLOW_NO_UPDATER=1 - building with updates off (D-026)" -ForegroundColor Yellow
+    } else {
+        Write-Error "Set ARCANA_UPDATE_PUBKEY (docs/updater-signing.md), or ARCANA_ALLOW_NO_UPDATER=1 to build with updates off. A release build without either does not compile."
+        exit 1
+    }
 }
 
 try {

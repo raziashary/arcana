@@ -5,6 +5,8 @@ detached Ed25519 signature verify against the key compiled into the running
 binary. Both are hard failures in every build profile
 (`src-tauri/src/updater/verify.rs`).
 
+> **v1 exception (D-026).** v1 ships with the updater inert. Until the key below exists, a release build is made with `ARCANA_ALLOW_NO_UPDATER=1` and no `ARCANA_UPDATE_PUBKEY`; that build can never verify an update. Once you generate the key, set the secret and stop passing the flag.
+
 That makes signing part of releasing. A release published without `.sig` and
 `.sha256` assets is uninstallable by every client, and the release workflow
 fails rather than publishing one.

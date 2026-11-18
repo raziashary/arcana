@@ -22,14 +22,27 @@ use std::path::Path;
 /// Fixed at compile time; see the module header for why there is no override.
 const EMBEDDED_PUBLIC_KEY: Option<&str> = option_env!("ARCANA_UPDATE_PUBKEY");
 
-/// A release build with no signing key must not exist. Such a binary could only
-/// ever refuse updates, which reads to a user as "updates are broken" rather than
-/// "this build was produced without its key". Fail at compile time instead.
+/// Set to `1` at build time to build a release with no update-signing key at all (D-026: v1
+/// ships with the updater inert). Anything else, or unset, keeps the guard below.
+const ALLOW_NO_UPDATER: Option<&str> = option_env!("ARCANA_ALLOW_NO_UPDATER");
+
+const fn no_updater_is_allowed() -> bool {
+    match ALLOW_NO_UPDATER {
+        Some(value) => value.len() == 1 && value.as_bytes()[0] == b'1',
+        None => false,
+    }
+}
+
+/// A release build with no signing key must not exist unless it says so. Such a binary could
+/// only ever refuse updates, which reads to a user as "updates are broken" rather than "this
+/// build was produced without its key". Fail at compile time instead, unless the builder opted
+/// out explicitly with `ARCANA_ALLOW_NO_UPDATER=1`.
 #[cfg(not(debug_assertions))]
 const _RELEASE_REQUIRES_PUBKEY: () = {
-    if EMBEDDED_PUBLIC_KEY.is_none() {
+    if EMBEDDED_PUBLIC_KEY.is_none() && !no_updater_is_allowed() {
         panic!(
-            "ARCANA_UPDATE_PUBKEY must be set at build time for release builds. \
+            "ARCANA_UPDATE_PUBKEY must be set at build time for release builds, or \
+             ARCANA_ALLOW_NO_UPDATER=1 to build with updates off. \
              See docs/updater-signing.md for key generation and CI setup."
         );
     }
@@ -72,8 +85,8 @@ pub fn verify_checksum(file_path: &Path, expected_hex: &str) -> Result<()> {
 pub fn verify_signature(file_path: &Path, sig_bytes: &[u8]) -> Result<()> {
     let pubkey_b64 = EMBEDDED_PUBLIC_KEY.ok_or_else(|| {
         anyhow!(
-            "Update refused: this build has no update-signing public key compiled in, \
-             so no update can be verified. Rebuild with ARCANA_UPDATE_PUBKEY set."
+            "Updates are not enabled in this build: no update-signing public key was compiled \
+             in, so no update can be verified."
         )
     })?;
     verify_signature_with_key(file_path, sig_bytes, pubkey_b64)

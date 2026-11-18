@@ -428,3 +428,13 @@ Two read-only reviews ran over the 12 R3 commits (implementation, and the first-
   (`failed` or `cancelled`); the engine's two cancel exits call `TerminalEventGuard::cancelled`, every other exit stays `failed`, and `isCancellation` is deleted. A second terminal event is still suppressed. This is an addition to one payload both ends ship together, not a contract an outside consumer has.
 - **Daily-limit toast (`P7-05..08`):** D-024 found that nothing showed the cost alert. It now raises one toast per day, cap and severity (a warning past the cap, an error past 110% of it) that says what to do (raise or turn off the limit in Settings). The alert array stays, bounded.
 - **Not changed:** the other error classes are still matched by text (`HARDENING_BACKLOG.md`).
+
+## D-026 · v1 builds its release installer with the updater off, by an explicit flag — 2026-11-18, Razi (policy), mine (the rest)
+
+`P9-03`/`P9-04` ship v1 with the updater inert, but `updater/verify.rs` refuses to compile a release build without `ARCANA_UPDATE_PUBKEY`, so the installer could not be built at all
+and no production key exists (generating one is Razi's action, `docs/updater-signing.md`). Razi chose an **explicit opt-out**: `ARCANA_ALLOW_NO_UPDATER=1` lets a release build compile with no key.
+
+- The guard stays for everything else: with neither variable the release build still fails, with a message naming both; any value other than `1` does not opt out. `build.rs` reruns on a change of either.
+- A build with the flag has no trust root, so no update can ever verify (`verify_signature` says "Updates are not enabled in this build"). Update checks were already off without `ARCANA_UPDATE_URL`.
+- CI's `build-release.yml` still supplies the real key and is unchanged; the flag is for the v1 installer built before a key exists. When Razi generates the key, drop the flag.
+- **Found while reading the build:** the installer is the NSIS one the Tauri bundler makes (`bundle.targets`), not a WiX MSI as `SHIP_PLAN.md` said; `installers/wix/build-msi.ps1` was installing the WiX toolset (a global `dotnet tool`) that nothing uses. The install step is removed, the plan's wording is corrected, and the unused `installers/wix/fragments/ArcanaExtensions.wxs` is in `HARDENING_BACKLOG.md`.
