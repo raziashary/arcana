@@ -78,15 +78,22 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      # On failure the compiler errors (not the ~400 warnings) are repeated as one
-      # annotation, readable without signing in to download the job log. The
-      # step was red from 2026-11-12 with only "exit code 101" visible.
+      # On failure the compiler errors (not the ~400 warnings) are repeated as
+      # one annotation per line, and the last lines of the log as notices, so the
+      # cause is readable without signing in to download the job log. The step
+      # was red from 2026-11-12 with only "exit code 101" visible, and a first
+      # attempt that joined the errors into one multi-line annotation showed
+      # nothing, hence one line per annotation.
       - name: Clippy
         shell: bash
         run: |
-          if ! cargo clippy --workspace --all-targets 2>&1 | tee clippy.log; then
-            detail=$(awk '/^error/ {n=8} n>0 && c<120 {print substr($0,1,400); n--; c++}' clippy.log | awk 'BEGIN{ORS="%0A"} {print}')
-            echo "::error title=Clippy errors::$detail"
+          set +e
+          cargo clippy --workspace --all-targets 2>&1 | tee clippy.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            echo "::error::clippy exited $code after $(wc -l < clippy.log) log lines"
+            grep -E '^error|panicked at|internal compiler error|could not compile' clippy.log | head -9 | cut -c1-300 | while IFS= read -r l; do echo "::error::$l"; done
+            tail -n 10 clippy.log | cut -c1-300 | while IFS= read -r l; do echo "::notice::$l"; done
             exit 1
           fi
 
