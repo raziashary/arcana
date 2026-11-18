@@ -113,8 +113,7 @@
         "languages": [
           "English"
         ],
-        "installerIcon": "icons/icon.ico",
-        "headerImage": "icons/128x128.png"
+        "installerIcon": "icons/icon.ico"
       }
     }
   },

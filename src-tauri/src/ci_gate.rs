@@ -7535,4 +7535,48 @@ fn effect() { ToolEffect::Execute }"#;
             undefined.join("\n")
         );
     }
+
+    /// `TG-P9-09` (P9-09, P9-10) — the Windows installer carries the application binary and nothing
+    /// else: no bundled resources, no external binaries or sidecars, and no `.py` or `.env` file
+    /// named anywhere in the bundle configuration. Built 2026-11-18, the NSIS script packed one
+    /// `File` (the exe) and its resource and external-binary sections were empty; this keeps them so.
+    #[test]
+    fn tg_p9_09_the_installer_bundles_the_binary_and_no_scripts_sidecars_or_env_files() {
+        let conf: serde_json::Value =
+            serde_json::from_str(&read_source(&repo_root().join("src-tauri/tauri.conf.json")))
+                .expect("parse tauri.conf.json");
+        let bundle = &conf["bundle"];
+        assert!(
+            bundle.is_object(),
+            "tauri.conf.json has no bundle section; the gate lost its input"
+        );
+        assert!(
+            bundle["targets"]
+                .as_array()
+                .is_some_and(|t| t.iter().any(|v| v == "nsis")),
+            "the Windows installer target (nsis) is not in bundle.targets"
+        );
+
+        let resources = bundle["resources"].clone();
+        let empty = resources.is_null()
+            || resources.as_array().is_some_and(|r| r.is_empty())
+            || resources.as_object().is_some_and(|r| r.is_empty());
+        assert!(empty, "the installer would bundle resources: {resources}");
+        assert!(
+            bundle["externalBin"].is_null()
+                || bundle["externalBin"]
+                    .as_array()
+                    .is_some_and(|r| r.is_empty()),
+            "the installer would bundle external binaries (sidecars): {}",
+            bundle["externalBin"]
+        );
+
+        let text = bundle.to_string();
+        for banned in [".py", ".env", "sidecar"] {
+            assert!(
+                !text.contains(banned),
+                "bundle configuration names `{banned}`; the installer must not carry it: {text}"
+            );
+        }
+    }
 }
