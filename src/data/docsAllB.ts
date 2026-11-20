@@ -8,7 +8,7 @@ export const B_SECTIONS: DocSection[] = [
   /* ── 05: Recipes System ─────────────────────────────────────────── */
   {
     id: 'recipes', num: '05', title: 'Recipes System', category: 'Automation', icon: 'clock-play',
-    lead: 'Recipes are YAML-defined workflows that schedule autonomous agent execution. They are the backbone of the worker fleet, enabling 24/7 automated development.',
+    lead: 'Recipes are YAML-defined workflows that schedule autonomous worker runs. They are the backbone of the worker fleet, enabling 24/7 automated development.',
     anchors: ['YAML Structure', 'Cron Scheduling', 'Recipe Execution', 'Scheduler', 'Runner', 'Default Recipes', 'Parameters', 'Recipe UI'],
     blocks: [
       { t: 'h2', text: 'Recipe YAML Structure' },
@@ -29,7 +29,7 @@ instructions: |
       { t: 'h2', text: 'Cron Scheduling' },
       { t: 'prose', text: 'Recipes use POSIX cron expressions (5 fields: minute hour day month weekday):' },
       { t: 'table', headers: ['Expression', 'Meaning'], rows: [
-        ['*/2 * * * *', 'Every 2 minutes (Supervisor, Worker Backend, Worker Frontend, QC Agent)'],
+        ['*/2 * * * *', 'Every 2 minutes (Supervisor, Worker Backend, Worker Frontend, QC Worker)'],
         ['*/5 * * * *', 'Every 5 minutes (Worker Platform, Worker MCP)'],
         ['*/10 * * * *', 'Every 10 minutes (Worker Cleanup)'],
         ['0 * * * *', 'Every hour on the hour'],
@@ -37,7 +37,7 @@ instructions: |
         ['(none)', 'On-demand only — run manually from UI'],
       ]},
       { t: 'h2', text: 'How a recipe runs' },
-      { t: 'prose', text: 'On its cron beat the scheduler checks the worker is in a runnable state, then hands the recipe to the engine in this process. The recipe\'s instructions become that worker\'s own instructions, appended to the invariant core every agent receives and to your ARCANA.md.' },
+      { t: 'prose', text: 'On its cron beat the scheduler checks the worker is in a runnable state, then hands the recipe to the engine in this process. The recipe\'s instructions become that worker\'s own instructions, appended to the invariant core the assistant and every worker receive and to your ARCANA.md.' },
       { t: 'h2', text: 'Recipe Scheduler' },
       { t: 'prose', text: 'Implementation: arcana-core/src/recipes/scheduler.rs' },
       { t: 'list', items: [
@@ -63,13 +63,13 @@ instructions: |
       { t: 'h2', text: 'Default System Recipes' },
       { t: 'prose', text: 'Location: src-tauri/src/recipes/defaults.rs — seeded on first launch.' },
       { t: 'list', items: [
-        'supervisor-poll — Supervisor agent, every 2 minutes',
+        'supervisor-poll — Supervisor, every 2 minutes',
         'worker-backend-poll — Backend worker, every 2 minutes',
         'worker-frontend-poll — Frontend worker (React/TypeScript), every 2 minutes',
         'worker-platform-poll — Platform/infra worker, every 5 minutes',
         'worker-mcp-poll — MCP server developer, every 5 minutes',
         'worker-cleanup-poll — Code cleanup/refactoring, every 10 minutes',
-        'qc-agent-poll — QC agent (PR review), every 2 minutes',
+        'qc-agent-poll — QC worker (PR review), every 2 minutes',
       ]},
       { t: 'h2', text: 'Recipe Parameters' },
       { t: 'code', lang: 'yaml', code: `parameters:
@@ -90,7 +90,7 @@ instructions: |
         'Create new recipes',
         'System recipes marked as read-only',
         'Permission mode badge (autonomous/manual_approval)',
-        'Agent role badge, schedule display, model display',
+        'Worker role badge, schedule display, model display',
       ]},
     ],
   },
@@ -151,9 +151,9 @@ You are adding JWT-based authentication at \`{{endpoint_path}}\`.
 [SkillParameterModal opens]
 User fills: endpoint_path="/api/auth/login", jwt_secret_env="JWT_SECRET"
 [Skill renders into chat input]
-User sends message → Agent executes the workflow` },
+User sends message → Arcana executes the workflow` },
       { t: 'h2', text: 'Programmatic Invocation' },
-      { t: 'prose', text: 'Fleet workers can invoke skills programmatically via Tauri commands. Use cases: Supervisor invokes skills for common patterns; workers use skills for standardized debugging workflows; QC agent uses skills for consistent review procedures.' },
+      { t: 'prose', text: 'Fleet workers can invoke skills programmatically via Tauri commands. Use cases: Supervisor invokes skills for common patterns; workers use skills for standardized debugging workflows; the QC worker uses skills for consistent review procedures.' },
       { t: 'code', lang: 'rust', code: `let result = execute_skill("add-auth-endpoint", params).await?;
 // result.rendered contains the full markdown with parameters substituted` },
       { t: 'h2', text: 'Skills Palette UI' },
@@ -174,7 +174,7 @@ User sends message → Agent executes the workflow` },
 4. SkillEngine renders template with parameters substituted
 5. Rendered markdown inserted into chat input
 6. User sends message
-7. Agent executes the workflow as if user typed it directly` },
+7. Arcana executes the workflow as if user typed it directly` },
       { t: 'h2', text: 'Default Built-in Skills' },
       { t: 'prose', text: 'Arcana ships with 20+ pre-built skills. Custom skills stored in ~/.arcana/skills/custom/. User-created skills via the custom category.' },
       { t: 'table', headers: ['Category', 'Skill', 'Purpose'], rows: [
@@ -189,7 +189,7 @@ User sends message → Agent executes the workflow` },
         ['DevOps', 'dockerize-app', 'Containerize application'],
         ['DevOps', 'setup-ci-cd', 'Setup CI/CD pipeline'],
         ['DevOps', 'deploy-to-staging', 'Deploy to staging environment'],
-        ['Fleet', 'create-worker-task', 'Create task for worker agent'],
+        ['Fleet', 'create-worker-task', 'Create task for a worker'],
         ['Fleet', 'monitor-fleet-health', 'Check fleet status and health'],
         ['Fleet', 'analyze-fleet-metrics', 'Analyze fleet performance metrics'],
       ]},
@@ -214,7 +214,7 @@ User sends message → Agent executes the workflow` },
     blocks: [
       { t: 'h2', text: 'Hook Event Types' },
       { t: 'table', headers: ['Category', 'Events'], rows: [
-        ['Agent Lifecycle', 'SessionStart, SessionEnd, AgentLoopStart, AgentLoopEnd, OnError'],
+        ['Run lifecycle', 'SessionStart, SessionEnd, AgentLoopStart, AgentLoopEnd, OnError'],
         ['Tool Execution', 'PreToolUse, PostToolUse, OnToolError, OnPermissionRequest'],
         ['File System', 'PreFileRead, PostFileWrite, PreFileDelete, OnCheckpointCreate, OnCheckpointRestore'],
         ['Git', 'PreCommit, PostCommit, PrePush, OnBranchSwitch, OnMergeConflict'],
@@ -283,7 +283,7 @@ For each hook registered for event (sorted by priority):
        b. Log outcome (Executed/Blocked/Skipped/Failed)
        c. If action is Block → stop event propagation
     3. If conditions don't match → Skipped` },
-      { t: 'prose', text: 'Priority: hooks execute in priority order (lower number = higher priority). Block action stops the event from proceeding — the agent receives an error message from the hook.' },
+      { t: 'prose', text: 'Priority: hooks execute in priority order (lower number = higher priority). Block action stops the event from proceeding — the model receives an error message from the hook.' },
       { t: 'h2', text: 'Hook Execution Logs' },
       { t: 'prose', text: 'Stored in SQLite (~/.arcana/config.db). Fields: id, hook_id, hook_name, hook_type, outcome (Executed/Blocked/Skipped/Failed), output, error, executed_at, duration_ms. Retention: 30 days (configurable).' },
       { t: 'h2', text: 'Settings UI' },

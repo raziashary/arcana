@@ -7511,6 +7511,8 @@ fn effect() { ToolEffect::Execute }"#;
     /// assistant you chat with), worker, task, run, recipe (`reference/ui-anchor.md`,
     /// "Vocabulary"). Before this the app said "Agent Roster", "QC Agent",
     /// "Loading agents…" and "What should this agent do?" in 17 places.
+    /// The in-app Docs reference (`src/data/docsAll*`) is scanned too (D-030); the code
+    /// names it teaches (`AgentEngine`, `agent_role`, paths) are identifiers, not prose.
     #[test]
     fn tg_p7_15_interface_copy_does_not_say_agent() {
         // The scanner, both ways, so a gate that found nothing cannot pass.
@@ -7576,9 +7578,7 @@ fn effect() { ToolEffect::Execute }"#;
         let mut offenders = Vec::new();
         let mut scanned = 0;
         for (name, text) in &sources {
-            if !(name.ends_with(".tsx") || name.ends_with(".ts"))
-                || name.contains("src/data/docsAll")
-            {
+            if !(name.ends_with(".tsx") || name.ends_with(".ts")) {
                 continue;
             }
             scanned += 1;

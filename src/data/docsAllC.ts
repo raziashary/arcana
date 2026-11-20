@@ -12,7 +12,7 @@ export const C_SECTIONS: DocSection[] = [
     anchors: ['Workspace', 'Credential Storage', 'Daily Spend Ceiling', 'MCP Tools', 'Browser Testing', 'Providers', 'Model Parameters', 'GitHub', 'Workers', 'System Prompt', 'Hooks', 'Updates'],
     blocks: [
       { t: 'h2', text: '1. Workspace Folder' },
-      { t: 'prose', text: 'Sets the root directory for all Arcana agents (PA, Supervisor, Workers). All agents operate inside this folder. @path/to/file references in chat are relative to workspace. Default: None (agents use sandbox directories). Storage: workspaceStore.ts (localStorage).' },
+      { t: 'prose', text: 'Sets the root directory for Arcana (the PA, the Supervisor and the Workers). All of them operate inside this folder. @path/to/file references in chat are relative to workspace. Default: None (they use sandbox directories). Storage: workspaceStore.ts (localStorage).' },
       { t: 'h2', text: '2. Credential Storage' },
       { t: 'prose', text: 'Shows which backend holds your API keys — the OS keychain where one is available — and which keys are currently stored. Keys are never written to a config file and never placed in the process environment.' },
       { t: 'h2', text: '3. Daily Spend Ceiling' },
@@ -65,7 +65,7 @@ export const C_SECTIONS: DocSection[] = [
   /* ── 09: Dashboard Panel (Arcana Panel) ───────────────────────── */
   {
     id: 'dashboard', num: '09', title: 'Dashboard Panel (Arcana Panel)', category: 'Interface', icon: 'dashboard',
-    lead: 'The Arcana Panel is the central dashboard for monitoring the worker fleet and task board. It displays real-time agent status, task progress, and fleet metrics. Location: src/tabs/ArcanaPanel.tsx',
+    lead: 'The Arcana Panel is the central dashboard for monitoring the worker fleet and task board. It displays real-time worker status, task progress, and fleet metrics. Location: src/tabs/ArcanaPanel.tsx',
     anchors: ['Layout', 'Worker Roster', 'Task Board', 'Metrics Footer', 'Live Monitor', 'Worker Requests', 'Orphan Alert'],
     blocks: [
       { t: 'h2', text: 'Layout' },
@@ -92,7 +92,7 @@ export const C_SECTIONS: DocSection[] = [
       { t: 'table', headers: ['Column', 'Description'], rows: [
         ['Status Dot', 'Green = working, gray = idle, red = error. Glow effect when actively executing'],
         ['Tick Badge', 'RUN while a tick is in flight; OK or ERR for how the last one ended'],
-        ['Agent Name', 'Uppercase slug (e.g., SUPERVISOR, WORKER-BACK)'],
+        ['Worker Name', 'Uppercase slug (e.g., SUPERVISOR, WORKER-BACK)'],
         ['Current Task', 'Task ID + title if working, status message if idle'],
         ['Elapsed Time', 'MM:SS since task started or last tick'],
       ]},
@@ -100,7 +100,7 @@ export const C_SECTIONS: DocSection[] = [
       { t: 'table', headers: ['Column', 'Tasks Shown'], rows: [
         ['Ready', 'Tasks waiting for Supervisor assignment (backlog)'],
         ['In Progress', 'Worker is actively working — has lock file'],
-        ['QC Review', 'Worker completed, PR opened, QC agent reviewing'],
+        ['QC Review', 'Worker completed, PR opened, QC worker reviewing'],
         ['Done Today', 'Completed tasks filtered by today\'s date'],
       ]},
       { t: 'h3', text: 'Task Cards Show:' },
@@ -121,7 +121,7 @@ export const C_SECTIONS: DocSection[] = [
         ['QC Pass Rate', 'Percentage of QC reviews that passed'],
       ]},
       { t: 'h2', text: 'Live Monitor' },
-      { t: 'prose', text: 'Real-time streaming output from active agents. Shows live tool execution, file operations, bash command output. Auto-scrolls to latest. Filter by agent. Powered by Tauri event channels (worker:stream events).' },
+      { t: 'prose', text: 'Real-time streaming output from active workers. Shows live tool execution, file operations, bash command output. Auto-scrolls to latest. Filter by worker. Powered by Tauri event channels (worker:stream events).' },
       { t: 'h2', text: 'Worker Requests Widget' },
       { t: 'prose', text: 'Displays pending worker → Supervisor requests needing attention. Auto-refreshes on worker:request event and every 60s. Actions: Acknowledge/Complete, Decline, add resolution note.' },
       { t: 'h2', text: 'Orphan Alert' },
@@ -158,7 +158,7 @@ FileSearch overlay (Ctrl/Cmd+P) — fuzzy file search` },
       ]},
       { t: 'h2', text: 'Code Viewer (Monaco)' },
       { t: 'prose', text: 'Location: src/components/ide/CodeViewer.tsx. Full Monaco Editor (VS Code\'s editor engine), read-only. Features: syntax highlighting, line numbers with active line highlighting, minimap, binary file detection, encoding detection, language auto-detection, goto line support.' },
-      { t: 'callout', text: 'Read-only is intentional: Arcana agents edit files via write_file and edit_file tools. The UI viewer is for exploration. Avoids stale-buffer bugs and prevents conflicts with agent operations.' },
+      { t: 'callout', text: 'Read-only is intentional: Arcana edits files via write_file and edit_file tools. The UI viewer is for exploration. Avoids stale-buffer bugs and prevents conflicts with those edits.' },
       { t: 'h3', text: 'Arcana Light Theme Colors' },
       { t: 'table', headers: ['Element', 'Color'], rows: [
         ['Background', '#FFFFFF'],
@@ -194,7 +194,7 @@ FileSearch overlay (Ctrl/Cmd+P) — fuzzy file search` },
         ['History', 'Full commit log, SHA/author/date/message, branch badges, relative time, click to see diff, Fetch/Push/Pull buttons'],
         ['Branches', 'Local + remote branches, current branch highlighted, create/delete/checkout, ahead/behind indicators'],
         ['Stash', 'Stash list, push/apply/drop/pop operations'],
-        ['Undo (Checkpoints)', 'Auto-snapshot timeline before agent ops, restore to any checkpoint state, checkpoint metadata (agent/task/operation)'],
+        ['Undo (Checkpoints)', 'Auto-snapshot timeline before each operation, restore to any checkpoint state, checkpoint metadata (worker/task/operation)'],
       ]},
       { t: 'h2', text: 'Keyboard Shortcuts' },
       { t: 'table', headers: ['Shortcut', 'Action'], rows: [
@@ -205,7 +205,7 @@ FileSearch overlay (Ctrl/Cmd+P) — fuzzy file search` },
       ]},
       { t: 'h2', text: 'Use Cases' },
       { t: 'list', items: [
-        'PA Mode: explore codebase, read files for context, navigate to lines via "Open in IDE from chat", review agent changes via Git panel, undo agent mistakes via Checkpoints',
+        'PA Mode: explore codebase, read files for context, navigate to lines via "Open in IDE from chat", review changes via Git panel, undo mistakes via Checkpoints',
         'Fleet Workers: workers don\'t use IDE directly (headless). Git ops done via tools (git2-rs). Checkpoints created automatically. Supervisor can review diffs via Git panel.',
         'Developers: full code exploration without external IDE, integrated git, visual diff review, symbol navigation, quick file search',
       ]},

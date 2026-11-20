@@ -130,7 +130,7 @@ Sections beyond §3 spec the layout itself — §4 global frame, §5 header, §6
 
 ## Vocabulary (P7-15)
 
-One word per thing in anything the user reads. "Agent" is an internal and event-name word (`agent:done`, `agent_loop_start`) and does not appear in interface copy. `TG-P7-15` (`src-tauri/src/ci_gate.rs`) fails the build on it as prose in a string, template literal or JSX text under `src/`; the in-app Docs reference text (`src/data/docsAll*`) is outside the gate and still uses it for technical terms.
+One word per thing in anything the user reads. "Agent" is an internal and event-name word (`agent:done`, `agent_loop_start`) and does not appear in interface copy. `TG-P7-15` (`src-tauri/src/ci_gate.rs`) fails the build on it as prose in a string, template literal or JSX text under `src/`; the in-app Docs reference text (`src/data/docsAll*`) is under the same gate, and keeps the word only inside code names (`AgentEngine`, `agent_role`, hook event names, paths).
 
 | Word | Means | Not |
 |---|---|---|

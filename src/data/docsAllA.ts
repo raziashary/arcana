@@ -8,7 +8,7 @@ export const A_SECTIONS: DocSection[] = [
   /* ── 01: What is Arcana? ──────────────────────────────────────── */
   {
     id: 'what', num: '01', title: 'What is Arcana?', category: 'Overview', icon: 'info-circle',
-    lead: 'A personal desktop workspace for multi-agent software development, with a native Rust agent engine and a React interface.',
+    lead: 'A personal desktop workspace for software development with an assistant and a fleet of workers, built on a native Rust engine and a React interface.',
     anchors: ['Vision', 'Why Build This?', 'Key Features', 'Tech Stack'],
     blocks: [
       { t: 'h2', text: 'Vision' },
@@ -16,35 +16,35 @@ export const A_SECTIONS: DocSection[] = [
       { t: 'prose', text: 'Arcana is being developed as a personal coding platform. Configure a provider key in Settings, select a model, and use chat, tasks, recipes, and coding tools as their development phases are verified.' },
       { t: 'h2', text: 'Why Build This?' },
       { t: 'h3', text: 'Claude Code Limitations' },
-      { t: 'list', items: ['Locked to Anthropic subscriptions — rate limits cripple 24/7 worker agents', '512,000-line source leak (March 31, 2026) exposed vulnerabilities', 'No model flexibility — cannot route workers to cheaper models', 'Proprietary — cannot audit, fork, or adapt'] },
+      { t: 'list', items: ['Locked to Anthropic subscriptions — rate limits cripple 24/7 workers', '512,000-line source leak (March 31, 2026) exposed vulnerabilities', 'No model flexibility — cannot route workers to cheaper models', 'Proprietary — cannot audit, fork, or adapt'] },
       { t: 'h3', text: 'Goose Limitations' },
-      { t: 'list', items: ['A general-purpose agent does not provide Arcana\'s local task board', 'The Supervisor → Worker → QC flow remains an Arcana development goal'] },
+      { t: 'list', items: ['A general-purpose assistant does not provide Arcana\'s local task board', 'The Supervisor → Worker → QC flow remains an Arcana development goal'] },
       { t: 'h3', text: 'Arcana Advantage' },
-      { t: 'list', items: ['Provider adapters for Google Gemini, Anthropic, OpenAI, and Groq', 'ARCANA.md instructions backed by SQLite', 'A local SQLite task board for the agent fleet', 'A native Rust tool loop shared across roles'] },
+      { t: 'list', items: ['Provider adapters for Google Gemini, Anthropic, OpenAI, and Groq', 'ARCANA.md instructions backed by SQLite', 'A local SQLite task board for the worker fleet', 'A native Rust tool loop shared across roles'] },
       { t: 'h2', text: 'Key Features' },
       { t: 'list', items: [
         'Model-agnostic: Google Gemini, Anthropic, OpenAI, or Groq',
         'Memory across sessions: episodic, semantic and procedural stores with relevance ranking and compaction',
         'A worker fleet: supervisor, five workers and QC, coordinated through a SQLite task board',
-        'ARCANA.md: your own instructions, global and per-repository, edited in the app and given to every agent',
+        'ARCANA.md: your own instructions, global and per-repository, edited in the app and given to the assistant and every worker',
         'MCP client: connect to GitHub, Slack, Adobe and your own MCP servers',
         'Skills & Recipes: reusable YAML workflows with cron scheduling',
         'One installer, no services to run: no Python, no Docker, no database to stand up',
         'One engine: the assistant, every fleet worker and every subagent run on the same in-process Rust engine',
         'Git integration: structured git operations via git2-rs',
-        'Cost tracking: real-time token spend per session, with per-agent and per-task reporting',
+        'Cost tracking: real-time token spend per session, with per-worker and per-task reporting',
       ]},
       { t: 'h2', text: 'Tech Stack' },
       { t: 'table', headers: ['Layer', 'Technology', 'Purpose'], rows: [
         ['Desktop Shell', 'Tauri v2 (Rust)', 'Cross-platform native wrapper (~15MB base)'],
-        ['Frontend', 'React 19 + TypeScript + Vite 8', 'Agent UI, chat, code editor, task board'],
-        ['State Management', 'Zustand', 'Global state (sessions, config, agent status)'],
+        ['Frontend', 'React 19 + TypeScript + Vite 8', 'Interface: chat, code editor, task board'],
+        ['State Management', 'Zustand', 'Global state (sessions, config, worker status)'],
         ['Styling', 'Tailwind CSS 3', 'Arcana interface styles'],
         ['Backend', 'Rust (Tauri commands)', 'Code editing tools, file I/O, command execution'],
         ['Provider Layer', 'Anthropic, OpenAI, Google, Groq', 'Multi-provider LLM abstraction'],
         ['MCP Health', 'reqwest', 'Liveness probes for user-configured external MCP servers'],
         ['Git Integration', 'git2-rs (libgit2)', 'Structured git operations, worktrees'],
-        ['Agent engine', 'Rust (arcana-core)', 'The tool loop every agent runs on — assistant, worker and subagent'],
+        ['Engine', 'Rust (arcana-core)', 'The tool loop the assistant, every worker and every subagent runs on'],
         ['Memory', 'Rust + SQLite', 'Episodic, semantic and procedural stores with relevance ranking'],
         ['Keychain', 'keyring crate', 'OS keychain integration for API keys'],
         ['Database', 'SQLite (rusqlite)', 'Session persistence, task board, worker registry'],
@@ -55,7 +55,7 @@ export const A_SECTIONS: DocSection[] = [
   /* ── 02: Core Architecture ─────────────────────────────────────── */
   {
     id: 'arch', num: '02', title: 'Core Architecture', category: 'Overview', icon: 'topology-star',
-    lead: 'Arcana is a Tauri v2 desktop application — a Rust backend and a React front end, in one process. Every agent it runs, from the interactive assistant to a fleet worker, runs on the same engine inside that process. There are no services to start and nothing to keep alive alongside it.',
+    lead: 'Arcana is a Tauri v2 desktop application — a Rust backend and a React front end, in one process. Everything it runs, from the interactive assistant to a fleet worker, runs on the same engine inside that process. There are no services to start and nothing to keep alive alongside it.',
     anchors: ['High-Level Diagram', 'The engine', 'The fleet', 'What runs where'],
     blocks: [
       { t: 'h2', text: 'High-Level Architecture Diagram' },
@@ -90,7 +90,7 @@ export const A_SECTIONS: DocSection[] = [
 The only things outside this process are the LLM provider you chose and any
 MCP servers you connected yourself.` },
       { t: 'h2', text: 'The engine' },
-      { t: 'prose', text: 'One loop, in this process, for every agent. You talking to the assistant and a fleet worker running its recipe at 3am take the same path.' },
+      { t: 'prose', text: 'One loop, in this process, for the assistant and every worker. You talking to the assistant and a fleet worker running its recipe at 3am take the same path.' },
       { t: 'code', lang: 'text', code: `User → Tauri (Rust) → Direct LLM API (Anthropic/OpenAI/etc.)
                     ↓
               Built-in tools (read_file, write_file, bash, git2-rs)
@@ -102,7 +102,7 @@ MCP servers you connected yourself.` },
       { t: 'list', items: [
         'No round-trip — a turn is a function call, not an HTTP request to something else on your machine',
         'Nothing to start — the app works the moment it opens; there is no service that can fail to come up',
-        'One place to look — an agent that misbehaves is debugged in one process, with one log',
+        'One place to look — a worker that misbehaves is debugged in one process, with one log',
         'Headless too — arcanactl -p "..." runs the same engine from a terminal',
         'Local-first — sessions, memory and the task board are all on-device',
       ]},
@@ -119,7 +119,7 @@ MCP servers you connected yourself.` },
                              events → Live Monitor` },
       { t: 'h3', text: 'How a worker gets its instructions' },
       { t: 'list', items: [
-        'An invariant core every agent receives — the prohibitions, the git rules, and how work is coordinated',
+        'An invariant core the assistant and every worker receive — the prohibitions, the git rules, and how work is coordinated',
         'Your ARCANA.md, global and per-repository',
         'Its own recipe: role, protocol and what counts as done',
         'Its memory, rebuilt each turn from what it has learned',
@@ -141,7 +141,7 @@ MCP servers you connected yourself.` },
         ['📋 Delegate Mode', 'PAMode::Delegate', 'Only create_task + MCP read-only', 'DELEGATE_SYSTEM_PROMPT', 'Workers are live, PA delegates work'],
       ]},
       { t: 'h2', text: 'Fast Development Mode' },
-      { t: 'prose', text: 'System Prompt: BASE_SYSTEM_PROMPT (~200 lines comprehensive). Full file and execution access, no explicit permission prompts. Agents read before writing, verify after changes. Surgical edits preferred over wholesale rewrites.' },
+      { t: 'prose', text: 'System Prompt: BASE_SYSTEM_PROMPT (~200 lines comprehensive). Full file and execution access, no explicit permission prompts. Workers read before writing, verify after changes. Surgical edits preferred over wholesale rewrites.' },
       { t: 'h3', text: 'Available Tools' },
       { t: 'list', items: [
         'Reading & Discovery: read_file, grep, glob, list_directory',
@@ -184,7 +184,7 @@ MCP servers you connected yourself.` },
   /* ── 04: Fleet & Delegate Mode ─────────────────────────────────── */
   {
     id: 'fleet', num: '04', title: 'Fleet & Delegate Mode', category: 'Modes', icon: 'users',
-    lead: 'The Arcana fleet is a collection of autonomous worker agents that execute tasks assigned by a Supervisor agent. This multi-agent pipeline enables 24/7 autonomous development.',
+    lead: 'The Arcana fleet is a collection of autonomous workers that execute tasks assigned by a Supervisor. This pipeline enables 24/7 autonomous development.',
     anchors: ['Fleet Architecture', 'Worker Types', 'Internal Task Board', 'Task Lifecycle', 'Worker Requests', 'Lock Files', 'Branch Naming', 'Orphan Detection'],
     blocks: [
       { t: 'h2', text: 'Fleet Architecture' },
@@ -198,7 +198,7 @@ MCP servers you connected yourself.` },
        ├──→ Worker Platform Recipe   (polls every 5 min)
        ├──→ Worker MCP Recipe        (polls every 5 min)
        ├──→ Worker Cleanup Recipe    (polls every 10 min)
-       └──→ QC Agent Recipe         (polls every 2 min)` },
+       └──→ QC Worker Recipe         (polls every 2 min)` },
       { t: 'h2', text: 'Worker Types' },
       { t: 'table', headers: ['Worker', 'Schedule', 'Responsibility'], rows: [
         ['Supervisor', '*/2 * * * *', 'Poll the task board, break down epics, assign workers, review what comes back'],
@@ -207,7 +207,7 @@ MCP servers you connected yourself.` },
         ['Worker Platform', '*/5 * * * *', 'Platform/infra work (Docker, CI/CD, deployment)'],
         ['Worker MCP', '*/5 * * * *', 'MCP server development and testing'],
         ['Worker Cleanup', '*/10 * * * *', 'Code cleanup, refactoring, technical debt'],
-        ['QC Agent', '*/2 * * * *', 'PR review, test execution, QC reports'],
+        ['QC Worker', '*/2 * * * *', 'PR review, test execution, QC reports'],
       ]},
       { t: 'h2', text: 'Internal Task Board' },
       { t: 'prose', text: 'Arcana uses an internal SQLite task board (~/.arcana/tasks.db). Why not GitHub Issues directly? Faster (no API calls), offline support, full control over data model. GitHub is still used for PRs, but task assignment happens internally.' },
