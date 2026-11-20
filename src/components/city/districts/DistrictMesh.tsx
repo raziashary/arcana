@@ -1,35 +1,16 @@
 // DistrictMesh.tsx — Community ground plane + boundary wall + name billboard
 import * as THREE from 'three'
 import { CityLabel } from '../CityLabel'
+import { districtLabel } from './districtLabels'
 import type { DistrictLayout } from '../layout/layoutTypes'
 
 interface DistrictMeshProps {
   district: DistrictLayout
+  /** The label to show, when the caller has made it unique among districts. */
+  label?: string
 }
 
-// Translate a community DB name to a human-readable city district label
-function districtLabel(name: string, id: number): string {
-  if (!name) return `DISTRICT ${id}`
-  const map: Record<string, string> = {
-    'agent-core': 'ARCANA DISTRICT',
-    'api-health': 'API QUARTER',
-    'memory-system': 'MEMORY SECTOR',
-    'test-suite': 'TEST PRECINCT',
-    'module-mcp': 'MCP TERMINAL',
-  }
-  const lower = name.toLowerCase()
-  if (map[lower]) return map[lower]
-  // A graph built before the naming fix carries a file path in the name
-  // ("module-c:\work\src\city\a.ts"). Show the folder, not one label for every district.
-  if (/[\\/]/.test(name)) {
-    const parts = name.split(/[\\/]/).filter(Boolean)
-    return (parts.length > 1 ? parts[parts.length - 2] : parts[0]).toUpperCase()
-  }
-  // Convert kebab-case community names to ALL CAPS label
-  return name.toUpperCase().replace(/-/g, ' ')
-}
-
-export function DistrictMesh({ district }: DistrictMeshProps) {
+export function DistrictMesh({ district, label: given }: DistrictMeshProps) {
   const { x, z, width, depth, color, communityId, name } = district
 
   const centerX = x + width / 2
@@ -38,7 +19,7 @@ export function DistrictMesh({ district }: DistrictMeshProps) {
   const groundColor = new THREE.Color(color)
   const wallColor = new THREE.Color(color)
 
-  const label = districtLabel(name, communityId)
+  const label = given ?? districtLabel(name, communityId)
 
   return (
     <group>

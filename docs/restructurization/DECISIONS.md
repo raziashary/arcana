@@ -458,3 +458,9 @@ A read-only `implementation-reviewer` read the R3/R4 delta (`b91b6e5` to `611688
 - **`TG-P9-09`** now also refuses an NSIS hook or template (and the WiX equivalents) that could add files unseen.
 - Not acted on: the review's note that duplicate district folder names are possible (backlog), and that the label pass costs `getBoundingClientRect` per label every five frames (measured nothing; recorded).
 
+## D-029 · An inert updater says so in Settings, and duplicate district names carry their id — 2026-11-20, mine (flagged for Razi)
+
+Both follow from the D-028 review, which left them open.
+
+- **Update settings.** A build with no signing key (`ARCANA_ALLOW_NO_UPDATER=1`, D-026) already refused to download. The Settings page still offered "Check for updates" and "You are up to date", which for such a build is false. A new Tauri command `updates_enabled` (registered; read by `UpdateSettings` through the update store) tells the page; when it is false the page shows "Updates are turned off in this version" and hides the channel, check and up-to-date block. `check_for_update` also returns "nothing found" without a network call in that case. **Choice:** v1 ships with no update feed, so the build Razi distributes will show the notice; a signed-update build is unchanged.
+- **Duplicate district names.** Two folders called `src` made two identical labels. `districtLabels` adds the community id to every label that more than one district would carry (`SRC #12`, `SRC #31`); a label nobody shares is unchanged. The label is display only; the district id is untouched.

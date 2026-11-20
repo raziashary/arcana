@@ -10,6 +10,7 @@ import { CityCamera } from './CityCamera'
 import { LabelDeclutter } from './LabelDeclutter'
 import { CityLighting, CityGround } from './CityScene'
 import { DistrictMesh } from './districts/DistrictMesh'
+import { districtLabels } from './districts/districtLabels'
 import { DistrictMinimap } from './districts/DistrictMinimap'
 import { BuildingInstances } from './buildings/BuildingInstances'
 import { GodNodeBuilding } from './buildings/GodNodeBuilding'
@@ -45,6 +46,9 @@ export function CityView() {
       CITY_SIZE
     )
   }, [graphData])
+
+  // One label per district, told apart when two would read the same.
+  const labels = useMemo(() => districtLabels(layout?.districts ?? []), [layout])
 
   // Fast node lookup for hover tooltip
   const nodeMap = useMemo(() => {
@@ -205,7 +209,11 @@ export function CityView() {
               (CityLabel), not drei <Text>: troika fetches fonts from a CDN the
               CSP forbids, and the suspended text used to hide the whole mesh. */}
           {layout.districts.map(district => (
-            <DistrictMesh key={district.communityId} district={district} />
+            <DistrictMesh
+              key={district.communityId}
+              district={district}
+              label={labels.get(district.communityId)}
+            />
           ))}
 
           {godNodes.map(node => {
