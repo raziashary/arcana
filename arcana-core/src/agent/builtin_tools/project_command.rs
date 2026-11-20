@@ -2632,7 +2632,9 @@ fn main() {
                 .execute(json!({"intent": "build", "toolchain": "cargo"}), &context)
                 .await
         });
-        let out_dir = tokio::time::timeout(Duration::from_secs(120), async {
+        // `None` means the command ended without reaching the barrier: a build
+        // that died early looks the same as a slow one unless the wait notices.
+        let barrier = tokio::time::timeout(Duration::from_secs(120), async {
             loop {
                 let build_dir = workspace.join(".arcana-cache/cargo-target/debug/build");
                 if let Ok(entries) = std::fs::read_dir(build_dir) {
@@ -2641,14 +2643,35 @@ fn main() {
                         .map(|entry| entry.path().join("out"))
                         .find(|candidate| candidate.join("ready").is_file())
                     {
-                        break out_dir;
+                        break Some(out_dir);
                     }
+                }
+                if command.is_finished() {
+                    break None;
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
         })
-        .await
-        .expect("first production project reaches its controlled build barrier");
+        .await;
+        let out_dir = match barrier {
+            Ok(Some(out_dir)) => out_dir,
+            Ok(None) => {
+                let result = command.await.expect("project command task completes");
+                panic!(
+                    "the command ended before the first project reached its build barrier: is_error={} output={}",
+                    result.is_error,
+                    result.output.chars().take(4000).collect::<String>()
+                );
+            }
+            Err(_) => panic!(
+                "the first project did not reach its build barrier in 120s; the command is still running; the cache directory holds {:?}",
+                std::fs::read_dir(workspace.join(".arcana-cache"))
+                    .map(|entries| entries
+                        .flatten()
+                        .map(|entry| entry.file_name())
+                        .collect::<Vec<_>>())
+            ),
+        };
 
         let moved_project = workspace.join("z-unavailable-moved");
         std::fs::rename(&unavailable_project, &moved_project)
