@@ -20,7 +20,30 @@ use std::path::Path;
 
 /// Base64-encoded Ed25519 public key for verifying update packages.
 /// Fixed at compile time; see the module header for why there is no override.
-const EMBEDDED_PUBLIC_KEY: Option<&str> = option_env!("ARCANA_UPDATE_PUBKEY");
+const EMBEDDED_PUBLIC_KEY_RAW: Option<&str> = option_env!("ARCANA_UPDATE_PUBKEY");
+
+/// The key, or `None` when the variable was unset **or empty**. CI exports
+/// `ARCANA_UPDATE_PUBKEY` from a secret, and an unset secret becomes an empty string,
+/// which `option_env!` reports as `Some("")`: without this an empty key would pass the
+/// release guard below and ship an updater that can never verify anything.
+const EMBEDDED_PUBLIC_KEY: Option<&str> = non_empty(EMBEDDED_PUBLIC_KEY_RAW);
+
+const fn non_empty(key: Option<&'static str>) -> Option<&'static str> {
+    match key {
+        Some(key) if !key.is_empty() => Some(key),
+        _ => None,
+    }
+}
+
+/// Whether this build can verify an update at all. A build made with
+/// `ARCANA_ALLOW_NO_UPDATER=1` cannot, so the download path refuses up front instead of
+/// fetching an installer it is certain to reject.
+pub const fn updates_enabled() -> bool {
+    EMBEDDED_PUBLIC_KEY.is_some()
+}
+
+/// The error every update path returns in a build without a signing key.
+pub const UPDATES_DISABLED_MESSAGE: &str = "Updates are not enabled in this build: no update-signing public key was compiled in, so no update can be verified.";
 
 /// Set to `1` at build time to build a release with no update-signing key at all (D-026: v1
 /// ships with the updater inert). Anything else, or unset, keeps the guard below.
@@ -83,12 +106,7 @@ pub fn verify_checksum(file_path: &Path, expected_hex: &str) -> Result<()> {
 /// Verify the Ed25519 signature over a file using the compile-time embedded key.
 /// `sig_bytes` is the raw 64-byte signature (not base64).
 pub fn verify_signature(file_path: &Path, sig_bytes: &[u8]) -> Result<()> {
-    let pubkey_b64 = EMBEDDED_PUBLIC_KEY.ok_or_else(|| {
-        anyhow!(
-            "Updates are not enabled in this build: no update-signing public key was compiled \
-             in, so no update can be verified."
-        )
-    })?;
+    let pubkey_b64 = EMBEDDED_PUBLIC_KEY.ok_or_else(|| anyhow!(UPDATES_DISABLED_MESSAGE))?;
     verify_signature_with_key(file_path, sig_bytes, pubkey_b64)
 }
 
@@ -179,6 +197,14 @@ fn base64_decode(s: &str) -> Result<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_empty_signing_key_counts_as_no_key() {
+        // CI exports the key from a secret; an unset secret is an empty string.
+        assert_eq!(non_empty(Some("")), None);
+        assert_eq!(non_empty(None), None);
+        assert_eq!(non_empty(Some("abc")), Some("abc"));
+    }
+
     use super::*;
     use base64::Engine;
     use ed25519_dalek::{Signer, SigningKey};

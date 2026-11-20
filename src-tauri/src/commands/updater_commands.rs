@@ -68,6 +68,14 @@ pub async fn download_update(
     app_handle: tauri::AppHandle,
     state: State<'_, Arc<UpdaterState>>,
 ) -> Result<DownloadProgress, ArcanaError> {
+    // A build with no update-signing key can verify nothing: refuse before
+    // downloading an installer it is certain to reject.
+    if !crate::updater::verify::updates_enabled() {
+        return Err(ArcanaError::Agent(
+            crate::updater::verify::UPDATES_DISABLED_MESSAGE.into(),
+        ));
+    }
+
     // Get cached update info
     let info = state.latest.lock().await.clone().ok_or_else(|| {
         ArcanaError::Agent("No update info cached — call check_for_update first".into())
