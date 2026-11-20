@@ -6,7 +6,10 @@
 import { useEffect, useState } from 'react'
 import { useUpdateStore } from '../../stores/updateStore'
 
-const VERSION = '__APP_VERSION__'   // replaced by Vite at build time via define
+// Vite's `define` (vite.config.ts) replaces this identifier with the package.json version.
+// It cannot replace a quoted string, which is how the screen once read "__APP_VERSION__".
+declare const __APP_VERSION__: string
+const VERSION = __APP_VERSION__
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B'
