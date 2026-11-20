@@ -7,6 +7,7 @@ import type { GraphNode } from '../../stores/graphStore'
 import { computeCityLayout } from './layout/cityLayout'
 import type { CityLayout } from './layout/layoutTypes'
 import { CityCamera } from './CityCamera'
+import { LabelDeclutter } from './LabelDeclutter'
 import { CityLighting, CityGround } from './CityScene'
 import { DistrictMesh } from './districts/DistrictMesh'
 import { DistrictMinimap } from './districts/DistrictMinimap'
@@ -220,6 +221,8 @@ export function CityView() {
               />
             )
           })}
+
+          <LabelDeclutter />
 
           {showStats && <Stats />}
       </Canvas>

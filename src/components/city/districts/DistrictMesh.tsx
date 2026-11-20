@@ -11,7 +11,7 @@ interface DistrictMeshProps {
 function districtLabel(name: string, id: number): string {
   if (!name) return `DISTRICT ${id}`
   const map: Record<string, string> = {
-    'agent-core': 'AGENT DISTRICT',
+    'agent-core': 'ARCANA DISTRICT',
     'api-health': 'API QUARTER',
     'memory-system': 'MEMORY SECTOR',
     'test-suite': 'TEST PRECINCT',
@@ -86,6 +86,7 @@ export function DistrictMesh({ district }: DistrictMeshProps) {
         fontPx={Math.max(14, Math.min(24, Math.min(width, depth) * 0.9))}
         distanceFactor={90}
         maxWidthPx={Math.max(160, Math.min(width, depth) * 6)}
+        priority={width * depth}
       />
     </group>
   )

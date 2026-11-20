@@ -109,6 +109,8 @@ export function GodNodeBuilding({ node, layout, isSelected, impactData }: GodNod
         fontPx={12}
         distanceFactor={24}
         maxWidthPx={140}
+        // Landmarks outrank every district label.
+        priority={1e9}
       />
     </group>
   )

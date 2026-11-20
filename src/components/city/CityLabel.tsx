@@ -20,6 +20,8 @@ interface CityLabelProps {
   /** drei's `distanceFactor`: the label scales by this over the camera distance. */
   distanceFactor: number
   maxWidthPx?: number
+  /** Who keeps their place when labels overlap (see `LabelDeclutter`). */
+  priority?: number
 }
 
 export function CityLabel({
@@ -29,6 +31,7 @@ export function CityLabel({
   fontPx,
   distanceFactor,
   maxWidthPx = 220,
+  priority = 0,
 }: CityLabelProps) {
   return (
     <Html
@@ -39,6 +42,8 @@ export function CityLabel({
       style={{ pointerEvents: 'none', userSelect: 'none' }}
     >
       <div
+        data-city-label=""
+        data-priority={priority}
         style={{
           color,
           fontFamily: "'IBM Plex Mono', ui-monospace, Consolas, monospace",
