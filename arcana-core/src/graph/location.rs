@@ -327,12 +327,32 @@ mod tests {
         assert_ne!(a, c);
     }
 
+    /// The workspace spelled with a trailing separator: an older build hashed
+    /// that raw string, so its name differs from the canonical one on every
+    /// platform. (The bare path does not: where paths are case-sensitive the
+    /// canonical key is the canonical path itself, so "legacy" and canonical
+    /// would be the same file and these tests would pass for the wrong reason.)
+    fn legacy_spelling_of_proj(f: &Fixture) -> String {
+        let given = format!(
+            "{}{}",
+            f.workspace_dir.path().join("proj").display(),
+            std::path::MAIN_SEPARATOR
+        );
+        let canonical = graph_db_path(&canonical_workspace(Path::new(&given)).expect("root"))
+            .expect("canonical db path");
+        let raw = graphs_dir()
+            .expect("graphs dir")
+            .join(format!("{}.db", stem_for(&given)));
+        assert_ne!(raw, canonical, "the raw spelling must hash apart");
+        given
+    }
+
     /// P5-03: a graph stored under the raw-spelling name is carried over, and
     /// the original is left exactly where it was.
     #[test]
     fn a_legacy_graph_is_copied_to_the_canonical_name_and_left_in_place() {
         let f = fixture();
-        let given = f.workspace_dir.path().join("proj").display().to_string();
+        let given = legacy_spelling_of_proj(&f);
         let legacy = graphs_dir()
             .expect("graphs dir")
             .join(format!("{}.db", stem_for(&given)));
@@ -370,7 +390,7 @@ mod tests {
     #[test]
     fn an_empty_legacy_graph_is_not_adopted() {
         let f = fixture();
-        let given = f.workspace_dir.path().join("proj").display().to_string();
+        let given = legacy_spelling_of_proj(&f);
         let legacy = graphs_dir()
             .expect("graphs dir")
             .join(format!("{}.db", stem_for(&given)));
