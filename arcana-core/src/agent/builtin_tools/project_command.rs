@@ -990,6 +990,14 @@ async fn stage_cargo_dependencies(input: &Value, ctx: &ToolContext) -> ToolResul
                 ),
                 Err(error) => return refuse(&error.to_string()),
             };
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "toolchain_staging_started",
+            toolchain = "cargo",
+            call_id = %ctx.call_id,
+            task_id = %crate::observability::timing::correlation_task_id(ctx.task_id),
+            "Staging locked Cargo dependencies; this can take several minutes"
+        );
         let started = std::time::Instant::now();
         let outcome = dependency_staging::stage_cargo(
             &plan,
@@ -1116,6 +1124,14 @@ async fn stage_npm_dependencies(input: &Value, ctx: &ToolContext) -> ToolResult 
                 ))
             }
         };
+        tracing::info!(
+            target: "arcana::telemetry",
+            event_type = "toolchain_staging_started",
+            toolchain = "npm",
+            call_id = %ctx.call_id,
+            task_id = %crate::observability::timing::correlation_task_id(ctx.task_id),
+            "Staging locked npm dependencies; this can take several minutes"
+        );
         let started = std::time::Instant::now();
         let outcome = npm_staging::stage_npm(
             &plan,
@@ -1549,6 +1565,16 @@ async fn run_resolved_command_inner(
             && (resolved.program.eq_ignore_ascii_case("python")
                 || resolved.program.eq_ignore_ascii_case("python.exe"))
         {
+            if let Some(context) = timing {
+                tracing::info!(
+                    target: "arcana::telemetry",
+                    event_type = "toolchain_staging_started",
+                    toolchain = "python",
+                    call_id = %context.call_id,
+                    task_id = %context.task_id,
+                    "Preparing the Python runtime; the first run can take a few minutes"
+                );
+            }
             Some(crate::platform::python_runtime::stage()?)
         } else {
             None

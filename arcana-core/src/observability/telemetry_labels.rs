@@ -224,6 +224,7 @@ const EVENT_TYPES: &[&str] = &[
     "task_board_backup_created",
     "tool_call_result",
     "tool_executor_failed",
+    "toolchain_staging_started",
     "trace_span",
     "worker_progress_persist_failed",
     "worker_startup_retry",
