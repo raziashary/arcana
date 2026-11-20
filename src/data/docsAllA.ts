@@ -130,7 +130,7 @@ MCP servers you connected yourself.` },
 
   /* ── 03: Personal Assistant (PA) Mode ─────────────────────────── */
   {
-    id: 'pa-mode', num: '03', title: 'Personal Assistant (PA) Mode', category: 'Agent Modes', icon: 'robot',
+    id: 'pa-mode', num: '03', title: 'Personal Assistant (PA) Mode', category: 'Modes', icon: 'robot',
     lead: 'The assistant is the interactive half of Arcana — the one you talk to. It runs on the same engine as everything else, with direct access to your chosen provider. Three modes change what it can reach and how it works.',
     anchors: ['Mode Toggle', 'Fast Development', 'Review Mode', 'Delegate Mode', 'Interaction Flow', 'Switching Modes'],
     blocks: [
@@ -183,7 +183,7 @@ MCP servers you connected yourself.` },
 
   /* ── 04: Fleet & Delegate Mode ─────────────────────────────────── */
   {
-    id: 'fleet', num: '04', title: 'Fleet & Delegate Mode', category: 'Agent Modes', icon: 'users',
+    id: 'fleet', num: '04', title: 'Fleet & Delegate Mode', category: 'Modes', icon: 'users',
     lead: 'The Arcana fleet is a collection of autonomous worker agents that execute tasks assigned by a Supervisor agent. This multi-agent pipeline enables 24/7 autonomous development.',
     anchors: ['Fleet Architecture', 'Worker Types', 'Internal Task Board', 'Task Lifecycle', 'Worker Requests', 'Lock Files', 'Branch Naming', 'Orphan Detection'],
     blocks: [

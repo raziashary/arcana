@@ -31,7 +31,7 @@ interface RecipeBackup {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 const DEFAULT_INSTRUCTIONS =
-  'You are an Arcana worker agent.\n\n## Responsibilities\n1. Poll for assigned tasks\n2. Execute them\n3. Update status when done'
+  'You are an Arcana worker.\n\n## Responsibilities\n1. Poll for assigned tasks\n2. Execute them\n3. Update status when done'
 
 const WORKER_TYPES = [
   'supervisor', 'backend', 'frontend', 'platform',

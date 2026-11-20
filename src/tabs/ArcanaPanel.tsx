@@ -1125,7 +1125,7 @@ export default function ArcanaTab() {
         style={{ borderBottom: '1px solid var(--border-1)', background: 'var(--bg-surface)' }}
       >
         <span style={{ fontSize: '11px', color: 'var(--text-2)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-          Agent Roster
+          Worker Roster
         </span>
         <div className="flex items-center gap-3">
 <div className="flex gap-2">

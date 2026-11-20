@@ -186,7 +186,7 @@ export default function HooksSettings() {
             Hooks
           </div>
           <div className="text-xs mt-0.5" style={{ color: 'var(--text-3)' }}>
-            Event-driven actions fired at agent lifecycle points
+            Event-driven actions fired at stages of Arcana's work
           </div>
         </div>
         <div className="flex items-center gap-2">

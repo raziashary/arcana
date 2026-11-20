@@ -40,7 +40,7 @@ export default function CheckpointViewer({ filePath }: Props) {
         className="flex-1 flex items-center justify-center p-4 text-[11px] font-sans text-center"
         style={{ color: 'var(--text-3)' }}
       >
-        no checkpoints yet — they are created automatically before every agent edit
+        no checkpoints yet — they are created automatically before every edit Arcana or a worker makes
       </div>
     )
   }

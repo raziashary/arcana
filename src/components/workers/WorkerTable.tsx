@@ -290,7 +290,7 @@ export default function WorkerTable({ onAddWorker }: WorkerTableProps) {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontFamily: 'var(--font-sans)', fontSize: 11, color: 'var(--text-3)' }}>
-          {store.workers.length} agents registered
+          {store.workers.length} workers registered
         </span>
         <button
           onClick={onAddWorker}

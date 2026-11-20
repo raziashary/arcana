@@ -306,12 +306,12 @@ function WorkspaceCard() {
         </div>
       ) : (
         <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
-          No workspace selected. All agents will use their default directory.
+          No workspace selected. Arcana and its workers will use their default directory.
         </div>
       )}
 
       <div className="font-sans text-xs" style={{ color: 'var(--text-3)' }}>
-        All agents (PA, Supervisor, Workers) will operate inside this folder.
+        Arcana and every worker will operate inside this folder.
         Use <span style={{ color: 'var(--accent)' }}>@path/to/file</span> in chat
         to reference files relative to this workspace.
       </div>
@@ -1060,7 +1060,7 @@ function BrowserTestingCard() {
           }}
         />
         <div className="font-sans text-xs" style={{ color: 'var(--text-4)' }}>
-          QC Agent navigates here for visual regression screenshots on high-risk frontend PRs.
+          The QC worker navigates here for visual regression screenshots on high-risk frontend PRs.
         </div>
       </div>
 

@@ -66,11 +66,11 @@ export const C_SECTIONS: DocSection[] = [
   {
     id: 'dashboard', num: '09', title: 'Dashboard Panel (Arcana Panel)', category: 'Interface', icon: 'dashboard',
     lead: 'The Arcana Panel is the central dashboard for monitoring the worker fleet and task board. It displays real-time agent status, task progress, and fleet metrics. Location: src/tabs/ArcanaPanel.tsx',
-    anchors: ['Layout', 'Agent Roster', 'Task Board', 'Metrics Footer', 'Live Monitor', 'Worker Requests', 'Orphan Alert'],
+    anchors: ['Layout', 'Worker Roster', 'Task Board', 'Metrics Footer', 'Live Monitor', 'Worker Requests', 'Orphan Alert'],
     blocks: [
       { t: 'h2', text: 'Layout' },
       { t: 'code', lang: 'text', code: `┌─────────────────────────────────────────────────────────────┐
-│  Agent Roster (vertical table)                              │
+│  Worker Roster (vertical table)                             │
 │  ┌───────────────────────────────────────────────────────┐ │
 │  │ ● SUPERVISOR  | Idle — awaiting tasks      | 00:00  │ │
 │  │ ● WORKER-BACK | #142 — Add /health endpoint | 02:34  │ │
@@ -87,7 +87,7 @@ export const C_SECTIONS: DocSection[] = [
 │  Metrics Footer                                            │
 │  Cost Today: $2.34 | Tokens: 45.2K | Closed: 12 | QC: 85% │
 └─────────────────────────────────────────────────────────────┘` },
-      { t: 'h2', text: 'Agent Roster' },
+      { t: 'h2', text: 'Worker Roster' },
       { t: 'prose', text: 'Real-time status of all fleet workers. Refreshes every second (elapsed timers). Pulls live tool/file info from agentLiveStore. Warns when a tool runs > 2 minutes.' },
       { t: 'table', headers: ['Column', 'Description'], rows: [
         ['Status Dot', 'Green = working, gray = idle, red = error. Glow effect when actively executing'],

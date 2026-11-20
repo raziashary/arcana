@@ -40,7 +40,7 @@ export default function HooksInfoModal({ onClose }: Props) {
               Hooks are event-driven actions that execute automatically at specific lifecycle points in Arcana. They allow you to customize behavior, automate tasks, and integrate with external systems without modifying core code.
             </p>
             <p className="mt-2">
-              Think of them like Git hooks (pre-commit, post-commit) but for the entire agent lifecycle: before/after tools run, when files change, when commits happen, when plans execute, etc.
+              Think of them like Git hooks (pre-commit, post-commit) but for every stage of Arcana's work: before/after tools run, when files change, when commits happen, when plans execute, etc.
             </p>
           </section>
 

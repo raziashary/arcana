@@ -7445,30 +7445,59 @@ fn effect() { ToolEffect::Execute }"#;
     }
 
     /// The prose uses of the word "agent" in a frontend source: inside a string
-    /// or template literal, or as JSX text. Comments are dropped first. A use is
-    /// prose when the word stands alone: an identifier, an event name
-    /// (`agent:done`, `agent_loop_start`), a path or a CSS class
-    /// (`agent-live-card`) has a word character or one of `: . / -` next to it.
+    /// or template literal, or as JSX text (which may span lines and hold `{..}`
+    /// expressions). Comments are dropped first: a `{/* .. */}` JSX comment, a
+    /// block comment that opens a line, and a whole-line `//` comment; a `/*` inside
+    /// a glob string is not a comment. A use is prose when the word stands
+    /// alone. An identifier, an event name (`agent:done`, `agent_loop_start`), a
+    /// path or a CSS class (`agent-live-card`) has a word character next to it, or
+    /// one of `: . / -` followed by a word character; a sentence that ends with
+    /// the word (`"Stop the agent."`, `"the agent: it ..."`) is still prose.
     fn agent_prose_uses(source: &str) -> Vec<String> {
         let comments =
-            regex::Regex::new(r"(?s:/\*.*?\*/)|(?m:^\s*//.*$)").expect("comment pattern");
+            regex::Regex::new(r"(?s:\{\s*/\*.*?\*/\s*\})|(?ms:^[ \t]*/\*.*?\*/)|(?m:^[ \t]*//.*$)")
+                .expect("comment pattern");
         let code = comments.replace_all(source, "");
-        let texts = regex::Regex::new(r#""([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`|>([^<>{}\n]+)<"#)
-            .expect("literal pattern");
+        let strings =
+            regex::Regex::new(r#""([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`"#).expect("literal pattern");
+        let jsx_text = regex::Regex::new(r">([^<>]+)<").expect("jsx pattern");
+        let expressions = regex::Regex::new(r"\{[^{}]*\}").expect("expression pattern");
         let word = regex::Regex::new(r"(?i)agents?").expect("word pattern");
-        let joined = |c: char| c.is_alphanumeric() || matches!(c, '_' | ':' | '.' | '/' | '-');
+        let word_char = |c: char| c.is_alphanumeric() || c == '_';
+        let joiner = |c: char| matches!(c, ':' | '.' | '/' | '-');
+
+        let mut texts: Vec<String> = Vec::new();
+        for captures in strings.captures_iter(&code) {
+            if let Some(m) = (1..=3).find_map(|i| captures.get(i)) {
+                texts.push(m.as_str().to_string());
+            }
+        }
+        for captures in jsx_text.captures_iter(&code) {
+            let text = expressions.replace_all(&captures[1], " ").into_owned();
+            // `>` and `<` also appear in arrows, generics and comparisons, so a
+            // span that still looks like code is not JSX text.
+            let codelike = ["{", "}", ";", "=", "[", "]", "||", "&&", "//"]
+                .iter()
+                .any(|token| text.contains(token));
+            if !codelike {
+                texts.push(text);
+            }
+        }
+
         let mut found = Vec::new();
-        for captures in texts.captures_iter(&code) {
-            let Some(text) = (1..=4).find_map(|i| captures.get(i)).map(|m| m.as_str()) else {
-                continue;
-            };
-            for m in word.find_iter(text) {
+        for text in texts {
+            for m in word.find_iter(&text) {
                 let before = text[..m.start()].chars().next_back();
-                let after = text[m.end()..].chars().next();
+                let mut after = text[m.end()..].chars();
+                let next = after.next();
+                let after_next = after.next();
+                let glued_before = before.is_some_and(|c| word_char(c) || joiner(c));
+                let glued_after = next.is_some_and(word_char)
+                    || (next.is_some_and(joiner) && after_next.is_some_and(word_char));
                 // A lone lowercase word is a data value (`source: 'agent'`), not copy.
                 let prose = text.contains(char::is_whitespace)
                     || text.chars().next().is_some_and(char::is_uppercase);
-                if prose && !before.is_some_and(joined) && !after.is_some_and(joined) {
+                if prose && !glued_before && !glued_after {
                     found.push(text.trim().to_string());
                     break;
                 }
@@ -7494,6 +7523,41 @@ fn effect() { ToolEffect::Execute }"#;
             vec!["What should this agent do?"]
         );
         assert_eq!(agent_prose_uses("const x = `QC Agent`;"), vec!["QC Agent"]);
+        // The shapes a first version missed: braces and line breaks in JSX text, a
+        // sentence that ends with the word, an apostrophe in JSX text, and a glob
+        // string that must not be read as the start of a comment.
+        assert_eq!(
+            agent_prose_uses("<p>Tools for Arcana agents{' '}<b>x</b></p>"),
+            vec!["Tools for Arcana agents"]
+        );
+        assert_eq!(
+            agent_prose_uses("<p>Ask the agent {name} now</p>"),
+            vec!["Ask the agent   now"]
+        );
+        assert_eq!(
+            agent_prose_uses(
+                "<p>
+  Stops every agent
+</p>"
+            ),
+            vec!["Stops every agent"]
+        );
+        assert_eq!(
+            agent_prose_uses("title: \"Stop the agent.\""),
+            vec!["Stop the agent."]
+        );
+        assert_eq!(
+            agent_prose_uses("m = 'Stop the agent: it hangs'"),
+            vec!["Stop the agent: it hangs"]
+        );
+        assert_eq!(
+            agent_prose_uses("<p>Let's ask the agent</p>"),
+            vec!["Let's ask the agent"]
+        );
+        assert_eq!(
+            agent_prose_uses("const g = 'src/**/*.ts'; const t = \"Loading agents\";"),
+            vec!["Loading agents"]
+        );
         for fine in [
             "listen('agent:done')",
             "const e = 'agent_loop_start'",

@@ -65,7 +65,7 @@ export default function McpToolBrowser() {
     >
       <div className="flex items-center justify-between gap-2">
         <div className="font-sans text-xs" style={{ color: 'var(--text-2)' }}>
-          Built-in tools available to Arcana agents{' '}
+          Built-in tools available to Arcana and its workers{' '}
           <span style={{ color: 'var(--text-3)' }}>
             ({tools.length} total, called in-process)
           </span>
