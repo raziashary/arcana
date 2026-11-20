@@ -5,10 +5,11 @@
 
 import { useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
-import { hiddenLabels, type LabelBox } from './labelOverlap'
+import { declutterLabels } from './labelOverlap'
 
-/** Re-measure every this many frames; labels move only when the camera does. */
-const EVERY_N_FRAMES = 10
+/** Re-measure every this many frames; labels move only when the camera does. A
+ *  newly overlapping pair shows for at most this many frames (about 80 ms). */
+const EVERY_N_FRAMES = 5
 
 export function LabelDeclutter() {
   const frame = useRef(0)
@@ -17,24 +18,7 @@ export function LabelDeclutter() {
     frame.current += 1
     if (frame.current % EVERY_N_FRAMES !== 0) return
     const root = gl.domElement.parentElement
-    if (!root) return
-    const labels = Array.from(root.querySelectorAll<HTMLElement>('[data-city-label]'))
-    const boxes: LabelBox[] = labels.map((el, id) => {
-      const rect = el.getBoundingClientRect()
-      return {
-        id,
-        priority: Number(el.dataset.priority ?? 0),
-        left: rect.left,
-        top: rect.top,
-        right: rect.right,
-        bottom: rect.bottom,
-      }
-    })
-    const hidden = hiddenLabels(boxes)
-    labels.forEach((el, id) => {
-      const next = hidden.has(id) ? 'hidden' : 'visible'
-      if (el.style.visibility !== next) el.style.visibility = next
-    })
+    if (root) declutterLabels(root)
   })
 
   return null

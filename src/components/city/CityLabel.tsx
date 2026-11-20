@@ -42,7 +42,7 @@ export function CityLabel({
       style={{ pointerEvents: 'none', userSelect: 'none' }}
     >
       <div
-        data-city-label=""
+        data-city-label={label}
         data-priority={priority}
         style={{
           color,
