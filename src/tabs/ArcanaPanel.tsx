@@ -110,7 +110,7 @@ function AgentRoster({ tasks }: { tasks: Task[] }) {
         className="shrink-0 border-b font-sans"
         style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-1)', padding: '8px 12px' }}
       >
-        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Loading agents…</span>
+        <span style={{ fontSize: 11, color: 'var(--text-dim)' }}>Loading workers…</span>
       </div>
     )
   }
@@ -1170,7 +1170,7 @@ export default function ArcanaTab() {
       <ErrorBoundary label="Orphan Alert" inline><OrphanAlert /></ErrorBoundary>
 
       {/* Agent roster table — always visible (the primary live state) */}
-      <ErrorBoundary label="Agent Roster" inline><AgentRoster tasks={tasks} /></ErrorBoundary>
+      <ErrorBoundary label="Worker Roster" inline><AgentRoster tasks={tasks} /></ErrorBoundary>
 
       {/*
         ───────────────────────────────────────────────────────────────────

@@ -7444,6 +7444,94 @@ fn effect() { ToolEffect::Execute }"#;
             .collect()
     }
 
+    /// The prose uses of the word "agent" in a frontend source: inside a string
+    /// or template literal, or as JSX text. Comments are dropped first. A use is
+    /// prose when the word stands alone: an identifier, an event name
+    /// (`agent:done`, `agent_loop_start`), a path or a CSS class
+    /// (`agent-live-card`) has a word character or one of `: . / -` next to it.
+    fn agent_prose_uses(source: &str) -> Vec<String> {
+        let comments =
+            regex::Regex::new(r"(?s:/\*.*?\*/)|(?m:^\s*//.*$)").expect("comment pattern");
+        let code = comments.replace_all(source, "");
+        let texts = regex::Regex::new(r#""([^"\n]*)"|'([^'\n]*)'|`([^`\n]*)`|>([^<>{}\n]+)<"#)
+            .expect("literal pattern");
+        let word = regex::Regex::new(r"(?i)agents?").expect("word pattern");
+        let joined = |c: char| c.is_alphanumeric() || matches!(c, '_' | ':' | '.' | '/' | '-');
+        let mut found = Vec::new();
+        for captures in texts.captures_iter(&code) {
+            let Some(text) = (1..=4).find_map(|i| captures.get(i)).map(|m| m.as_str()) else {
+                continue;
+            };
+            for m in word.find_iter(text) {
+                let before = text[..m.start()].chars().next_back();
+                let after = text[m.end()..].chars().next();
+                // A lone lowercase word is a data value (`source: 'agent'`), not copy.
+                let prose = text.contains(char::is_whitespace)
+                    || text.chars().next().is_some_and(char::is_uppercase);
+                if prose && !before.is_some_and(joined) && !after.is_some_and(joined) {
+                    found.push(text.trim().to_string());
+                    break;
+                }
+            }
+        }
+        found
+    }
+
+    /// `TG-P7-15` (P7-15, D-017) — one vocabulary in anything the user reads.
+    /// "Agent" is an internal and event-name word; interface copy says Arcana (the
+    /// assistant you chat with), worker, task, run, recipe (`reference/ui-anchor.md`,
+    /// "Vocabulary"). Before this the app said "Agent Roster", "QC Agent",
+    /// "Loading agents…" and "What should this agent do?" in 17 places.
+    #[test]
+    fn tg_p7_15_interface_copy_does_not_say_agent() {
+        // The scanner, both ways, so a gate that found nothing cannot pass.
+        assert_eq!(
+            agent_prose_uses("<span>Loading agents…</span>"),
+            vec!["Loading agents…"]
+        );
+        assert_eq!(
+            agent_prose_uses("placeholder=\"What should this agent do?\""),
+            vec!["What should this agent do?"]
+        );
+        assert_eq!(agent_prose_uses("const x = `QC Agent`;"), vec!["QC Agent"]);
+        for fine in [
+            "listen('agent:done')",
+            "const e = 'agent_loop_start'",
+            "className=\"agent-live-card\"",
+            "import x from '../agent/store'",
+            "const agent = useStore(s => s.agents[id])",
+            "// the agent is between ticks",
+            "/* \"agent is between ticks\" */",
+            "<span>Reagent</span>",
+            "const kind = 'agent'",
+        ] {
+            assert!(agent_prose_uses(fine).is_empty(), "wrongly flagged: {fine}");
+        }
+
+        let sources = style_sources();
+        let mut offenders = Vec::new();
+        let mut scanned = 0;
+        for (name, text) in &sources {
+            if !(name.ends_with(".tsx") || name.ends_with(".ts"))
+                || name.contains("src/data/docsAll")
+            {
+                continue;
+            }
+            scanned += 1;
+            for used in agent_prose_uses(text) {
+                offenders.push(format!("{name}: {used}"));
+            }
+        }
+        assert!(
+            scanned > 100,
+            "the vocabulary scan found {scanned} files; the gate has lost its input"
+        );
+        assert!(
+            offenders.is_empty(),
+            "interface copy says \"agent\"; use Arcana, worker, task, run or recipe: {offenders:#?}"
+        );
+    }
+
     /// Hex colour literals in `text` (`#abc`, `#abcd`, `#aabbcc`, `#aabbccdd`).
     /// HTML entities (`&#183;`) and longer identifiers do not count.
     fn hex_literals(text: &str) -> Vec<String> {

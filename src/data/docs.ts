@@ -24,7 +24,7 @@ export interface DocSection {
 
 export const NAV_CATEGORIES: { label: string; ids: string[] }[] = [
   { label: 'Overview',    ids: ['what', 'arch'] },
-  { label: 'Agent Modes', ids: ['pa-mode', 'fleet'] },
+  { label: 'Modes', ids: ['pa-mode', 'fleet'] },
   { label: 'Automation',  ids: ['recipes', 'skills', 'hooks'] },
   { label: 'Interface',   ids: ['settings', 'dashboard', 'ide', 'graph'] },
   { label: 'Internals',   ids: ['internals', 'glossary'] },

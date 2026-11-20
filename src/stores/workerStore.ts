@@ -91,7 +91,7 @@ export const WORKER_TYPE_LABELS: Record<string, string> = {
   mcp:        'MCP Builder',
   cleanup:    'Cleanup',
   supervisor: 'Supervisor',
-  qc:         'QC Agent',
+  qc:         'QC Worker',
   custom:     'Custom',
 }
 

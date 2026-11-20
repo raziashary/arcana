@@ -368,8 +368,8 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
                       <input
                         value={genDesc}
                         onChange={e => setGenDesc(e.target.value)}
-                        placeholder="What should this agent do?"
-                        title="Description of what the agent should do"
+                        placeholder="What should this worker do?"
+                        title="Description of what the worker should do"
                         style={inp}
                         onKeyDown={e => e.key === 'Enter' && !generating && handleGenerate()}
                       />
@@ -506,7 +506,7 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
                 <option value="supervised">Supervised</option>
               </select>
             </Field>
-            <Field label="Agent Role">
+            <Field label="Worker Role">
               <input
                 value={agentRole}
                 onChange={e => setAgentRole(e.target.value)}
@@ -533,7 +533,7 @@ export default function RecipeEditor({ recipe, onClose, onSaved }: RecipeEditorP
               onChange={e => setInstructions(e.target.value)}
               rows={14}
               disabled={isSystem && !forceEdit}
-              placeholder="Enter the agent's system prompt instructions…"
+              placeholder="Enter the worker's system prompt instructions…"
               style={{
                 ...inp,
                 resize: 'vertical', minHeight: 200,

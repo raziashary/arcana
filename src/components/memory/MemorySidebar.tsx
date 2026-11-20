@@ -35,7 +35,7 @@ const TimelineTab: React.FC<{ sessionId: string }> = ({ sessionId }) => {
         <div key={entry.id} className={`memory-timeline__entry memory-timeline__entry--${entry.role}`}>
           <div className="memory-timeline__meta">
             <span className={`memory-timeline__role memory-timeline__role--${entry.role}`}>
-              {entry.role === 'user' ? 'You' : 'Agent'}
+              {entry.role === 'user' ? 'You' : 'Arcana'}
             </span>
             <span className="memory-timeline__turn">turn {entry.turn_index}</span>
             {entry.summary_type && (
@@ -267,7 +267,7 @@ const ProceduralTab: React.FC = () => {
                   onClick={() => {
                     if (confirmDestructive(
                       `Delete the memory topic "${t.title}"`,
-                      'Everything the agent remembered under this topic is removed.',
+                      'Everything Arcana remembered under this topic is removed.',
                     )) deleteTopic(t.topic)
                   }}
                   title="Delete"

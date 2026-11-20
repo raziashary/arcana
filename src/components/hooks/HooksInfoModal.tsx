@@ -55,7 +55,7 @@ export default function HooksInfoModal({ onClose }: Props) {
               <li><strong>Logging:</strong> Log all tool executions to a custom file</li>
               <li><strong>Blocking:</strong> Prevent dangerous commands (e.g., `rm -rf /`)</li>
               <li><strong>CI/CD:</strong> Trigger GitHub Actions or Jenkins on commits</li>
-              <li><strong>Monitoring:</strong> Track agent behavior and performance</li>
+              <li><strong>Monitoring:</strong> Track how Arcana and its workers behave and perform</li>
             </ul>
           </section>
 
@@ -66,7 +66,7 @@ export default function HooksInfoModal({ onClose }: Props) {
             </h3>
             <div className="space-y-2 ml-4">
               <div>
-                <strong>Agent Lifecycle:</strong> session_start, session_end, agent_loop_start, agent_loop_end, on_error
+                <strong>Turn Lifecycle:</strong> session_start, session_end, agent_loop_start, agent_loop_end, on_error
               </div>
               <div>
                 <strong>Tool Execution:</strong> pre_tool_use, post_tool_use, on_tool_error, on_permission_request

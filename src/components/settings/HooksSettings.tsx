@@ -107,12 +107,12 @@ const HOOK_TEMPLATES: HookTemplate[] = [
   },
   {
     id: 'notify-error',
-    name: 'Notify on agent error',
-    description: 'Desktop alert when the agent encounters an error.',
+    name: 'Notify on error',
+    description: 'Desktop alert when Arcana or a worker hits an error.',
     category: 'notifications',
     hook_type: 'on_error',
     conditions: {},
-    action: { type: 'notification', title: 'Arcana Error', message: 'Agent encountered an error. Check the logs.' },
+    action: { type: 'notification', title: 'Arcana Error', message: 'Arcana or a worker hit an error. Check the logs.' },
   },
   // Logging
   {
@@ -127,7 +127,7 @@ const HOOK_TEMPLATES: HookTemplate[] = [
   {
     id: 'log-errors',
     name: 'Log errors to file',
-    description: 'Captures all agent errors in a dedicated error log.',
+    description: 'Captures every error in a dedicated error log.',
     category: 'logging',
     hook_type: 'on_error',
     conditions: {},

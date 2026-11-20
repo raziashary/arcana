@@ -69,7 +69,7 @@ export function AnnotationPanel({ annotation }: AnnotationPanelProps) {
           </div>
           <div style={{ marginTop: 4 }}>
             <span className={`ann-panel-source ann-panel-source--${annotation.source}`}>
-              {annotation.source === 'qc_agent' ? '◈ QC Agent'
+              {annotation.source === 'qc_agent' ? '◈ QC Worker'
                : annotation.source === 'worker' ? '◈ Worker'
                : '◈ You'}
             </span>
