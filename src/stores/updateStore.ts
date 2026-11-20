@@ -87,6 +87,8 @@ interface UpdateState {
   installError:     string | null
 
   // Settings / history
+  /** Whether this build can verify an update; null until asked. */
+  updatesEnabled:   boolean | null
   updateHistory:    UpdateRecord[]
   integrityReport:  IntegrityReport | null
   isChecking:       boolean
@@ -103,6 +105,7 @@ interface UpdateActions {
   cleanup:            () => void
 
   // Update check
+  loadUpdatesEnabled: () => Promise<void>
   checkForUpdate:     (channel?: string) => Promise<UpdateInfo | null>
   dismissToast:       () => void
   openDialog:         () => void
@@ -136,6 +139,7 @@ export const useUpdateStore = create<UpdateState & UpdateActions>((set, get) => 
   installResult:    null,
   installError:     null,
 
+  updatesEnabled:   null,
   updateHistory:    [],
   integrityReport:  null,
   isChecking:       false,
@@ -213,6 +217,15 @@ export const useUpdateStore = create<UpdateState & UpdateActions>((set, get) => 
   },
 
   // ── Check ─────────────────────────────────────────────────────────────────
+  loadUpdatesEnabled: async () => {
+    try {
+      set({ updatesEnabled: await invoke<boolean>('updates_enabled') })
+    } catch {
+      // Unknown is not "off": leave it null and let the check report its own error.
+      set({ updatesEnabled: null })
+    }
+  },
+
   checkForUpdate: async (channel?: string) => {
     set({ isChecking: true, checkError: null })
     try {

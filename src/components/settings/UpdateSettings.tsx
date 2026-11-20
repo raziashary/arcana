@@ -24,6 +24,7 @@ export default function UpdateSettings() {
 
   useEffect(() => {
     store.loadHistory()
+    store.loadUpdatesEnabled()
   }, [])
 
   const handleCheck = async () => {
@@ -100,7 +101,25 @@ export default function UpdateSettings() {
         </div>
       )}
 
+      {/* A build made with no update-signing key can verify nothing (D-026): say so
+          instead of offering a check that could only mislead. */}
+      {store.updatesEnabled === false && (
+        <div
+          className="rounded-lg border p-4 text-xs space-y-1"
+          style={{ background: 'var(--bg-2)', borderColor: 'var(--border-1)', color: 'var(--text-2)' }}
+        >
+          <div className="font-semibold" style={{ color: 'var(--text-1)' }}>
+            Updates are turned off in this version
+          </div>
+          <div>
+            This build of Arcana does not check for or install updates. To move to a newer
+            version, install it yourself from the installer.
+          </div>
+        </div>
+      )}
+
       {/* Check for updates */}
+      {store.updatesEnabled !== false && (
       <div className="space-y-3">
         <div className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>
           Update channel
@@ -146,6 +165,7 @@ export default function UpdateSettings() {
           </p>
         )}
       </div>
+      )}
 
       {/* Data integrity */}
       <div className="space-y-2 border-t pt-4" style={{ borderColor: 'var(--border-1)' }}>

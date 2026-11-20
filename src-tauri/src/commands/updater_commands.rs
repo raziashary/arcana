@@ -18,6 +18,14 @@ use crate::updater::{
 
 // ─── Check ────────────────────────────────────────────────────────────────────
 
+/// Whether this build can verify an update at all. A v1 build is made with no
+/// update-signing key (D-026), so the Settings screen asks this before it offers
+/// a check or says "up to date".
+#[tauri::command]
+pub fn updates_enabled() -> bool {
+    updater::verify::updates_enabled()
+}
+
 /// Check for an available update. Returns None if current version is latest.
 #[tauri::command]
 pub async fn check_for_update(
@@ -33,6 +41,11 @@ pub async fn check_for_update(
 
     #[cfg(not(feature = "e2e-ipc-receipt"))]
     {
+        // A build with updates off makes no network call and finds nothing.
+        if !updater::verify::updates_enabled() {
+            let _ = (state, channel);
+            return Ok(None);
+        }
         let ch = match channel.as_deref() {
             Some("beta") => UpdateChannel::Beta,
             Some("nightly") => UpdateChannel::Nightly,

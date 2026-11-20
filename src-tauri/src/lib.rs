@@ -165,7 +165,8 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
         },
         updater_commands::{
             check_for_update, download_update, get_cached_update, get_download_progress,
-            get_update_history, install_update, skip_version, verify_data_integrity,
+            get_update_history, install_update, skip_version, updates_enabled,
+            verify_data_integrity,
         },
         vault_commands::{
             delete_github_pat, delete_provider_key, has_github_pat, list_vault_entries,
@@ -371,6 +372,7 @@ pub fn register_commands(builder: tauri::Builder<tauri::Wry>) -> tauri::Builder<
             open_in_ide,
             get_graph_visualization_data,
             // Auto-updater (Phase 5.3)
+            updates_enabled,
             check_for_update,
             get_cached_update,
             download_update,
