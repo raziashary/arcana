@@ -14,11 +14,13 @@ const EVERY_N_FRAMES = 5
 export function LabelDeclutter() {
   const frame = useRef(0)
 
-  useFrame(({ gl }) => {
+  useFrame(() => {
     frame.current += 1
     if (frame.current % EVERY_N_FRAMES !== 0) return
-    const root = gl.domElement.parentElement
-    if (root) declutterLabels(root)
+    // drei mounts `Html` content outside the canvas's own wrapper (checked in the
+    // real app: two levels up), so the canvas's parent is the wrong subtree. Only
+    // City labels carry `data-city-label`, so the document is the right scope.
+    declutterLabels(document)
   })
 
   return null
