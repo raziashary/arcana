@@ -7723,6 +7723,19 @@ fn effect() { ToolEffect::Execute }"#;
             bundle["externalBin"]
         );
 
+        // An NSIS hook or a custom template can add files without naming a resource.
+        for (path, key) in [
+            ("nsis", "installerHooks"),
+            ("nsis", "template"),
+            ("wix", "template"),
+            ("wix", "fragmentPaths"),
+        ] {
+            assert!(
+                bundle["windows"][path][key].is_null(),
+                "bundle.windows.{path}.{key} is set; it can add files to the installer that this gate does not see"
+            );
+        }
+
         let text = bundle.to_string();
         for banned in [".py", ".env", "sidecar"] {
             assert!(
