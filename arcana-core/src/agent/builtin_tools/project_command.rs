@@ -2557,6 +2557,88 @@ fn main() {
         );
     }
 
+    /// What a stalled build looks like from outside: the cache tree (three levels,
+    /// with sizes), the load average, and the build-related processes with how long
+    /// each has run. Only read when a wait has gone on far longer than it should.
+    fn barrier_wait_report(workspace: &Path) -> String {
+        fn walk(dir: &Path, depth: usize, out: &mut Vec<String>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            let mut entries: Vec<_> = entries.flatten().collect();
+            entries.sort_by_key(|entry| entry.file_name());
+            for entry in entries.into_iter().take(40) {
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                out.push(format!(
+                    "{}{} ({size} bytes)",
+                    "  ".repeat(3 - depth),
+                    entry.file_name().to_string_lossy()
+                ));
+                if depth > 0 && entry.path().is_dir() {
+                    walk(&entry.path(), depth - 1, out);
+                }
+            }
+        }
+        let mut lines = Vec::new();
+        walk(&workspace.join(".arcana-cache"), 3, &mut lines);
+        let mut report = format!(
+            "cache tree:
+{}
+",
+            lines.join(
+                "
+"
+            )
+        );
+        if let Ok(load) = std::fs::read_to_string("/proc/loadavg") {
+            report.push_str(&format!(
+                "loadavg: {}
+",
+                load.trim()
+            ));
+        }
+        if let Ok(ps) = std::process::Command::new("ps")
+            .args(["-eo", "pid,ppid,etime,args"])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&ps.stdout);
+            let wanted: Vec<&str> = text
+                .lines()
+                .filter(|line| {
+                    ["cargo", "rustc", "build-script", "rustup", "arcana"]
+                        .iter()
+                        .any(|word| line.contains(word))
+                })
+                .take(30)
+                .collect();
+            report.push_str(&format!(
+                "processes:
+{}
+",
+                wanted.join(
+                    "
+"
+                )
+            ));
+        }
+        report
+    }
+
+    #[test]
+    fn the_barrier_wait_report_lists_the_cache_it_is_waiting_on() {
+        let root = tempfile::tempdir().expect("workspace");
+        let build = root.path().join(".arcana-cache/cargo-target/debug/build");
+        std::fs::create_dir_all(&build).expect("cache tree");
+        std::fs::write(build.join("marker-file"), "12345").expect("marker");
+        let report = barrier_wait_report(root.path());
+        assert!(report.starts_with("cache tree:"), "{report}");
+        assert!(report.contains("cargo-target"), "{report}");
+        assert!(report.contains("marker-file (5 bytes)"), "{report}");
+        // An empty workspace still reports, it does not panic.
+        let empty = tempfile::tempdir().expect("empty workspace");
+        assert!(barrier_wait_report(empty.path()).starts_with("cache tree:"));
+    }
+
     #[tokio::test]
     async fn production_multi_project_spawn_failure_cannot_be_hidden_by_passing_sibling() {
         let root = tempfile::tempdir().expect("isolated profile and workspace");
@@ -2634,7 +2716,11 @@ fn main() {
         });
         // `None` means the command ended without reaching the barrier: a build
         // that died early looks the same as a slow one unless the wait notices.
-        let barrier = tokio::time::timeout(Duration::from_secs(120), async {
+        // A cold build on a loaded two-core runner can be slow, so the wait is long;
+        // at 120 s it records what the machine is doing, in case it never arrives.
+        let started = std::time::Instant::now();
+        let mut slow_report: Option<String> = None;
+        let barrier = tokio::time::timeout(Duration::from_secs(300), async {
             loop {
                 let build_dir = workspace.join(".arcana-cache/cargo-target/debug/build");
                 if let Ok(entries) = std::fs::read_dir(build_dir) {
@@ -2648,6 +2734,9 @@ fn main() {
                 }
                 if command.is_finished() {
                     break None;
+                }
+                if slow_report.is_none() && started.elapsed() >= Duration::from_secs(120) {
+                    slow_report = Some(barrier_wait_report(&workspace));
                 }
                 tokio::time::sleep(Duration::from_millis(25)).await;
             }
@@ -2664,12 +2753,13 @@ fn main() {
                 );
             }
             Err(_) => panic!(
-                "the first project did not reach its build barrier in 120s; the command is still running; the cache directory holds {:?}",
-                std::fs::read_dir(workspace.join(".arcana-cache"))
-                    .map(|entries| entries
-                        .flatten()
-                        .map(|entry| entry.file_name())
-                        .collect::<Vec<_>>())
+                "the first project did not reach its build barrier in 300s; the command is still running
+--- at 120 s ---
+{}
+--- at 300 s ---
+{}",
+                slow_report.as_deref().unwrap_or("(not taken)"),
+                barrier_wait_report(&workspace)
             ),
         };
 
