@@ -126,7 +126,6 @@ export default function GraphTab() {
   const [renderMode, setRenderMode] = useState<'full' | 'community' | 'auto'>('auto')
   const [graphData, setGraphData] = useState<GraphVisualizationData | null>(null)
   const [selectedNode, setSelectedNode] = useState<string | null>(null)
-  const [isLoadingStats, setIsLoadingStats] = useState(false)
   const [edgeFilters, setEdgeFilters] = useState<Record<string, boolean>>(DEFAULT_EDGE_FILTERS)
   const [minDegree, setMinDegree] = useState(1)
   const [searchQuery, setSearchQuery] = useState('')
@@ -622,8 +621,12 @@ export default function GraphTab() {
       .call(zoomRef.current.transform, d3.zoomIdentity.translate(W / 2, H / 2).scale(3).translate(-n.x!, -n.y!))
   }
 
+  // Each load takes a number; only the newest one may write state. (A guard that
+  // skipped a load while another ran dropped the reload for a new workspace and
+  // left the old workspace's graph on screen.)
+  const latestLoad = useRef(0)
   const loadGraphStats = async () => {
-    if (isLoadingStats) return
+    const mine = ++latestLoad.current
     // No workspace is an ordinary first-run state, not an error: the backend
     // refuses an empty path, so skip the call and show the empty graph.
     if (!workspaceDir) {
@@ -632,12 +635,13 @@ export default function GraphTab() {
       setCommunities([])
       return
     }
-    setIsLoadingStats(true)
     try {
       const graphStats = await invoke<GraphStats>('get_graph_stats', { repoPath: workspaceDir })
+      if (mine !== latestLoad.current) return
       setStats(graphStats)
       if (graphStats.total_nodes > 0) {
         const vizData = await invoke<GraphVisualizationData>('get_graph_visualization_data', { repoPath: workspaceDir })
+        if (mine !== latestLoad.current) return
         setGraphData(vizData)
         setCommunities(vizData.communities)
       } else {
@@ -646,8 +650,6 @@ export default function GraphTab() {
       }
     } catch (err) {
       console.error('[Graph] loadGraphStats:', err)
-    } finally {
-      setIsLoadingStats(false)
     }
   }
 
