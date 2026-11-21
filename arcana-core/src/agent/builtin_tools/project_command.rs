@@ -2557,69 +2557,54 @@ fn main() {
         );
     }
 
-    /// What a stalled build looks like from outside: the cache tree (three levels,
-    /// with sizes), the load average, and the build-related processes with how long
-    /// each has run. Only read when a wait has gone on far longer than it should.
+    /// What a stalled build looks like from outside, on ONE line: the failure is read
+    /// from a CI annotation, which keeps only the first line of a message. The cache
+    /// tree (relative paths with sizes, six levels, capped), the load average, and
+    /// the build-related processes with their state and the kernel function each is
+    /// waiting in. Only read when a wait has gone on far longer than it should.
     fn barrier_wait_report(workspace: &Path) -> String {
-        fn walk(dir: &Path, depth: usize, out: &mut Vec<String>) {
+        fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
             };
             let mut entries: Vec<_> = entries.flatten().collect();
             entries.sort_by_key(|entry| entry.file_name());
-            for entry in entries.into_iter().take(40) {
+            for entry in entries {
+                if out.len() >= 80 {
+                    return;
+                }
+                let path = entry.path();
                 let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                out.push(format!(
-                    "{}{} ({size} bytes)",
-                    "  ".repeat(3 - depth),
-                    entry.file_name().to_string_lossy()
-                ));
-                if depth > 0 && entry.path().is_dir() {
-                    walk(&entry.path(), depth - 1, out);
+                let relative = path.strip_prefix(root).unwrap_or(&path);
+                out.push(format!("{}({size})", relative.display()));
+                if depth > 1 && path.is_dir() {
+                    walk(root, &path, depth - 1, out);
                 }
             }
         }
-        let mut lines = Vec::new();
-        walk(&workspace.join(".arcana-cache"), 3, &mut lines);
-        let mut report = format!(
-            "cache tree:
-{}
-",
-            lines.join(
-                "
-"
-            )
-        );
+        let cache = workspace.join(".arcana-cache");
+        let mut tree = Vec::new();
+        walk(&cache, &cache, 6, &mut tree);
+        let mut report = format!("cache tree: [{}]", tree.join(" "));
         if let Ok(load) = std::fs::read_to_string("/proc/loadavg") {
-            report.push_str(&format!(
-                "loadavg: {}
-",
-                load.trim()
-            ));
+            report.push_str(&format!(" loadavg: {}", load.trim()));
         }
         if let Ok(ps) = std::process::Command::new("ps")
-            .args(["-eo", "pid,ppid,etime,args"])
+            .args(["-eo", "pid,ppid,stat,wchan:20,etime,args"])
             .output()
         {
             let text = String::from_utf8_lossy(&ps.stdout);
-            let wanted: Vec<&str> = text
+            let wanted: Vec<String> = text
                 .lines()
                 .filter(|line| {
-                    ["cargo", "rustc", "build-script", "rustup", "arcana"]
+                    ["cargo", "rustc", "build-script", "rustup", "arcana", " cc "]
                         .iter()
                         .any(|word| line.contains(word))
                 })
                 .take(30)
+                .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
                 .collect();
-            report.push_str(&format!(
-                "processes:
-{}
-",
-                wanted.join(
-                    "
-"
-                )
-            ));
+            report.push_str(&format!(" processes: [{}]", wanted.join(" | ")));
         }
         report
     }
@@ -2632,8 +2617,13 @@ fn main() {
         std::fs::write(build.join("marker-file"), "12345").expect("marker");
         let report = barrier_wait_report(root.path());
         assert!(report.starts_with("cache tree:"), "{report}");
-        assert!(report.contains("cargo-target"), "{report}");
-        assert!(report.contains("marker-file (5 bytes)"), "{report}");
+        assert!(
+            report
+                .replace('\\', "/")
+                .contains("cargo-target/debug/build/marker-file(5)"),
+            "{report}"
+        );
+        assert!(!report.contains('\n'), "one line, {report}");
         // An empty workspace still reports, it does not panic.
         let empty = tempfile::tempdir().expect("empty workspace");
         assert!(barrier_wait_report(empty.path()).starts_with("cache tree:"));
@@ -2753,11 +2743,7 @@ fn main() {
                 );
             }
             Err(_) => panic!(
-                "the first project did not reach its build barrier in 300s; the command is still running
---- at 120 s ---
-{}
---- at 300 s ---
-{}",
+                "the first project did not reach its build barrier in 300s; the command is still running; AT 120 s: {} ;; AT 300 s: {}",
                 slow_report.as_deref().unwrap_or("(not taken)"),
                 barrier_wait_report(&workspace)
             ),
